@@ -98,3 +98,4 @@ src/
     ├── supabase.ts        # Supabase client
     └── ai-analyzer.ts     # Claude AI analysis
 ```
+ 
