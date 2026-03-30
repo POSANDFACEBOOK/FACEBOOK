@@ -7,7 +7,7 @@ export const authOptions = {
       clientSecret: process.env.FACEBOOK_CLIENT_SECRET!,
       authorization: {
         params: {
-          scope: 'ads_management,ads_read,pages_show_list,pages_read_engagement',
+          scope: 'ads_management,ads_read,pages_show_list,pages_read_engagement,pages_manage_ads',
           redirect_uri: 'https://fb-ads-manager.vercel.app/api/auth/callback/facebook',
         },
       },
