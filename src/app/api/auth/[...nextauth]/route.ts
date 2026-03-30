@@ -1,8 +1,7 @@
 import NextAuth from 'next-auth'
 import FacebookProvider from 'next-auth/providers/facebook'
 
-const handler = NextAuth({
-  secret: process.env.NEXTAUTH_SECRET,
+export const authOptions = {
   providers: [
     FacebookProvider({
       clientId: process.env.FACEBOOK_CLIENT_ID!,
@@ -16,11 +15,11 @@ const handler = NextAuth({
     }),
   ],
   callbacks: {
-    async session({ session, token }) {
-      session.accessToken = token.accessToken as string
+    async session({ session, token }: any) {
+      session.accessToken = token.accessToken
       return session
     },
-    async jwt({ token, account }) {
+    async jwt({ token, account }: any) {
       if (account) {
         token.accessToken = account.access_token
       }
@@ -30,6 +29,7 @@ const handler = NextAuth({
   pages: {
     signIn: '/login',
   },
-})
+}
 
+const handler = NextAuth(authOptions)
 export { handler as GET, handler as POST }
