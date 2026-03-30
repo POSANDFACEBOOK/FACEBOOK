@@ -1,8 +1,3 @@
-import 'next-auth'
+const nextConfig = {}
 
-declare module 'next-auth' {
-  interface Session {
-    accessToken?: string
-  }
-}
-```
+export default nextConfig
