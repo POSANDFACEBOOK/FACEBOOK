@@ -13,12 +13,12 @@ export async function GET(req: Request) {
     }
 
     const res = await fetch(
-      `https://graph.facebook.com/v19.0/${pageId}/posts?fields=id,message,story,full_picture,created_time,reactions.summary(true)&limit=20&access_token=${pageToken}`
+      `https://graph.facebook.com/v19.0/${pageId}/feed?fields=id,message,story,full_picture,created_time,reactions.summary(true)&limit=20&access_token=${pageToken}`
     )
     const data = await res.json()
 
     if (data.error) {
-      console.error('FB Posts Error:', data.error)
+      console.error('Posts error:', data.error)
       return NextResponse.json({ error: data.error.message, posts: [] })
     }
 
