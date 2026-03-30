@@ -1,18 +1,14 @@
-import type { Metadata } from 'next'
+'use client'
+import { SessionProvider } from 'next-auth/react'
 
-export const metadata: Metadata = {
-  title: 'FB Ads AI Manager',
-  description: 'ระบบยิงแอด Facebook อัตโนมัติ + AI วิเคราะห์',
-}
-
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="th">
-      <body>{children}</body>
+      <body style={{ margin: 0, padding: 0 }}>
+        <SessionProvider>
+          {children}
+        </SessionProvider>
+      </body>
     </html>
   )
 }
