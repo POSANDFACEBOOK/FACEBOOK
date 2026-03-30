@@ -2,6 +2,7 @@ import NextAuth from 'next-auth'
 import FacebookProvider from 'next-auth/providers/facebook'
 
 const handler = NextAuth({
+  secret: process.env.NEXTAUTH_SECRET,
   providers: [
     FacebookProvider({
       clientId: process.env.FACEBOOK_CLIENT_ID!,
@@ -9,6 +10,7 @@ const handler = NextAuth({
       authorization: {
         params: {
           scope: 'email,public_profile,pages_show_list,pages_manage_ads,pages_read_engagement,ads_management,ads_read',
+          redirect_uri: 'https://fb-ads-manager.vercel.app/api/auth/callback/facebook',
         },
       },
     }),
@@ -28,7 +30,6 @@ const handler = NextAuth({
   pages: {
     signIn: '/login',
   },
-  useSecureCookies: true,
 })
 
 export { handler as GET, handler as POST }
