@@ -159,7 +159,7 @@ export async function POST(req: Request) {
           billing_event: 'IMPRESSIONS',
           optimization_goal: 'POST_ENGAGEMENT',
           targeting: {
-            age_min: 18,
+            age_min: 20,
             age_max: 65,
             geo_locations: { countries: ['TH'] },
           },
