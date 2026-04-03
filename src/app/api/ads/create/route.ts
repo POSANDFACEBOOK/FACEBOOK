@@ -156,19 +156,19 @@ export async function POST(req: Request) {
           start_time: startDate || new Date().toISOString(),
           end_time: endDate,
           billing_event: 'IMPRESSIONS',
-          optimization_goal: 'ENGAGED_USERS',
+          optimization_goal: 'POST_ENGAGEMENT',
           targeting: {
             age_min: 18,
             age_max: 65,
             geo_locations: { countries: ['TH'] },
           },
           promoted_object: { page_id: pageId },
-          access_token: userToken,  // ← user token
-          status: 'ACTIVE',
+          access_token: userToken,
+          status: 'PAUSED',
         }),
       })
       const d = await r.json()
-      if (d.error) return NextResponse.json({ error: `สร้าง Ad Set ไม่ได้: ${d.error.message}` }, { status: 400 })
+      if (d.error) return NextResponse.json({ error: `สร้าง Ad Set ไม่ได้: ${d.error.error_user_msg || d.error.message} [${JSON.stringify(d.error)}]` }, { status: 400 })
       fbAdSetId = d.id
     } catch (e: any) {
       return NextResponse.json({ error: `สร้าง Ad Set ไม่ได้: ${e.message}` }, { status: 500 })
