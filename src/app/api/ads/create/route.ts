@@ -7,6 +7,31 @@ export const dynamic = 'force-dynamic'
 
 const FB = 'https://graph.facebook.com/v19.0'
 
+// ── Goal → Facebook API mapping ──────────────────────────────
+const GOAL_CONFIG: Record<string, {
+  objective: string
+  optimization_goal: string
+  billing_event: string
+  destination_type?: string
+}> = {
+  messages: {
+    objective: 'OUTCOME_ENGAGEMENT',
+    optimization_goal: 'CONVERSATIONS',
+    billing_event: 'IMPRESSIONS',
+    destination_type: 'MESSENGER',
+  },
+  traffic: {
+    objective: 'OUTCOME_TRAFFIC',
+    optimization_goal: 'LINK_CLICKS',
+    billing_event: 'IMPRESSIONS',
+  },
+  reach: {
+    objective: 'OUTCOME_AWARENESS',
+    optimization_goal: 'REACH',
+    billing_event: 'IMPRESSIONS',
+  },
+}
+
 export async function POST(req: Request) {
   try {
     // ── 1. Auth ───────────────────────────────────────────────
@@ -18,11 +43,25 @@ export async function POST(req: Request) {
 
     // ── 2. Body ───────────────────────────────────────────────
     const body = await req.json()
-    const { postId, pageId, pageToken, pageName, postMessage, campaignName, dailyBudget, startDate, endDate } = body
+    const {
+      postId, pageId, pageToken, pageName, postMessage,
+      campaignName, dailyBudget, startDate, endDate,
+      // New fields
+      goal = 'messages',         // messages | traffic | reach
+      ageMin = 20, ageMax = 55,
+      gender = 0,                // 0=all, 1=male, 2=female
+      interests = [],            // [{ id, name }]
+      locationRadius = 0,        // km radius (0 = whole Thailand)
+      locationLat = 0,
+      locationLng = 0,
+      locationName = '',
+    } = body
 
     if (!postId || !pageId || !pageToken || !campaignName || !dailyBudget) {
       return NextResponse.json({ error: 'ข้อมูลไม่ครบถ้วน' }, { status: 400 })
     }
+
+    const goalConfig = GOAL_CONFIG[goal] || GOAL_CONFIG.messages
 
     // ── 3. Supabase ───────────────────────────────────────────
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -64,17 +103,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: `Supabase user error: ${userError.message}` }, { status: 500 })
     }
 
-    // ── 6. Get Ad Account (ใช้ User Token) ───────────────────
-    // ลอง 3 วิธีตามลำดับ
+    // ── 6. Get Ad Account ─────────────────────────────────────
     let adAccountId: string | null = null
     let adAccountError = ''
 
-    // วิธี 1: /me/adaccounts ด้วย user token
     try {
       const r = await fetch(`${FB}/me/adaccounts?fields=id,name,account_status&limit=10&access_token=${userToken}`)
       const d = await r.json()
       if (!d.error && d.data?.length > 0) {
-        // เลือก account ที่ active (account_status = 1)
         const active = d.data.find((a: any) => a.account_status === 1) || d.data[0]
         adAccountId = active.id
       } else if (d.error) {
@@ -84,7 +120,6 @@ export async function POST(req: Request) {
       adAccountError = e.message
     }
 
-    // วิธี 2: /{pageId}/adaccounts ด้วย page token
     if (!adAccountId) {
       try {
         const r = await fetch(`${FB}/${pageId}/adaccounts?fields=id,account_status&access_token=${pageToken}`)
@@ -98,7 +133,7 @@ export async function POST(req: Request) {
 
     if (!adAccountId) {
       return NextResponse.json({
-        error: `ไม่พบ Ad Account — ${adAccountError || 'กรุณาตรวจสอบว่า Facebook App มีสิทธิ์ ads_management และ Page เชื่อมต่อกับ Business Manager แล้ว'}`,
+        error: `ไม่พบ Ad Account — ${adAccountError || 'กรุณาตรวจสอบสิทธิ์ ads_management'}`,
       }, { status: 400 })
     }
 
@@ -120,8 +155,40 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: `Supabase page error: ${pageError.message}` }, { status: 500 })
     }
 
-    // ── 8. Facebook Campaign → Ad Set → Ad ───────────────────
-    // ใช้ USER TOKEN สำหรับ Marketing API (ไม่ใช่ page token)
+    // ── 8. Build Targeting ────────────────────────────────────
+    const targeting: any = {
+      age_min: Math.max(20, Number(ageMin) || 20),
+      age_max: Math.min(65, Number(ageMax) || 55),
+    }
+
+    // Gender targeting
+    if (gender === 1 || gender === 2) {
+      targeting.genders = [gender]
+    }
+
+    // Location targeting
+    if (locationRadius > 0 && locationLat && locationLng) {
+      // Radius around a point (store location)
+      targeting.geo_locations = {
+        custom_locations: [{
+          latitude: locationLat,
+          longitude: locationLng,
+          radius: locationRadius,
+          distance_unit: 'kilometer',
+        }],
+      }
+    } else {
+      targeting.geo_locations = { countries: ['TH'] }
+    }
+
+    // Interest targeting
+    if (interests.length > 0) {
+      targeting.flexible_spec = [{
+        interests: interests.map((i: any) => ({ id: i.id, name: i.name })),
+      }]
+    }
+
+    // ── 9. Create Campaign ────────────────────────────────────
     let fbCampaignId: string
     try {
       const r = await fetch(`${FB}/${adAccountId}/campaigns`, {
@@ -129,7 +196,7 @@ export async function POST(req: Request) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: campaignName,
-          objective: 'OUTCOME_AWARENESS',
+          objective: goalConfig.objective,
           status: 'ACTIVE',
           buying_type: 'AUCTION',
           special_ad_categories: [],
@@ -144,30 +211,34 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: `สร้าง Campaign ไม่ได้: ${e.message}` }, { status: 500 })
     }
 
+    // ── 10. Create Ad Set ─────────────────────────────────────
     let fbAdSetId: string
     try {
       const dailyBudgetSatang = Math.round(Number(dailyBudget) * 100)
+      const adsetBody: any = {
+        name: `${campaignName} - Ad Set`,
+        campaign_id: fbCampaignId,
+        daily_budget: dailyBudgetSatang,
+        bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
+        start_time: startDate || new Date().toISOString(),
+        end_time: endDate,
+        billing_event: goalConfig.billing_event,
+        optimization_goal: goalConfig.optimization_goal,
+        targeting,
+        promoted_object: { page_id: pageId },
+        access_token: userToken,
+        status: 'ACTIVE',
+      }
+
+      // Messages goal needs destination_type
+      if (goalConfig.destination_type) {
+        adsetBody.destination_type = goalConfig.destination_type
+      }
+
       const r = await fetch(`${FB}/${adAccountId}/adsets`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: `${campaignName} - Ad Set`,
-          campaign_id: fbCampaignId,
-          daily_budget: dailyBudgetSatang,
-          bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
-          start_time: startDate || new Date().toISOString(),
-          end_time: endDate,
-          billing_event: 'IMPRESSIONS',
-          optimization_goal: 'REACH',
-          targeting: {
-            age_min: 20,
-            age_max: 65,
-            geo_locations: { countries: ['TH'] },
-          },
-          promoted_object: { page_id: pageId },
-          access_token: userToken,
-          status: 'ACTIVE',
-        }),
+        body: JSON.stringify(adsetBody),
       })
       const d = await r.json()
       if (d.error) return NextResponse.json({ error: `สร้าง Ad Set ไม่ได้: ${d.error.error_user_msg || d.error.message} [${JSON.stringify(d.error)}]` }, { status: 400 })
@@ -176,24 +247,23 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: `สร้าง Ad Set ไม่ได้: ${e.message}` }, { status: 500 })
     }
 
+    // ── 11. Create Creative + Ad ──────────────────────────────
     let fbAdId: string
     try {
-      // Creative ใช้ page token (เพราะ object_story_id ต้องการ page context)
       const creativeRes = await fetch(`${FB}/${adAccountId}/adcreatives`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: `Creative - ${campaignName}`,
           object_story_id: postId,
-          access_token: pageToken,  // ← page token สำหรับ creative
+          access_token: pageToken,
         }),
       })
       const creativeData = await creativeRes.json()
       if (creativeData.error) {
-        return NextResponse.json({ error: `สร้าง Creative ไม่ได้: ${creativeData.error.error_user_msg || creativeData.error.message} [${JSON.stringify(creativeData.error)}]` }, { status: 400 })
+        return NextResponse.json({ error: `สร้าง Creative ไม่ได้: ${creativeData.error.error_user_msg || creativeData.error.message}` }, { status: 400 })
       }
 
-      // Ad ใช้ user token
       const adRes = await fetch(`${FB}/${adAccountId}/ads`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -206,27 +276,24 @@ export async function POST(req: Request) {
         }),
       })
       const adData = await adRes.json()
-      if (adData.error) return NextResponse.json({ error: `สร้าง Ad ไม่ได้: ${adData.error.error_user_msg || adData.error.message} [${JSON.stringify(adData.error)}]` }, { status: 400 })
+      if (adData.error) return NextResponse.json({ error: `สร้าง Ad ไม่ได้: ${adData.error.error_user_msg || adData.error.message}` }, { status: 400 })
       fbAdId = adData.id
     } catch (e: any) {
       return NextResponse.json({ error: `สร้าง Ad ไม่ได้: ${e.message}` }, { status: 500 })
     }
 
-    // ── 9. Force-activate ทั้ง 3 ระดับ (safety net) ──────────
-    // รอให้ Facebook สร้าง object เสร็จก่อน แล้วสั่งเปิดทั้งหมดอีกรอบ
-    // เพื่อให้แน่ใจว่าสวิตช์ Campaign + Ad Set + Ad เปิดหมดทุกระดับ
+    // ── 12. Force-activate ทั้ง 3 ระดับ ───────────────────────
     try {
-      await new Promise(r => setTimeout(r, 2000)) // รอ FB propagate
+      await new Promise(r => setTimeout(r, 2000))
       const activateResult = await updateAllStatus(userToken, fbCampaignId, fbAdSetId, fbAdId, 'ACTIVE')
       if (activateResult.errors.length > 0) {
         console.warn('[create] force-activate partial errors:', activateResult.errors)
       }
-      console.log('[create] force-activate result:', JSON.stringify(activateResult))
     } catch (e: any) {
       console.warn('[create] force-activate warning:', e.message)
     }
 
-    // ── 10. Save to Supabase ──────────────────────────────────
+    // ── 13. Save to Supabase ──────────────────────────────────
     const { data: campaign, error: campaignError } = await supabase
       .from('ad_campaigns')
       .insert({
@@ -248,7 +315,6 @@ export async function POST(req: Request) {
 
     if (campaignError) {
       console.error('[create] insert campaign error:', campaignError)
-      // Campaign ถูกสร้างใน FB แล้ว แต่ save ใน DB ไม่ได้ — ยังถือว่าสำเร็จ
       return NextResponse.json({
         success: true,
         warning: `สร้างแอดใน Facebook สำเร็จแต่บันทึก DB ไม่ได้: ${campaignError.message}`,

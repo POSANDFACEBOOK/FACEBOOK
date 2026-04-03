@@ -13,7 +13,46 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { campaignId } = await req.json()
+    const body = await req.json()
+
+    // ── Pre-create AI suggestion ──────────────────────────────
+    if (body.type === 'pre_create') {
+      const { postMessage, goal, budget, days } = body
+      const goalLabels: Record<string, string> = {
+        messages: 'ให้ลูกค้าทักมาใน Messenger',
+        traffic: 'ดึงคนมาที่ร้าน/เว็บไซต์',
+        reach: 'เข้าถึงคนมากที่สุด',
+      }
+      const prompt = `คุณเป็นผู้เชี่ยวชาญ Facebook Ads สำหรับธุรกิจในไทย วิเคราะห์และแนะนำการตั้งค่าแอดนี้:
+
+โพสต์: "${(postMessage || '').slice(0, 300)}"
+เป้าหมาย: ${goalLabels[goal] || goal}
+งบต่อวัน: ฿${budget}
+ระยะเวลา: ${days} วัน (งบรวม ฿${budget * days})
+
+ให้คำแนะนำสั้นๆ 3-4 บรรทัด ภาษาไทย เกี่ยวกับ:
+1. กลุ่มเป้าหมายที่เหมาะสม (อายุ เพศ ความสนใจ)
+2. พื้นที่ที่ควรเจาะ
+3. งบเหมาะสมไหม ควรปรับอย่างไร
+4. เคล็ดลับเพิ่มประสิทธิภาพ`
+
+      try {
+        const Anthropic = (await import('@anthropic-ai/sdk')).default
+        const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+        const msg = await client.messages.create({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 500,
+          messages: [{ role: 'user', content: prompt }],
+        })
+        const text = msg.content[0].type === 'text' ? msg.content[0].text : ''
+        return NextResponse.json({ suggestion: text })
+      } catch (e: any) {
+        return NextResponse.json({ suggestion: `ไม่สามารถวิเคราะห์ได้: ${e.message}` })
+      }
+    }
+
+    // ── Regular campaign analysis ─────────────────────────────
+    const { campaignId } = body
     if (!campaignId) {
       return NextResponse.json({ error: 'campaignId is required' }, { status: 400 })
     }
