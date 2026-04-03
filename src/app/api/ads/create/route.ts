@@ -189,7 +189,7 @@ export async function POST(req: Request) {
       })
       const creativeData = await creativeRes.json()
       if (creativeData.error) {
-        return NextResponse.json({ error: `สร้าง Creative ไม่ได้: ${creativeData.error.message}` }, { status: 400 })
+        return NextResponse.json({ error: `สร้าง Creative ไม่ได้: ${creativeData.error.error_user_msg || creativeData.error.message} [${JSON.stringify(creativeData.error)}]` }, { status: 400 })
       }
 
       // Ad ใช้ user token
@@ -200,12 +200,12 @@ export async function POST(req: Request) {
           name: `${campaignName} - Ad`,
           adset_id: fbAdSetId,
           creative: { creative_id: creativeData.id },
-          status: 'ACTIVE',
-          access_token: userToken,  // ← user token
+          status: 'PAUSED',
+          access_token: userToken,
         }),
       })
       const adData = await adRes.json()
-      if (adData.error) return NextResponse.json({ error: `สร้าง Ad ไม่ได้: ${adData.error.message}` }, { status: 400 })
+      if (adData.error) return NextResponse.json({ error: `สร้าง Ad ไม่ได้: ${adData.error.error_user_msg || adData.error.message} [${JSON.stringify(adData.error)}]` }, { status: 400 })
       fbAdId = adData.id
     } catch (e: any) {
       return NextResponse.json({ error: `สร้าง Ad ไม่ได้: ${e.message}` }, { status: 500 })
