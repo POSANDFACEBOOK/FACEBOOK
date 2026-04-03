@@ -169,7 +169,7 @@ export async function getCampaignInsights(
   ].join(',')
 
   const res = await fetch(
-    `${FB_API}/${campaignId}/insights?fields=${fields}&date_preset=lifetime&access_token=${pageToken}`
+    `${FB_API}/${campaignId}/insights?fields=${fields}&date_preset=maximum&access_token=${pageToken}`
   )
   const data = await res.json()
   if (data.error) throw new Error(data.error.message)
