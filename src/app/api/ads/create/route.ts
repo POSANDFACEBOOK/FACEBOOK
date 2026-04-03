@@ -136,7 +136,7 @@ export async function POST(req: Request) {
         }),
       })
       const d = await r.json()
-      if (d.error) return NextResponse.json({ error: `สร้าง Campaign ไม่ได้: ${d.error.message} (code:${d.error.code}, sub:${d.error.error_subcode || 'none'})` }, { status: 400 })
+      if (d.error) return NextResponse.json({ error: `สร้าง Campaign ไม่ได้: ${JSON.stringify(d.error)}` }, { status: 400 })
       fbCampaignId = d.id
     } catch (e: any) {
       return NextResponse.json({ error: `สร้าง Campaign ไม่ได้: ${e.message}` }, { status: 500 })
