@@ -129,13 +129,14 @@ export async function POST(req: Request) {
         body: JSON.stringify({
           name: campaignName,
           objective: 'OUTCOME_ENGAGEMENT',
-          status: 'ACTIVE',
-          special_ad_categories: [],
-          access_token: userToken,  // ← user token
+          status: 'PAUSED',
+          buying_type: 'AUCTION',
+          special_ad_categories: ['NONE'],
+          access_token: userToken,
         }),
       })
       const d = await r.json()
-      if (d.error) return NextResponse.json({ error: `สร้าง Campaign ไม่ได้: ${d.error.message}` }, { status: 400 })
+      if (d.error) return NextResponse.json({ error: `สร้าง Campaign ไม่ได้: ${d.error.message} (code:${d.error.code}, sub:${d.error.error_subcode || 'none'})` }, { status: 400 })
       fbCampaignId = d.id
     } catch (e: any) {
       return NextResponse.json({ error: `สร้าง Campaign ไม่ได้: ${e.message}` }, { status: 500 })
