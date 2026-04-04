@@ -2,6 +2,7 @@ import { getServerSession } from 'next-auth'
 import { NextResponse } from 'next/server'
 import { authOptions } from '@/lib/auth'
 import { updateAllStatus } from '@/lib/facebook'
+import { generateAutoTargeting } from '@/lib/ai-analyzer'
 
 export const dynamic = 'force-dynamic'
 
@@ -44,24 +45,27 @@ export async function POST(req: Request) {
     // ── 2. Body ───────────────────────────────────────────────
     const body = await req.json()
     const {
-      postId, pageId, pageToken, pageName, postMessage,
+      postId, pageId, pageToken, pageName, pageCategory, postMessage, postImage,
       campaignName, dailyBudget, startDate, endDate,
-      // New fields
-      goal = 'messages',         // messages | traffic | reach
-      ageMin = 20, ageMax = 55,
-      gender = 0,                // 0=all, 1=male, 2=female
-      interests = [],            // [{ id, name }]
-      locationRadius = 0,        // km radius (0 = whole Thailand)
-      locationLat = 0,
-      locationLng = 0,
-      locationName = '',
     } = body
 
     if (!postId || !pageId || !pageToken || !campaignName || !dailyBudget) {
       return NextResponse.json({ error: 'ข้อมูลไม่ครบถ้วน' }, { status: 400 })
     }
 
-    const goalConfig = GOAL_CONFIG[goal] || GOAL_CONFIG.messages
+    // AI เลือก targeting + objective อัตโนมัติ
+    const aiTargeting = await generateAutoTargeting({
+      postMessage: postMessage || '',
+      postImage: !!postImage,
+      pageCategory: pageCategory || '',
+      pageName: pageName || '',
+    })
+
+    // Map AI objective to Facebook goal config
+    const aiGoal = aiTargeting.objective === 'LINK_CLICKS' ? 'traffic'
+      : aiTargeting.objective === 'REACH' ? 'reach'
+      : 'messages'
+    const goalConfig = GOAL_CONFIG[aiGoal] || GOAL_CONFIG.messages
 
     // ── 3. Supabase ───────────────────────────────────────────
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -155,36 +159,20 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: `Supabase page error: ${pageError.message}` }, { status: 500 })
     }
 
-    // ── 8. Build Targeting ────────────────────────────────────
+    // ── 8. Build Targeting (AI-driven) ─────────────────────────
     const targeting: any = {
-      age_min: Math.max(20, Number(ageMin) || 20),
-      age_max: Math.min(65, Number(ageMax) || 55),
+      age_min: aiTargeting.targeting.ageMin,
+      age_max: aiTargeting.targeting.ageMax,
+      geo_locations: { countries: ['TH'] },
     }
 
-    // Gender targeting
-    if (gender === 1 || gender === 2) {
-      targeting.genders = [gender]
+    if (aiTargeting.targeting.genders.length > 0) {
+      targeting.genders = aiTargeting.targeting.genders
     }
 
-    // Location targeting
-    if (locationRadius > 0 && locationLat && locationLng) {
-      // Radius around a point (store location)
-      targeting.geo_locations = {
-        custom_locations: [{
-          latitude: locationLat,
-          longitude: locationLng,
-          radius: locationRadius,
-          distance_unit: 'kilometer',
-        }],
-      }
-    } else {
-      targeting.geo_locations = { countries: ['TH'] }
-    }
-
-    // Interest targeting
-    if (interests.length > 0) {
+    if (aiTargeting.targeting.interests && aiTargeting.targeting.interests.length > 0) {
       targeting.flexible_spec = [{
-        interests: interests.map((i: any) => ({ id: i.id, name: i.name })),
+        interests: aiTargeting.targeting.interests.map((i: any) => ({ id: i.id, name: i.name })),
       }]
     }
 
@@ -322,7 +310,14 @@ export async function POST(req: Request) {
       })
     }
 
-    return NextResponse.json({ success: true, campaignId: campaign.id, fbCampaignId })
+    return NextResponse.json({
+      success: true, campaignId: campaign.id, fbCampaignId,
+      aiTargeting: {
+        reasoning: aiTargeting.reasoning,
+        objective: aiTargeting.objective,
+        targeting: aiTargeting.targeting,
+      },
+    })
 
   } catch (err: any) {
     console.error('[create] unexpected error:', err)

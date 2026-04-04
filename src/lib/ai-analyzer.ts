@@ -125,6 +125,305 @@ export async function analyzeAdPerformance(metrics: AdMetrics): Promise<AIAnalys
   }
 }
 
+// ============================================
+// AI Auto-Targeting: วิเคราะห์โพสต์แล้วเลือก targeting อัตโนมัติ
+// ============================================
+
+export interface AITargetingResult {
+  objective: string
+  targeting: {
+    ageMin: number
+    ageMax: number
+    genders: number[]
+    geoLocations: { countries: string[] }
+    interests?: { id: string; name: string }[]
+  }
+  reasoning: string
+}
+
+/** AI อ่านโพสต์แล้วเลือก targeting ที่ดีที่สุดให้ (ใช้กับยิงแอดปกติ) */
+export async function generateAutoTargeting(context: {
+  postMessage: string
+  postImage?: boolean
+  pageCategory?: string
+  pageName: string
+}): Promise<AITargetingResult> {
+  const prompt = `คุณเป็น Facebook Ads Expert ระดับ Senior ในตลาดไทย
+
+## ข้อมูลโพสต์
+- เพจ: ${context.pageName} (หมวด: ${context.pageCategory || 'ไม่ระบุ'})
+- เนื้อหา: "${context.postMessage || 'ไม่มีข้อความ'}"
+- มีรูป: ${context.postImage ? 'มี' : 'ไม่มี'}
+
+## สิ่งที่ต้องทำ
+วิเคราะห์เนื้อหาโพสต์อย่างละเอียด แล้วเลือก targeting ที่ดีที่สุดเพียง 1 แบบ:
+
+1. เลือก objective ที่เหมาะสมที่สุด
+2. เลือกช่วงอายุ กลุ่มเพศ ความสนใจ ที่ตรงกับเนื้อหาโพสต์มากที่สุด
+
+## กฎ
+- ageMin ต่ำสุด 18, ageMax สูงสุด 65
+- genders: [] = ทั้งหมด, [1] = ชาย, [2] = หญิง
+- countries ใช้ ['TH'] เสมอ
+- objective เลือกจาก: POST_ENGAGEMENT, LINK_CLICKS, REACH
+- interests ใส่ชื่อที่ Facebook น่าจะมี
+
+ตอบ JSON เท่านั้น (ห้าม markdown ห้าม backticks):
+{
+  "objective": "POST_ENGAGEMENT",
+  "targeting": {
+    "ageMin": 20,
+    "ageMax": 45,
+    "genders": [],
+    "geoLocations": { "countries": ["TH"] },
+    "interests": [{"id": "6003139266461", "name": "Shopping"}]
+  },
+  "reasoning": "เหตุผลสั้นๆ 1-2 ประโยค ภาษาไทย"
+}`
+
+  const response = await anthropic.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 800,
+    messages: [{ role: 'user', content: prompt }],
+  })
+
+  const text = response.content[0].type === 'text' ? response.content[0].text : '{}'
+  const parsed = JSON.parse(text.replace(/```json|```/g, '').trim())
+
+  return {
+    objective: parsed.objective || 'POST_ENGAGEMENT',
+    targeting: {
+      ageMin: parsed.targeting?.ageMin || 18,
+      ageMax: parsed.targeting?.ageMax || 65,
+      genders: parsed.targeting?.genders || [],
+      geoLocations: parsed.targeting?.geoLocations || { countries: ['TH'] },
+      interests: parsed.targeting?.interests,
+    },
+    reasoning: parsed.reasoning || '',
+  }
+}
+
+// ============================================
+// AI A/B Test: วิเคราะห์โพสต์ + สร้าง Variants
+// ============================================
+
+export interface PostContext {
+  postMessage: string
+  postImage?: string
+  pageCategory?: string
+  pageName: string
+  existingReactions?: number
+  existingComments?: number
+  existingShares?: number
+}
+
+export interface TestVariant {
+  label: string           // เช่น "A: วัยรุ่นชอบช้อป"
+  strategy: string        // คำอธิบายกลยุทธ์
+  objective: string       // POST_ENGAGEMENT, LINK_CLICKS, REACH
+  targeting: {
+    ageMin: number
+    ageMax: number
+    genders: number[]     // [] = ทั้งหมด, [1] = ชาย, [2] = หญิง
+    geoLocations: { countries: string[] }
+    interests?: { id: string; name: string }[]
+  }
+  budgetPercent: number   // % ของงบรวม เช่น 25 = 25%
+  reasoning: string       // เหตุผลที่ AI เลือก
+}
+
+export interface ABTestPlan {
+  postAnalysis: string          // AI วิเคราะห์เนื้อหาโพสต์
+  recommendedBudget: number     // งบที่แนะนำต่อวัน (บาท)
+  recommendedDays: number       // จำนวนวันที่แนะนำ
+  variants: TestVariant[]       // 3-4 variants
+}
+
+/** AI อ่านโพสต์ + เพจ แล้วสร้าง Test Variants */
+export async function generateTestVariants(context: PostContext): Promise<ABTestPlan> {
+  const prompt = `คุณเป็น Facebook Ads Strategist ระดับ Senior มีประสบการณ์ 10+ ปี ในตลาดไทย
+
+## ข้อมูลโพสต์ที่จะยิงแอด
+- เพจ: ${context.pageName} (หมวด: ${context.pageCategory || 'ไม่ระบุ'})
+- เนื้อหาโพสต์: "${context.postMessage || 'ไม่มีข้อความ'}"
+- มีรูปภาพ: ${context.postImage ? 'มี' : 'ไม่มี'}
+- Engagement ปัจจุบัน: ${context.existingReactions || 0} reactions, ${context.existingComments || 0} comments, ${context.existingShares || 0} shares
+
+## สิ่งที่ต้องทำ
+วิเคราะห์เนื้อหาโพสต์อย่างละเอียด แล้วออกแบบ A/B Test 3-4 แบบที่แตกต่างกัน โดย:
+
+1. **วิเคราะห์โพสต์** - เนื้อหาพูดถึงอะไร? กลุ่มเป้าหมายน่าจะเป็นใคร? จุดขายคืออะไร?
+2. **ออกแบบ Variants** - สร้าง 3-4 กลุ่มเป้าหมายที่แตกต่างกันชัดเจน เช่น:
+   - แบ่งตามอายุ (วัยรุ่น vs คนทำงาน vs ผู้ใหญ่)
+   - แบ่งตามเพศ (ถ้าเนื้อหาเหมาะ)
+   - แบ่งตามความสนใจ (interests ที่ต่างกัน)
+   - แบ่งตาม objective (engagement vs reach vs clicks)
+3. **จัดสรรงบ** - แบ่ง % งบให้แต่ละ variant (รวม = 100%)
+
+## กฎ
+- ageMin ต่ำสุด = 18, ageMax สูงสุด = 65
+- genders: [] = ทั้งหมด, [1] = ชาย, [2] = หญิง
+- countries ใช้ ['TH'] เสมอ
+- interests ให้ใส่ ID จริงของ Facebook (ถ้ารู้) หรือใส่ชื่อที่ Facebook น่าจะมี
+- budgetPercent ของทุก variant รวมกัน = 100
+- objective เลือกจาก: POST_ENGAGEMENT, LINK_CLICKS, REACH
+- แนะนำงบและจำนวนวันที่เหมาะสมตามเนื้อหาโพสต์
+
+ตอบในรูปแบบ JSON เท่านั้น (ห้าม markdown ห้าม backticks):
+{
+  "postAnalysis": "วิเคราะห์เนื้อหาโพสต์ 2-3 ประโยค ภาษาไทย",
+  "recommendedBudget": 200,
+  "recommendedDays": 7,
+  "variants": [
+    {
+      "label": "A: ชื่อกลุ่มสั้นๆ",
+      "strategy": "อธิบายกลยุทธ์ 1-2 ประโยค",
+      "objective": "POST_ENGAGEMENT",
+      "targeting": {
+        "ageMin": 18,
+        "ageMax": 30,
+        "genders": [],
+        "geoLocations": { "countries": ["TH"] },
+        "interests": [{"id": "6003139266461", "name": "Shopping"}]
+      },
+      "budgetPercent": 30,
+      "reasoning": "เหตุผลที่เลือกกลุ่มนี้"
+    }
+  ]
+}`
+
+  const response = await anthropic.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 2000,
+    messages: [{ role: 'user', content: prompt }],
+  })
+
+  const text = response.content[0].type === 'text' ? response.content[0].text : '{}'
+  const parsed = JSON.parse(text.replace(/```json|```/g, '').trim())
+
+  return {
+    postAnalysis: parsed.postAnalysis,
+    recommendedBudget: parsed.recommendedBudget || 200,
+    recommendedDays: parsed.recommendedDays || 7,
+    variants: parsed.variants || [],
+  }
+}
+
+// ============================================
+// AI A/B Test: เปรียบเทียบ Variants
+// ============================================
+
+export interface VariantPerformance {
+  campaignId: string
+  variantLabel: string
+  strategy: string
+  spend: number
+  impressions: number
+  reach: number
+  clicks: number
+  ctr: number
+  cpm: number
+  cpc: number
+  frequency: number
+  engagement: number
+  likes: number
+  comments: number
+  shares: number
+}
+
+export interface ABTestComparison {
+  overallSummary: string
+  variants: {
+    campaignId: string
+    label: string
+    score: number            // 0-100 คะแนนรวม
+    verdict: 'scale_up' | 'keep_running' | 'reduce' | 'stop_and_delete'
+    reason: string
+    suggestedBudgetChange?: number  // % เปลี่ยนงบ เช่น +50, -30
+  }[]
+  bestVariant: string        // campaignId ของ variant ที่ดีที่สุด
+  worstVariant: string       // campaignId ของ variant ที่แย่ที่สุด
+  shouldReallocate: boolean  // ควรจัดสรรงบใหม่หรือยัง
+  reallocationPlan?: string  // คำแนะนำการจัดสรรงบ
+}
+
+/** AI เปรียบเทียบผล variants ใน AB Test */
+export async function compareTestVariants(
+  variants: VariantPerformance[],
+  totalBudget: number,
+  daysRunning: number
+): Promise<ABTestComparison> {
+  const variantsInfo = variants.map((v, i) => `
+### Variant ${v.variantLabel}
+- ใช้งบไป: ${v.spend.toFixed(2)} บาท
+- Impressions: ${v.impressions.toLocaleString()}
+- Reach: ${v.reach.toLocaleString()}
+- Clicks: ${v.clicks.toLocaleString()}
+- CTR: ${v.ctr.toFixed(2)}%
+- CPM: ${v.cpm.toFixed(2)} บาท
+- CPC: ${v.cpc.toFixed(2)} บาท
+- Frequency: ${v.frequency.toFixed(2)}
+- Engagement: ${v.engagement} (Likes: ${v.likes}, Comments: ${v.comments}, Shares: ${v.shares})
+`).join('\n')
+
+  const prompt = `คุณเป็น Facebook Ads Optimization Expert เปรียบเทียบผล A/B Test ต่อไปนี้
+
+## ข้อมูลการทดสอบ
+- งบรวมต่อวัน: ${totalBudget} บาท
+- วิ่งมาแล้ว: ${daysRunning} วัน
+
+## ผล Variants ทั้งหมด
+${variantsInfo}
+
+## เกณฑ์ Thailand Market
+- CTR ดี: > 1.5% | ปานกลาง: 0.8-1.5% | ต่ำ: < 0.8%
+- CPM ดี: < 80 บาท | ปานกลาง: 80-150 บาท | สูง: > 150 บาท
+- CPC ดี: < 5 บาท | ปานกลาง: 5-15 บาท | แพง: > 15 บาท
+
+## สิ่งที่ต้องทำ
+1. ให้คะแนนแต่ละ variant (0-100) โดยพิจารณา CTR, CPC, CPM, engagement
+2. ตัดสินว่าแต่ละ variant ควร: scale_up (เพิ่มงบ), keep_running (ปล่อยต่อ), reduce (ลดงบ), stop_and_delete (หยุดและลบ)
+3. แนะนำการจัดสรรงบใหม่ (ถ้าควร)
+4. ถ้าวิ่งมาน้อยกว่า 2 วัน → ให้ keep_running ทุกตัวก่อน เพราะข้อมูลยังไม่พอ
+
+ตอบในรูปแบบ JSON (ห้าม markdown ห้าม backticks):
+{
+  "overallSummary": "สรุปรวม 2-3 ประโยค ภาษาไทย",
+  "variants": [
+    {
+      "campaignId": "uuid-here",
+      "label": "A: ชื่อกลุ่ม",
+      "score": 85,
+      "verdict": "scale_up",
+      "reason": "เหตุผล 1-2 ประโยค",
+      "suggestedBudgetChange": 50
+    }
+  ],
+  "bestVariant": "uuid-of-best",
+  "worstVariant": "uuid-of-worst",
+  "shouldReallocate": true,
+  "reallocationPlan": "คำแนะนำการจัดสรรงบใหม่"
+}`
+
+  const response = await anthropic.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 2000,
+    messages: [{ role: 'user', content: prompt }],
+  })
+
+  const text = response.content[0].type === 'text' ? response.content[0].text : '{}'
+  const parsed = JSON.parse(text.replace(/```json|```/g, '').trim())
+
+  return {
+    overallSummary: parsed.overallSummary,
+    variants: parsed.variants || [],
+    bestVariant: parsed.bestVariant,
+    worstVariant: parsed.worstVariant,
+    shouldReallocate: parsed.shouldReallocate || false,
+    reallocationPlan: parsed.reallocationPlan,
+  }
+}
+
 // สีและ icon ตาม recommendation
 export const recommendationConfig = {
   keep_running: {

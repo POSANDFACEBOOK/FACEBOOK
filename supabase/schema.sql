@@ -145,6 +145,35 @@ CREATE TABLE notifications (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- ตาราง AB Test Groups (กลุ่มทดสอบ AI)
+CREATE TABLE ab_test_groups (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  page_id UUID REFERENCES connected_pages(id) ON DELETE CASCADE,
+  fb_post_id TEXT NOT NULL,
+  post_message TEXT,
+  post_image TEXT,
+
+  -- AI Analysis ของโพสต์
+  ai_post_analysis JSONB,           -- ผล AI วิเคราะห์เนื้อหาโพสต์
+
+  -- Settings
+  total_daily_budget NUMERIC(10,2), -- งบรวมต่อวัน (หาร variants)
+  duration_days INTEGER DEFAULT 7,
+
+  -- Status
+  status TEXT DEFAULT 'running' CHECK (status IN ('running','evaluating','completed','cancelled')),
+  winning_campaign_id UUID REFERENCES ad_campaigns(id) ON DELETE SET NULL,
+
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- เพิ่มคอลัมน์ใน ad_campaigns สำหรับ AB Test
+ALTER TABLE ad_campaigns ADD COLUMN test_group_id UUID REFERENCES ab_test_groups(id) ON DELETE SET NULL;
+ALTER TABLE ad_campaigns ADD COLUMN variant_label TEXT;        -- เช่น 'A: วัยรุ่น', 'B: คนทำงาน'
+ALTER TABLE ad_campaigns ADD COLUMN variant_strategy JSONB;    -- รายละเอียดกลยุทธ์ที่ AI เลือก
+
 -- ============================================
 -- Indexes
 -- ============================================
@@ -154,6 +183,9 @@ CREATE INDEX idx_performance_campaign ON ad_performance(campaign_id);
 CREATE INDEX idx_performance_fetched ON ad_performance(fetched_at);
 CREATE INDEX idx_analyses_campaign ON ai_analyses(campaign_id);
 CREATE INDEX idx_notifications_user ON notifications(user_id, is_read);
+CREATE INDEX idx_ab_test_groups_user ON ab_test_groups(user_id);
+CREATE INDEX idx_ab_test_groups_status ON ab_test_groups(status);
+CREATE INDEX idx_campaigns_test_group ON ad_campaigns(test_group_id);
 
 -- ============================================
 -- Row Level Security (RLS)
@@ -164,6 +196,9 @@ ALTER TABLE ad_campaigns ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ad_performance ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ai_analyses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ab_test_groups ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "ab_tests_own_data" ON ab_test_groups FOR ALL USING (user_id = auth.uid()::UUID);
 
 -- Policy: users เห็นแค่ข้อมูลตัวเอง
 CREATE POLICY "users_own_data" ON users FOR ALL USING (id = auth.uid()::UUID);
@@ -181,3 +216,4 @@ $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER trg_users_updated BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 CREATE TRIGGER trg_campaigns_updated BEFORE UPDATE ON ad_campaigns FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE TRIGGER trg_ab_tests_updated BEFORE UPDATE ON ab_test_groups FOR EACH ROW EXECUTE FUNCTION update_updated_at();
