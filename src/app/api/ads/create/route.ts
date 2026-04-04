@@ -1,7 +1,7 @@
 import { getServerSession } from 'next-auth'
 import { NextResponse } from 'next/server'
 import { authOptions } from '@/lib/auth'
-import { updateAllStatus } from '@/lib/facebook'
+import { updateAllStatus, resolveInterests } from '@/lib/facebook'
 import { generateAutoTargeting } from '@/lib/ai-analyzer'
 
 export const dynamic = 'force-dynamic'
@@ -170,10 +170,14 @@ export async function POST(req: Request) {
       targeting.genders = aiTargeting.targeting.genders
     }
 
+    // Validate AI-generated interests against Facebook API (get real IDs)
     if (aiTargeting.targeting.interests && aiTargeting.targeting.interests.length > 0) {
-      targeting.flexible_spec = [{
-        interests: aiTargeting.targeting.interests.map((i: any) => ({ id: i.id, name: i.name })),
-      }]
+      const validInterests = await resolveInterests(aiTargeting.targeting.interests, userToken)
+      if (validInterests.length > 0) {
+        targeting.flexible_spec = [{
+          interests: validInterests,
+        }]
+      }
     }
 
     // ── 9. Create Campaign ────────────────────────────────────

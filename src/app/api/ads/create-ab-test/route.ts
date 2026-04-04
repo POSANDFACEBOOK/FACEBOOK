@@ -1,7 +1,7 @@
 import { getServerSession } from 'next-auth'
 import { NextResponse } from 'next/server'
 import { authOptions } from '@/lib/auth'
-import { createCampaign, createAdSet, createAd, getAdAccount } from '@/lib/facebook'
+import { createCampaign, createAdSet, createAd, getAdAccount, resolveInterests } from '@/lib/facebook'
 import { generateTestVariants, type PostContext } from '@/lib/ai-analyzer'
 
 export const dynamic = 'force-dynamic'
@@ -133,6 +133,11 @@ export async function POST(req: Request) {
         // Create Facebook Campaign
         const fbCampaignId = await createCampaign(adAccountId, pageToken, campaignName)
 
+        // Validate AI interests against Facebook API (get real IDs)
+        const validInterests = variant.targeting.interests?.length
+          ? await resolveInterests(variant.targeting.interests, session.accessToken as string)
+          : []
+
         // Create Ad Set with variant-specific targeting
         const fbAdSetId = await createAdSet(adAccountId, pageToken, fbCampaignId, {
           name: `${variant.label} - Ad Set`,
@@ -144,7 +149,7 @@ export async function POST(req: Request) {
             ageMax: variant.targeting.ageMax,
             genders: variant.targeting.genders,
             geoLocations: variant.targeting.geoLocations || { countries: ['TH'] },
-            interests: variant.targeting.interests,
+            interests: validInterests,
           },
           pageId,
         })

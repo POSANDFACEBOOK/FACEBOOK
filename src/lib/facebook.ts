@@ -324,6 +324,40 @@ export async function updateAdSetBudget(
 }
 
 // ============================================
+// Interest Search (validate AI-generated interests)
+// ============================================
+
+/** ค้นหา Interest ID จริงจาก Facebook API */
+export async function searchInterest(
+  keyword: string,
+  accessToken: string
+): Promise<{ id: string; name: string } | null> {
+  try {
+    const res = await fetch(
+      `${FB_API}/search?type=adinterest&q=${encodeURIComponent(keyword)}&limit=5&locale=th_TH&access_token=${accessToken}`
+    )
+    const data = await res.json()
+    if (data.error || !data.data?.length) return null
+    // Return the best match (first result)
+    return { id: data.data[0].id, name: data.data[0].name }
+  } catch {
+    return null
+  }
+}
+
+/** ค้นหาหลาย interests พร้อมกัน — ข้ามตัวที่หาไม่เจอ */
+export async function resolveInterests(
+  keywords: { id?: string; name: string }[],
+  accessToken: string
+): Promise<{ id: string; name: string }[]> {
+  if (!keywords?.length) return []
+  const results = await Promise.all(
+    keywords.map(k => searchInterest(k.name, accessToken))
+  )
+  return results.filter((r): r is { id: string; name: string } => r !== null)
+}
+
+// ============================================
 // Types
 // ============================================
 
