@@ -66,7 +66,7 @@ export async function createCampaign(
     }),
   })
   const data = await res.json()
-  if (data.error) throw new Error(data.error.error_user_msg || data.error.message)
+  if (data.error) throw new Error(`Campaign: ${JSON.stringify(data.error)}`)
   return data.id as string
 }
 
@@ -118,7 +118,7 @@ export async function createAdSet(
     body: JSON.stringify(adsetBody),
   })
   const data = await res.json()
-  if (data.error) throw new Error(data.error.error_user_msg || data.error.message)
+  if (data.error) throw new Error(`AdSet: ${JSON.stringify(data.error)}`)
   return data.id as string
 }
 
