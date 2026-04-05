@@ -528,7 +528,8 @@ function BoostModal({ pages, onClose, onSuccess }: { pages: any[]; onClose: () =
   const [selectedPage, setSelectedPage] = useState<any>(null)
   const [posts, setPosts] = useState<any[]>([])
   const [selectedPost, setSelectedPost] = useState<any>(null)
-  const [budget, setBudget] = useState(100)
+  const MIN_BUDGET = 120 // 3 variants × 40 baht minimum
+  const [budget, setBudget] = useState(MIN_BUDGET)
   const [days, setDays] = useState(7)
   const [submitting, setSubmitting] = useState(false)
   const [loadingPosts, setLoadingPosts] = useState(false)
@@ -647,8 +648,9 @@ function BoostModal({ pages, onClose, onSuccess }: { pages: any[]; onClose: () =
 
               {/* Budget */}
               <div style={{ marginBottom: 14 }}>
-                <label style={{ fontSize: 12, color: MUTED, fontWeight: 700, display: 'block', marginBottom: 7 }}>งบต่อวัน (บาท)</label>
-                <input type="number" value={budget} min={20} onChange={e => setBudget(Number(e.target.value))} style={{ ...inputStyle, fontSize: 17, fontWeight: 800 }} />
+                <label style={{ fontSize: 12, color: MUTED, fontWeight: 700, display: 'block', marginBottom: 7 }}>งบต่อวัน (บาท) — ขั้นต่ำ ฿{MIN_BUDGET}</label>
+                <input type="number" value={budget} min={MIN_BUDGET} onChange={e => setBudget(Math.max(MIN_BUDGET, Number(e.target.value)))} style={{ ...inputStyle, fontSize: 17, fontWeight: 800 }} />
+                {budget < MIN_BUDGET && <p style={{ fontSize: 11, color: RED, margin: '5px 0 0', fontWeight: 700 }}>งบขั้นต่ำ ฿{MIN_BUDGET} (AI สร้าง 3 แบบ × ฿40 ขั้นต่ำ/แบบ)</p>}
               </div>
 
               {/* Duration */}
@@ -675,11 +677,11 @@ function BoostModal({ pages, onClose, onSuccess }: { pages: any[]; onClose: () =
                 </div>
               </div>
 
-              <button onClick={handleSubmit} disabled={submitting} style={{ width: '100%', padding: '15px', background: submitting ? '#a5b4fc' : 'linear-gradient(135deg, #4338ca, #818cf8)', color: 'white', border: 'none', borderRadius: 15, cursor: submitting ? 'not-allowed' : 'pointer', fontSize: 16, fontWeight: 900, fontFamily: 'inherit', boxShadow: submitting ? 'none' : '0 7px 24px rgba(67,56,202,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, transition: 'all 0.2s' }}>
+              <button onClick={handleSubmit} disabled={submitting || budget < MIN_BUDGET} style={{ width: '100%', padding: '15px', background: (submitting || budget < MIN_BUDGET) ? '#a5b4fc' : 'linear-gradient(135deg, #4338ca, #818cf8)', color: 'white', border: 'none', borderRadius: 15, cursor: (submitting || budget < MIN_BUDGET) ? 'not-allowed' : 'pointer', fontSize: 16, fontWeight: 900, fontFamily: 'inherit', boxShadow: submitting ? 'none' : '0 7px 24px rgba(67,56,202,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, transition: 'all 0.2s' }}>
                 {submitting ? (
                   <><RefreshCw size={18} style={{ animation: 'spin 1s linear infinite' }} /> AI กำลังสร้าง 3-4 แอดทดสอบ...</>
                 ) : (
-                  <><Zap size={18} /> ยิงแอด! (AI สร้าง 3-4 แบบทดสอบ)</>
+                  <><Zap size={18} /> ยิงแอด! (AI สร้าง 3 แบบทดสอบ • ฿{Math.round(budget / 3)}/แบบ)</>
                 )}
               </button>
             </div>
