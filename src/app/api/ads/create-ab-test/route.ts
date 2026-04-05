@@ -192,7 +192,7 @@ export async function POST(req: Request) {
           targeting.flexible_spec = [{ interests: validInterests }]
         }
 
-        // ── Create Ad Set (exact same as create/route.ts) ──
+        // ── Create Ad Set (boost post — compatible with object_story_id creative) ──
         const adsetBody: any = {
           name: `${variant.label} - Ad Set`,
           campaign_id: fbCampaignId,
@@ -201,8 +201,7 @@ export async function POST(req: Request) {
           start_time: startDate,
           end_time: endDateStr,
           billing_event: 'IMPRESSIONS',
-          optimization_goal: 'CONVERSATIONS',
-          destination_type: 'MESSENGER',
+          optimization_goal: 'POST_ENGAGEMENT',
           targeting,
           promoted_object: { page_id: pageId },
           access_token: userToken,

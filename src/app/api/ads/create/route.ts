@@ -15,11 +15,10 @@ const GOAL_CONFIG: Record<string, {
   billing_event: string
   destination_type?: string
 }> = {
-  messages: {
+  engagement: {
     objective: 'OUTCOME_ENGAGEMENT',
-    optimization_goal: 'CONVERSATIONS',
+    optimization_goal: 'POST_ENGAGEMENT',
     billing_event: 'IMPRESSIONS',
-    destination_type: 'MESSENGER',
   },
   traffic: {
     objective: 'OUTCOME_TRAFFIC',
@@ -64,8 +63,8 @@ export async function POST(req: Request) {
     // Map AI objective to Facebook goal config
     const aiGoal = aiTargeting.objective === 'LINK_CLICKS' ? 'traffic'
       : aiTargeting.objective === 'REACH' ? 'reach'
-      : 'messages'
-    const goalConfig = GOAL_CONFIG[aiGoal] || GOAL_CONFIG.messages
+      : 'engagement'
+    const goalConfig = GOAL_CONFIG[aiGoal] || GOAL_CONFIG.engagement
 
     // ── 3. Supabase ───────────────────────────────────────────
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
