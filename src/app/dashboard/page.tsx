@@ -254,11 +254,25 @@ export default function Dashboard() {
 
         {/* Pages */}
         {pages.length > 0 && (
-          <div style={{ background: SURFACE, border: `1.5px solid ${BORDER}`, borderRadius: 14, padding: '11px 18px', marginBottom: 20, boxShadow: SHADOW_SM, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-            <span style={{ fontSize: 12, color: MUTED, fontWeight: 700 }}>📄 Pages:</span>
-            {pages.map((p: any) => (
-              <span key={p.id} style={{ background: 'linear-gradient(135deg, #eef2ff, #e0e7ff)', color: PRIMARY, padding: '3px 14px', borderRadius: 999, fontSize: 12, fontWeight: 700, border: `1px solid rgba(67,56,202,0.2)` }}>{p.name}</span>
-            ))}
+          <div style={{ marginBottom: 20 }}>
+            <h3 style={{ fontSize: 13, fontWeight: 800, marginBottom: 10, color: MUTED }}>📄 เพจที่จัดการ ({pages.length})</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(pages.length, 3)}, 1fr)`, gap: 10 }}>
+              {pages.map((p: any) => (
+                <div key={p.id} style={{ background: SURFACE, border: `1.5px solid ${BORDER}`, borderRadius: 14, padding: '12px 14px', boxShadow: SHADOW_SM, display: 'flex', alignItems: 'center', gap: 10 }}>
+                  {p.picture?.data?.url ? (
+                    <img src={p.picture.data.url} alt="" style={{ width: 36, height: 36, borderRadius: 9, objectFit: 'cover', flexShrink: 0 }} />
+                  ) : (
+                    <div style={{ width: 36, height: 36, borderRadius: 9, background: 'linear-gradient(135deg, #4338ca, #818cf8)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 14, fontWeight: 800, flexShrink: 0 }}>{(p.name || '?')[0]}</div>
+                  )}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</div>
+                    <div style={{ fontSize: 10, color: MUTED, fontWeight: 600 }}>
+                      {p.category || ''}{p.fan_count ? ` • ${fmt(p.fan_count)} likes` : ''}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
