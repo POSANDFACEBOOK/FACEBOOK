@@ -201,7 +201,7 @@ export async function POST(req: Request) {
           start_time: startDate,
           end_time: endDateStr,
           billing_event: 'IMPRESSIONS',
-          optimization_goal: 'POST_ENGAGEMENT',
+          optimization_goal: 'ENGAGED_USERS',
           targeting,
           promoted_object: { page_id: pageId },
           access_token: userToken,

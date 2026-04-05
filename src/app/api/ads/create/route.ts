@@ -17,7 +17,7 @@ const GOAL_CONFIG: Record<string, {
 }> = {
   engagement: {
     objective: 'OUTCOME_ENGAGEMENT',
-    optimization_goal: 'POST_ENGAGEMENT',
+    optimization_goal: 'ENGAGED_USERS',
     billing_event: 'IMPRESSIONS',
   },
   traffic: {
