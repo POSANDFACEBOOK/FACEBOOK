@@ -154,6 +154,23 @@ export default function Dashboard() {
     }
   }
 
+  const [cleaning, setCleaning] = useState(false)
+  async function handleCleanup() {
+    if (cleaning) return
+    setCleaning(true)
+    try {
+      const res = await fetch('/api/ads/cleanup', { method: 'POST' })
+      const data = await res.json()
+      if (data.success) {
+        alert(`ลบ campaigns ค้างแล้ว ${data.deleted?.length || 0} รายการ`)
+        loadAll()
+      } else {
+        alert(`ไม่สำเร็จ: ${data.error}`)
+      }
+    } catch (e: any) { alert(e.message) }
+    finally { setCleaning(false) }
+  }
+
   return (
     <div style={{ minHeight: '100vh', background: BG, color: TEXT, fontFamily: "'Sarabun', sans-serif", position: 'relative' }}>
       {/* Grid BG */}
@@ -198,6 +215,9 @@ export default function Dashboard() {
           </button>
           <button onClick={() => setShowModal(true)} style={{ ...btnPrimary, padding: '9px 18px', fontSize: 13, display: 'flex', alignItems: 'center', gap: 7 }}>
             <Plus size={15} /> ยิงแอดใหม่
+          </button>
+          <button onClick={handleCleanup} disabled={cleaning} style={{ ...btnGhost, padding: '8px 14px', fontSize: 12, fontWeight: 700, color: RED, borderColor: 'rgba(220,38,38,0.2)' }}>
+            <Trash2 size={13} /> {cleaning ? 'กำลังลบ...' : 'ล้าง FB ค้าง'}
           </button>
           <button onClick={() => signOut({ callbackUrl: '/login' })} style={{ ...btnGhost, padding: '8px 11px' }}><LogOut size={15} /></button>
         </div>
