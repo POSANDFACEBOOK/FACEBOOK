@@ -262,58 +262,29 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ── AB Tests ── */}
-        {abTests.length > 0 && (
-          <div style={{ marginBottom: 22 }}>
-            <h3 style={{ fontSize: 14, fontWeight: 800, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Zap size={16} color={PRIMARY} /> AI A/B Tests
-            </h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {abTests.map((t: any) => (
-                <button key={t.id} onClick={() => setShowABView(t.id)}
-                  style={{ width: '100%', background: 'linear-gradient(145deg, #f5f3ff, #ede9fe)', border: `1.5px solid rgba(124,58,237,0.25)`, borderRadius: 16, padding: '16px 20px', cursor: 'pointer', textAlign: 'left', color: TEXT, fontFamily: 'inherit', boxShadow: SHADOW_SM, transition: 'all 0.18s' }}
-                  onMouseEnter={e => { e.currentTarget.style.boxShadow = SHADOW_MD }}
-                  onMouseLeave={e => { e.currentTarget.style.boxShadow = SHADOW_SM }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <BarChart3 size={15} color="#7c3aed" />
-                        A/B Test — {(t.post_message || t.fb_post_id || '').slice(0, 50)}
-                      </div>
-                      <div style={{ fontSize: 11, color: MUTED, fontWeight: 600 }}>
-                        <span style={{ marginRight: 14 }}>💰 ฿{t.total_daily_budget}/วัน</span>
-                        <span style={{ marginRight: 14 }}>{t.variant_count || 0} variants</span>
-                        <span>{fmtDate(t.created_at)}</span>
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ fontSize: 11, fontWeight: 800, color: t.status === 'running' ? GREEN : MUTED, background: t.status === 'running' ? GREEN_L : '#f1f5f9', padding: '3px 12px', borderRadius: 999 }}>
-                        {t.status === 'running' ? '● กำลังทดสอบ' : t.status === 'completed' ? '✅ เสร็จ' : t.status}
-                      </span>
-                      <ChevronRight size={14} color={MUTED} />
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* ── Campaign List ── */}
+        {/* ── Main Ad List (grouped by AB Test / Post) ── */}
         {loading ? (
           <div style={{ textAlign: 'center', padding: 72, color: MUTED }}>
             <div style={{ fontSize: 38, marginBottom: 14, opacity: 0.5 }}>⏳</div>
             <p style={{ fontSize: 14, fontWeight: 600 }}>กำลังโหลด...</p>
           </div>
-        ) : campaigns.length === 0 ? (
+        ) : abTests.length === 0 && campaigns.length === 0 ? (
           <div style={{ textAlign: 'center', padding: 64, background: SURFACE, border: `1.5px solid ${BORDER}`, borderRadius: 22, boxShadow: SHADOW_MD }}>
             <div style={{ fontSize: 56, marginBottom: 16 }}>📢</div>
             <p style={{ color: MUTED, marginBottom: 24, fontSize: 15, fontWeight: 600 }}>ยังไม่มีแอดใดๆ</p>
-            <button onClick={() => setShowModal(true)} style={{ ...btnPrimary, padding: '13px 32px', fontSize: 14 }}>+ สร้างแอดแรกเลย</button>
+            <button onClick={() => setShowABModal(true)} style={{ ...btnPrimary, padding: '13px 32px', fontSize: 14 }}>+ สร้างแอดแรกเลย</button>
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {campaigns.map((c: any) => <CampaignCard key={c.id} campaign={c} onToggle={handleToggle} onDelete={handleDelete} deleting={deleting} />)}
+            {/* AB Test Groups — each is a post with 3-4 variants */}
+            {abTests.map((t: any) => (
+              <AdGroupCard key={t.id} test={t} onOpen={() => setShowABView(t.id)} />
+            ))}
+
+            {/* Standalone campaigns (not part of AB test) */}
+            {campaigns.filter((c: any) => !c.test_group_id).map((c: any) => (
+              <CampaignCard key={c.id} campaign={c} onToggle={handleToggle} onDelete={handleDelete} deleting={deleting} />
+            ))}
           </div>
         )}
       </div>
@@ -498,6 +469,123 @@ function MetricPill({ label, value, icon, color }: { label: string; value: strin
     <div style={{ background: SURFACE2, borderRadius: 10, padding: '8px 10px', textAlign: 'center' }}>
       <div style={{ fontSize: 10, color: MUTED, marginBottom: 3, fontWeight: 600 }}>{icon} {label}</div>
       <div style={{ fontSize: 14, fontWeight: 800, color: color || TEXT }}>{value}</div>
+    </div>
+  )
+}
+
+// ─── Ad Group Card (grouped by post) ──────────────────────────
+function AdGroupCard({ test, onOpen }: { test: any; onOpen: () => void }) {
+  const isRunning = test.status === 'running'
+  const totalBudget = test.total_daily_budget * (test.duration_days || 7)
+  const totalSpend = test.totals?.spend || 0
+  const spendPercent = totalBudget > 0 ? Math.min(100, totalSpend / totalBudget * 100) : 0
+
+  return (
+    <div
+      onClick={onOpen}
+      style={{
+        background: SURFACE, border: `1.5px solid ${BORDER}`, borderRadius: 20,
+        padding: '20px 24px', boxShadow: SHADOW_RAISED, cursor: 'pointer',
+        transition: 'all 0.2s',
+      }}
+      onMouseEnter={e => { e.currentTarget.style.boxShadow = '0 10px 36px rgba(67,56,202,0.18)'; e.currentTarget.style.transform = 'translateY(-3px)' }}
+      onMouseLeave={e => { e.currentTarget.style.boxShadow = SHADOW_RAISED; e.currentTarget.style.transform = 'translateY(0)' }}
+    >
+      {/* Row 1: Page name + Status */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ width: 32, height: 32, background: 'linear-gradient(135deg, #4338ca, #818cf8)', borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, color: 'white', fontWeight: 800, flexShrink: 0 }}>
+            {(test.page_name || '?')[0]}
+          </div>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 800, color: PRIMARY }}>{test.page_name || 'ไม่ทราบเพจ'}</div>
+            <div style={{ fontSize: 10, color: MUTED, fontWeight: 600 }}>{fmtDate(test.created_at)}</div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{
+            fontSize: 11, fontWeight: 800, padding: '4px 13px', borderRadius: 999,
+            color: isRunning ? GREEN : test.status === 'completed' ? '#2563eb' : MUTED,
+            background: isRunning ? GREEN_L : test.status === 'completed' ? '#dbeafe' : '#f1f5f9',
+            border: `1px solid ${isRunning ? GREEN : test.status === 'completed' ? '#2563eb' : MUTED}30`,
+          }}>
+            {isRunning ? '● กำลังวิ่ง' : test.status === 'completed' ? '✅ เสร็จ' : test.status === 'evaluating' ? '🔍 ประเมิน' : test.status}
+          </span>
+          <div style={{ width: 28, height: 28, background: 'linear-gradient(145deg, #ffffff, #e8eeff)', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', color: PRIMARY, border: `1px solid ${BORDER}` }}>
+            <ChevronRight size={14} />
+          </div>
+        </div>
+      </div>
+
+      {/* Row 2: Post content */}
+      <div style={{ display: 'flex', gap: 14, marginBottom: 14 }}>
+        {test.post_image && (
+          <img src={test.post_image} alt="" style={{ width: 64, height: 64, borderRadius: 12, objectFit: 'cover', flexShrink: 0, border: `1.5px solid ${BORDER}` }} />
+        )}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <p style={{
+            fontSize: 13, fontWeight: 600, margin: '0 0 6px', lineHeight: 1.5, color: TEXT,
+            overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box',
+            WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as const,
+          }}>
+            {test.post_message || test.fb_post_id || 'ไม่มีข้อความ'}
+          </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 11, color: MUTED, fontWeight: 600 }}>
+            <span style={{ background: 'linear-gradient(135deg, #f5f3ff, #ede9fe)', color: '#7c3aed', padding: '2px 10px', borderRadius: 999, fontWeight: 800, border: '1px solid rgba(124,58,237,0.2)' }}>
+              {test.variant_count || 0} แบบทดสอบ
+            </span>
+            <span>฿{fmt(test.total_daily_budget)}/วัน</span>
+            <span>{test.duration_days} วัน</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Row 3: Budget progress */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 5 }}>
+          <span style={{ color: MUTED, fontWeight: 600 }}>ใช้จ่าย ฿{fmt(totalSpend, 2)} / ฿{fmt(totalBudget, 0)}</span>
+          <span style={{ color: spendPercent > 80 ? RED : spendPercent > 50 ? YELLOW : GREEN, fontWeight: 700 }}>{fmt(spendPercent, 1)}%</span>
+        </div>
+        <div style={{ height: 6, background: '#e5e7eb', borderRadius: 3, overflow: 'hidden' }}>
+          <div style={{
+            height: '100%', borderRadius: 3,
+            width: `${spendPercent}%`,
+            background: spendPercent > 80 ? `linear-gradient(90deg, ${RED}, #f87171)` : spendPercent > 50 ? `linear-gradient(90deg, ${YELLOW}, #fbbf24)` : `linear-gradient(90deg, ${GREEN}, #34d399)`,
+            transition: 'width 0.5s ease',
+          }} />
+        </div>
+      </div>
+
+      {/* Row 4: Performance summary */}
+      {(test.totals?.impressions > 0 || test.totals?.reach > 0) ? (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+          <MetricPill label="Impressions" value={fmt(test.totals.impressions)} icon="👁️" />
+          <MetricPill label="Reach" value={fmt(test.totals.reach)} icon="👥" />
+          <MetricPill label="Clicks" value={fmt(test.totals.clicks)} icon="🖱️" />
+          <MetricPill label="ใช้ไป" value={`฿${fmt(test.totals.spend, 2)}`} icon="💸" />
+        </div>
+      ) : (
+        <div style={{ background: SURFACE2, borderRadius: 10, padding: '10px 14px', textAlign: 'center', fontSize: 12, color: MUTED, fontWeight: 600 }}>
+          ⏳ ยังไม่มีข้อมูล — กดเข้าไปดูรายละเอียดแต่ละแบบทดสอบ
+        </div>
+      )}
+
+      {/* Row 5: Variant mini badges */}
+      {test.variants && test.variants.length > 0 && (
+        <div style={{ display: 'flex', gap: 6, marginTop: 12, flexWrap: 'wrap' }}>
+          {test.variants.map((v: any) => (
+            <span key={v.id} style={{
+              fontSize: 10, fontWeight: 700, padding: '3px 10px', borderRadius: 999,
+              background: v.status === 'active' ? GREEN_L : v.status === 'paused' ? YELLOW_L : '#f1f5f9',
+              color: v.status === 'active' ? GREEN : v.status === 'paused' ? YELLOW : MUTED,
+              border: `1px solid ${v.status === 'active' ? GREEN : v.status === 'paused' ? YELLOW : MUTED}25`,
+            }}>
+              {v.variant_label || v.campaign_name}
+              {v.perf?.spend ? ` • ฿${fmt(v.perf.spend, 1)}` : ''}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
