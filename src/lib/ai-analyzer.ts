@@ -162,7 +162,7 @@ export async function generateAutoTargeting(context: {
 2. เลือกช่วงอายุ กลุ่มเพศ ความสนใจ ที่ตรงกับเนื้อหาโพสต์มากที่สุด
 
 ## กฎ
-- ageMin ต่ำสุด 18, ageMax สูงสุด 65
+- ageMin ต่ำสุด 20 (กฎ Facebook ไทย ห้ามต่ำกว่า 20), ageMax สูงสุด 65
 - genders: [] = ทั้งหมด, [1] = ชาย, [2] = หญิง
 - countries ใช้ ['TH'] เสมอ
 - objective เลือกจาก: POST_ENGAGEMENT, LINK_CLICKS, REACH

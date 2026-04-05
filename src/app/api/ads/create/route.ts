@@ -160,9 +160,20 @@ export async function POST(req: Request) {
     }
 
     // ── 8. Build Targeting (AI-driven) ─────────────────────────
+    // Validate AI-generated interests against Facebook API (get real IDs)
+    let validInterests: { id: string; name: string }[] = []
+    if (aiTargeting.targeting.interests && aiTargeting.targeting.interests.length > 0) {
+      validInterests = await resolveInterests(aiTargeting.targeting.interests, userToken)
+    }
+
+    // Thailand requires ageMin >= 20 when using interest targeting
+    const ageMin = validInterests.length > 0
+      ? Math.max(20, aiTargeting.targeting.ageMin)
+      : Math.max(18, aiTargeting.targeting.ageMin)
+
     const targeting: any = {
-      age_min: aiTargeting.targeting.ageMin,
-      age_max: aiTargeting.targeting.ageMax,
+      age_min: ageMin,
+      age_max: Math.min(65, aiTargeting.targeting.ageMax),
       geo_locations: { countries: ['TH'] },
     }
 
@@ -170,14 +181,10 @@ export async function POST(req: Request) {
       targeting.genders = aiTargeting.targeting.genders
     }
 
-    // Validate AI-generated interests against Facebook API (get real IDs)
-    if (aiTargeting.targeting.interests && aiTargeting.targeting.interests.length > 0) {
-      const validInterests = await resolveInterests(aiTargeting.targeting.interests, userToken)
-      if (validInterests.length > 0) {
-        targeting.flexible_spec = [{
-          interests: validInterests,
-        }]
-      }
+    if (validInterests.length > 0) {
+      targeting.flexible_spec = [{
+        interests: validInterests,
+      }]
     }
 
     // ── 9. Create Campaign ────────────────────────────────────

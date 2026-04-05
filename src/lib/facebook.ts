@@ -94,8 +94,11 @@ export async function createAdSet(
       billing_event: 'IMPRESSIONS',
       optimization_goal: 'ENGAGED_USERS',
       targeting: {
-        age_min: opts.targeting.ageMin,
-        age_max: opts.targeting.ageMax,
+        // Thailand requires ageMin >= 20 when using interest targeting
+        age_min: opts.targeting.interests?.length
+          ? Math.max(20, opts.targeting.ageMin)
+          : Math.max(18, opts.targeting.ageMin),
+        age_max: Math.min(65, opts.targeting.ageMax),
         genders: opts.targeting.genders,
         geo_locations: opts.targeting.geoLocations || { countries: ['TH'] },
         flexible_spec: opts.targeting.interests?.length
