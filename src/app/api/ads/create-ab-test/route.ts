@@ -1,7 +1,7 @@
 import { getServerSession } from 'next-auth'
 import { NextResponse } from 'next/server'
 import { authOptions } from '@/lib/auth'
-import { createCampaign, createAdSet, createAd, getAdAccount, resolveInterests } from '@/lib/facebook'
+import { resolveInterests } from '@/lib/facebook'
 import { generateTestVariants, type PostContext } from '@/lib/ai-analyzer'
 
 export const dynamic = 'force-dynamic'
@@ -140,63 +140,114 @@ export async function POST(req: Request) {
 
     const createdVariants = []
     const variantErrors: string[] = []
+    const userToken = session.accessToken as string
 
     // Facebook Thailand minimum daily budget is ~34 baht
-    const FB_MIN_BUDGET = 35
-    // Limit variants based on budget
+    const FB_MIN_BUDGET = 40
     const maxVariants = Math.floor(finalDailyBudget / FB_MIN_BUDGET)
     const variantsToCreate = testPlan.variants.slice(0, Math.max(2, maxVariants))
 
     for (const variant of variantsToCreate) {
       try {
-        // Split budget equally if calculated share is too low
-        const calculatedBudget = Math.round(finalDailyBudget * variant.budgetPercent / 100)
         const equalBudget = Math.round(finalDailyBudget / variantsToCreate.length)
-        const variantBudget = Math.max(calculatedBudget, equalBudget, FB_MIN_BUDGET)
-        if (variantBudget < FB_MIN_BUDGET) continue
+        const variantBudget = Math.max(equalBudget, FB_MIN_BUDGET)
 
         const campaignName = `[AB Test] ${variant.label} — ${(postMessage || postId).slice(0, 30)}`
 
-        const userToken = session.accessToken as string
-        let fbCampaignId = ''
+        // ── Create Campaign (exact same as create/route.ts) ──
+        const campRes = await fetch(`${FB}/${adAccountId}/campaigns`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: campaignName,
+            objective: 'OUTCOME_ENGAGEMENT',
+            status: 'ACTIVE',
+            buying_type: 'AUCTION',
+            special_ad_categories: [],
+            is_adset_budget_sharing_enabled: false,
+            access_token: userToken,
+          }),
+        })
+        const campData = await campRes.json()
+        if (campData.error) throw new Error(`Campaign: ${campData.error.error_user_msg || campData.error.message}`)
+        const fbCampaignId = campData.id
 
-        // Create Facebook Campaign (use userToken like create/route.ts)
-        fbCampaignId = await createCampaign(adAccountId, userToken, campaignName)
-
-        // Validate AI interests against Facebook API (get real IDs)
+        // ── Validate interests ──
         const validInterests = variant.targeting.interests?.length
           ? await resolveInterests(variant.targeting.interests, userToken)
           : []
 
-        let fbAdSetId: string
-        try {
-        // Create Ad Set with variant-specific targeting (use userToken)
-        fbAdSetId = await createAdSet(adAccountId, userToken, fbCampaignId, {
-          name: `${variant.label} - Ad Set`,
-          dailyBudget: variantBudget,
-          startTime: startDate,
-          endTime: endDateStr,
-          targeting: {
-            ageMin: Math.max(20, variant.targeting.ageMin || 20),
-            ageMax: Math.min(65, variant.targeting.ageMax || 55),
-            genders: variant.targeting.genders,
-            geoLocations: variant.targeting.geoLocations || { countries: ['TH'] },
-            interests: validInterests,
-          },
-          pageId,
-        })
-        } catch (adsetErr: any) {
-          // Rollback: delete orphaned campaign from Facebook
-          try { await fetch(`${FB}/${fbCampaignId}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ access_token: session.accessToken }) }) } catch {}
-          throw adsetErr
+        // ── Build targeting (exact same as create/route.ts) ──
+        const targeting: any = {
+          age_min: Math.max(20, variant.targeting.ageMin || 20),
+          age_max: Math.min(65, variant.targeting.ageMax || 55),
+          geo_locations: { countries: ['TH'] },
+          targeting_automation: { advantage_audience: 0 },
+        }
+        // Only add genders if specified (1=male, 2=female)
+        const genders = (variant.targeting.genders || []).filter((g: number) => g === 1 || g === 2)
+        if (genders.length > 0) targeting.genders = genders
+        // Only add interests if valid
+        if (validInterests.length > 0) {
+          targeting.flexible_spec = [{ interests: validInterests }]
         }
 
-        // Create Ad
-        const fbAdId = await createAd(adAccountId, pageToken, fbAdSetId, {
-          name: `${variant.label} - Ad`,
-          pageId,
-          postId,
+        // ── Create Ad Set (exact same as create/route.ts) ──
+        const adsetBody: any = {
+          name: `${variant.label} - Ad Set`,
+          campaign_id: fbCampaignId,
+          daily_budget: Math.round(variantBudget * 100),
+          bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
+          start_time: startDate,
+          end_time: endDateStr,
+          billing_event: 'IMPRESSIONS',
+          optimization_goal: 'CONVERSATIONS',
+          destination_type: 'MESSENGER',
+          targeting,
+          promoted_object: { page_id: pageId },
+          access_token: userToken,
+          status: 'ACTIVE',
+        }
+        const adsetRes = await fetch(`${FB}/${adAccountId}/adsets`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(adsetBody),
         })
+        const adsetData = await adsetRes.json()
+        if (adsetData.error) {
+          // Rollback campaign
+          try { await fetch(`${FB}/${fbCampaignId}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ access_token: userToken }) }) } catch {}
+          throw new Error(`AdSet: ${adsetData.error.error_user_msg || adsetData.error.message} [${JSON.stringify(adsetData.error).slice(0, 200)}]`)
+        }
+        const fbAdSetId = adsetData.id
+
+        // ── Create Creative + Ad (exact same as create/route.ts) ──
+        const creativeRes = await fetch(`${FB}/${adAccountId}/adcreatives`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: `Creative - ${variant.label}`,
+            object_story_id: postId,
+            access_token: pageToken,
+          }),
+        })
+        const creativeData = await creativeRes.json()
+        if (creativeData.error) throw new Error(`Creative: ${creativeData.error.error_user_msg || creativeData.error.message}`)
+
+        const adRes = await fetch(`${FB}/${adAccountId}/ads`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: `${variant.label} - Ad`,
+            adset_id: fbAdSetId,
+            creative: { creative_id: creativeData.id },
+            status: 'ACTIVE',
+            access_token: userToken,
+          }),
+        })
+        const adData = await adRes.json()
+        if (adData.error) throw new Error(`Ad: ${adData.error.error_user_msg || adData.error.message}`)
+        const fbAdId = adData.id
 
         // Save to database
         const { data: campaign, error: campaignError } = await supabase
