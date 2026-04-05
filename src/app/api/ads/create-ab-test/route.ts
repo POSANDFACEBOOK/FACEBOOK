@@ -47,18 +47,35 @@ export async function POST(req: Request) {
       .single()
     if (userError) throw new Error(userError.message)
 
-    // Get ad account
+    // Get ad account (try user token first, then page token — same as create/route.ts)
+    const FB = 'https://graph.facebook.com/v19.0'
     let adAccountId: string | null = null
+
+    // Method 1: User's ad accounts
     try {
-      const adAccount = await getAdAccount(pageId, pageToken)
-      adAccountId = adAccount?.id || null
-    } catch {
-      // continue
+      const r = await fetch(`${FB}/me/adaccounts?fields=id,name,account_status&limit=10&access_token=${session.accessToken}`)
+      const d = await r.json()
+      if (!d.error && d.data?.length > 0) {
+        const active = d.data.find((a: any) => a.account_status === 1) || d.data[0]
+        adAccountId = active.id
+      }
+    } catch { /* continue */ }
+
+    // Method 2: Page's ad accounts (fallback)
+    if (!adAccountId) {
+      try {
+        const r = await fetch(`${FB}/${pageId}/adaccounts?fields=id,account_status&access_token=${pageToken}`)
+        const d = await r.json()
+        if (!d.error && d.data?.length > 0) {
+          const active = d.data.find((a: any) => a.account_status === 1) || d.data[0]
+          adAccountId = active.id
+        }
+      } catch { /* continue */ }
     }
 
     if (!adAccountId) {
       return NextResponse.json({
-        error: 'ไม่พบ Ad Account สำหรับ Page นี้',
+        error: 'ไม่พบ Ad Account — กรุณาตรวจสอบสิทธิ์ ads_management',
       }, { status: 400 })
     }
 
@@ -130,16 +147,18 @@ export async function POST(req: Request) {
 
         const campaignName = `[AB Test] ${variant.label} — ${(postMessage || postId).slice(0, 30)}`
 
-        // Create Facebook Campaign
-        const fbCampaignId = await createCampaign(adAccountId, pageToken, campaignName)
+        const userToken = session.accessToken as string
+
+        // Create Facebook Campaign (use userToken like create/route.ts)
+        const fbCampaignId = await createCampaign(adAccountId, userToken, campaignName)
 
         // Validate AI interests against Facebook API (get real IDs)
         const validInterests = variant.targeting.interests?.length
-          ? await resolveInterests(variant.targeting.interests, session.accessToken as string)
+          ? await resolveInterests(variant.targeting.interests, userToken)
           : []
 
-        // Create Ad Set with variant-specific targeting
-        const fbAdSetId = await createAdSet(adAccountId, pageToken, fbCampaignId, {
+        // Create Ad Set with variant-specific targeting (use userToken)
+        const fbAdSetId = await createAdSet(adAccountId, userToken, fbCampaignId, {
           name: `${variant.label} - Ad Set`,
           dailyBudget: variantBudget,
           startTime: startDate,
