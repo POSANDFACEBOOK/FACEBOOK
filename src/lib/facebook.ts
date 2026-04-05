@@ -49,7 +49,7 @@ export async function getPagePosts(pageId: string, pageToken: string, limit = 20
 /** สร้าง Campaign */
 export async function createCampaign(
   adAccountId: string,
-  pageToken: string,
+  accessToken: string,
   name: string
 ) {
   const res = await fetch(`${FB_API}/${adAccountId}/campaigns`, {
@@ -59,60 +59,66 @@ export async function createCampaign(
       name,
       objective: 'OUTCOME_ENGAGEMENT',
       status: 'ACTIVE',
+      buying_type: 'AUCTION',
       special_ad_categories: [],
-      access_token: pageToken,
+      is_adset_budget_sharing_enabled: false,
+      access_token: accessToken,
     }),
   })
   const data = await res.json()
-  if (data.error) throw new Error(data.error.message)
+  if (data.error) throw new Error(data.error.error_user_msg || data.error.message)
   return data.id as string
 }
 
 /** สร้าง Ad Set */
 export async function createAdSet(
   adAccountId: string,
-  pageToken: string,
+  accessToken: string,
   campaignId: string,
   opts: {
     name: string
-    dailyBudget: number   // หน่วย: สตางค์ (THB * 100)
+    dailyBudget: number   // หน่วย: บาท (จะแปลงเป็นสตางค์เอง)
     startTime: string     // ISO string
     endTime: string
     targeting: AdTargeting
     pageId: string
   }
 ) {
+  const adsetBody: any = {
+    name: opts.name,
+    campaign_id: campaignId,
+    daily_budget: Math.round(opts.dailyBudget * 100), // convert to satang
+    bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
+    start_time: opts.startTime,
+    end_time: opts.endTime,
+    billing_event: 'IMPRESSIONS',
+    optimization_goal: 'CONVERSATIONS',
+    destination_type: 'MESSENGER',
+    targeting: {
+      // Thailand requires ageMin >= 20 when using interest targeting
+      age_min: opts.targeting.interests?.length
+        ? Math.max(20, opts.targeting.ageMin)
+        : Math.max(20, opts.targeting.ageMin),
+      age_max: Math.min(65, opts.targeting.ageMax),
+      genders: opts.targeting.genders?.length ? opts.targeting.genders : undefined,
+      geo_locations: opts.targeting.geoLocations || { countries: ['TH'] },
+      flexible_spec: opts.targeting.interests?.length
+        ? [{ interests: opts.targeting.interests }]
+        : undefined,
+      targeting_automation: { advantage_audience: 0 },
+    },
+    promoted_object: { page_id: opts.pageId },
+    access_token: accessToken,
+    status: 'ACTIVE',
+  }
+
   const res = await fetch(`${FB_API}/${adAccountId}/adsets`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      name: opts.name,
-      campaign_id: campaignId,
-      daily_budget: Math.round(opts.dailyBudget * 100), // convert to satang
-      start_time: opts.startTime,
-      end_time: opts.endTime,
-      billing_event: 'IMPRESSIONS',
-      optimization_goal: 'ENGAGED_USERS',
-      targeting: {
-        // Thailand requires ageMin >= 20 when using interest targeting
-        age_min: opts.targeting.interests?.length
-          ? Math.max(20, opts.targeting.ageMin)
-          : Math.max(18, opts.targeting.ageMin),
-        age_max: Math.min(65, opts.targeting.ageMax),
-        genders: opts.targeting.genders,
-        geo_locations: opts.targeting.geoLocations || { countries: ['TH'] },
-        flexible_spec: opts.targeting.interests?.length
-          ? [{ interests: opts.targeting.interests }]
-          : undefined,
-        targeting_automation: { advantage_audience: 0 },
-      },
-      promoted_object: { page_id: opts.pageId },
-      access_token: pageToken,
-      status: 'ACTIVE',
-    }),
+    body: JSON.stringify(adsetBody),
   })
   const data = await res.json()
-  if (data.error) throw new Error(data.error.message)
+  if (data.error) throw new Error(data.error.error_user_msg || data.error.message)
   return data.id as string
 }
 

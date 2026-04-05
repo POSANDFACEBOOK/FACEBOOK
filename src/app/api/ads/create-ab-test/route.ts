@@ -139,6 +139,7 @@ export async function POST(req: Request) {
     const endDateStr = endDate.toISOString()
 
     const createdVariants = []
+    const variantErrors: string[] = []
 
     for (const variant of testPlan.variants) {
       try {
@@ -220,6 +221,7 @@ export async function POST(req: Request) {
         })
       } catch (variantErr: any) {
         console.error(`Error creating variant ${variant.label}:`, variantErr.message)
+        variantErrors.push(`${variant.label}: ${variantErr.message}`)
         // Continue with other variants
       }
     }
@@ -228,7 +230,7 @@ export async function POST(req: Request) {
       // Clean up test group if no variants created
       await supabase.from('ab_test_groups').delete().eq('id', testGroup.id)
       return NextResponse.json({
-        error: 'ไม่สามารถสร้าง variant ได้เลย กรุณาตรวจสอบ Ad Account และลองใหม่',
+        error: `ไม่สามารถสร้าง variant ได้เลย: ${variantErrors.join(' | ')}`,
       }, { status: 500 })
     }
 
