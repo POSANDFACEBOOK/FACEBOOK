@@ -146,8 +146,8 @@ export async function POST(req: Request) {
     // ใช้ targeting แบบเรียบง่าย — เหมือนเวอร์ชันที่ work ก่อนหน้า
     // ไม่ใช้ targeting_automation เพราะ conflict กับหลาย optimization_goal
     const targeting: any = {
-      age_min: aiTargeting.targeting.ageMin || 20,
-      age_max: aiTargeting.targeting.ageMax || 65,
+      age_min: aiTargeting.targeting.ageMin || 18,
+      age_max: 65,  // Advantage+ audience ต้องเป็น 65 เท่านั้น
       geo_locations: { countries: ['TH'] },
       targeting_automation: { advantage_audience: 1 },
     }

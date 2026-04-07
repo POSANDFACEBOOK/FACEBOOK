@@ -133,8 +133,8 @@ export async function createAdSet(
 
   // Targeting แบบเรียบง่าย — ไม่ใช้ targeting_automation เพราะ conflict กับบาง objective
   const targetingObj: any = {
-    age_min: opts.targeting.ageMin || 20,
-    age_max: opts.targeting.ageMax || 65,
+    age_min: opts.targeting.ageMin || 18,
+    age_max: 65,  // Advantage+ audience ต้องเป็น 65 เท่านั้น
     genders: opts.targeting.genders,
     geo_locations: opts.targeting.geoLocations || { countries: ['TH'] },
     targeting_automation: { advantage_audience: 1 },
