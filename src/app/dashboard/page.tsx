@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useState, useRef, ReactNode } from 'react'
 import { useSession, signOut } from 'next-auth/react'
-import { Bell, Plus, ChevronRight, TrendingUp, Activity, Target, LogOut, X, ArrowLeft, Zap, DollarSign, Eye, MousePointer, Users, BarChart3, Percent, Power, Trash2, RefreshCw, Trophy, Pause, CheckCircle } from 'lucide-react'
+import { Bell, Plus, ChevronRight, TrendingUp, Activity, Target, LogOut, X, ArrowLeft, Zap, DollarSign, Eye, MousePointer, Users, BarChart3, Percent, Power, Trash2, RefreshCw, Trophy, Pause, CheckCircle, Sparkles } from 'lucide-react'
 
 // ─── Design Tokens ─────────────────────────────────────────────
 const BG = '#eef2ff', SURFACE = '#ffffff', SURFACE2 = '#f5f7ff'
@@ -157,6 +157,34 @@ export default function Dashboard() {
     }
   }
 
+  const [cleaning, setCleaning] = useState(false)
+  const [cleanupPreview, setCleanupPreview] = useState<any>(null)
+  const [showCleanup, setShowCleanup] = useState(false)
+
+  async function handlePreviewCleanup() {
+    setShowCleanup(true); setCleanupPreview(null)
+    try {
+      const res = await fetch('/api/ads/cleanup')
+      const d = await res.json()
+      setCleanupPreview(d)
+    } catch { setCleanupPreview({ count: 0, campaigns: [], error: 'โหลดข้อมูลไม่ได้' }) }
+  }
+
+  async function handleCleanup() {
+    if (cleaning) return
+    if (!cleanupPreview?.count) return
+    setCleaning(true)
+    try {
+      const res = await fetch('/api/ads/cleanup', { method: 'POST' })
+      const d = await res.json()
+      if (d.error) { alert(`ลบไม่สำเร็จ: ${d.error}`); return }
+      alert(`ล้างแอดสำเร็จ ${d.cleaned} รายการ`)
+      setShowCleanup(false)
+      loadAll()
+    } catch (e: any) { alert(`เกิดข้อผิดพลาด: ${e.message}`) }
+    finally { setCleaning(false) }
+  }
+
   async function handleDelete(campaignId: string, campaignName: string) {
     if (deleting) return
     if (!confirm(`ลบแอด "${campaignName}" ?\n\nจะลบทั้งใน Facebook และระบบ ไม่สามารถกู้คืนได้`)) return
@@ -216,6 +244,9 @@ export default function Dashboard() {
               </div>
             )}
           </div>
+          <button onClick={handlePreviewCleanup} style={{ ...btnGhost, padding: '8px 14px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 5, color: RED, border: `1.5px solid rgba(220,38,38,0.2)` }}>
+            <Trash2 size={14} /> ล้างแอดเก่า
+          </button>
           <button onClick={() => setShowModal(true)} style={{ ...btnPrimary, padding: '9px 18px', fontSize: 13, display: 'flex', alignItems: 'center', gap: 7 }}>
             <Plus size={15} /> ยิงแอดใหม่
           </button>
@@ -385,6 +416,75 @@ export default function Dashboard() {
       {showModal && <BoostModal pages={pages} onClose={() => setShowModal(false)} onSuccess={loadAll} />}
       {showABModal && <ABTestModal pages={pages} onClose={() => setShowABModal(false)} onSuccess={(testId) => { setShowABModal(false); setShowABView(testId); loadAll() }} />}
       {showABView && <ABTestView testId={showABView} onClose={() => { setShowABView(null); loadAll() }} />}
+
+      {/* Cleanup Modal */}
+      {showCleanup && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: 16 }}>
+          <div style={{ background: SURFACE, border: `1.5px solid rgba(220,38,38,0.2)`, borderRadius: 22, width: '100%', maxWidth: 480, maxHeight: '80vh', overflow: 'auto', boxShadow: '0 24px 64px rgba(220,38,38,0.15)' }}>
+            <div style={{ padding: '20px 24px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h2 style={{ fontSize: 17, fontWeight: 900, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Trash2 size={18} color={RED} /> ล้างแอดที่ไม่ได้ใช้
+              </h2>
+              <button onClick={() => setShowCleanup(false)} style={{ ...btnGhost, padding: '7px', borderRadius: 10 }}><X size={18} /></button>
+            </div>
+            <div style={{ padding: '16px 24px 24px' }}>
+              {!cleanupPreview ? (
+                <div style={{ textAlign: 'center', padding: 32, color: MUTED, fontSize: 13 }}>
+                  <RefreshCw size={20} style={{ animation: 'spin 1s linear infinite', marginBottom: 8 }} /><br />กำลังค้นหาแอดที่ไม่ได้ใช้...
+                </div>
+              ) : cleanupPreview.error ? (
+                <div style={{ textAlign: 'center', padding: 32, color: RED, fontSize: 13 }}>{cleanupPreview.error}</div>
+              ) : cleanupPreview.count === 0 ? (
+                <div style={{ textAlign: 'center', padding: 32 }}>
+                  <div style={{ fontSize: 42, marginBottom: 10 }}>✨</div>
+                  <p style={{ fontSize: 14, fontWeight: 700, margin: '0 0 4px' }}>สะอาดหมดแล้ว!</p>
+                  <p style={{ fontSize: 12, color: MUTED }}>ไม่มีแอดที่ไม่ได้ใช้ต้องลบ</p>
+                </div>
+              ) : (
+                <>
+                  <div style={{ background: RED_L, border: '1.5px solid rgba(220,38,38,0.2)', borderRadius: 12, padding: '12px 16px', marginBottom: 14 }}>
+                    <p style={{ fontSize: 13, fontWeight: 800, color: RED, margin: '0 0 4px' }}>พบ {cleanupPreview.count} แอดที่ไม่ได้ใช้</p>
+                    <p style={{ fontSize: 11, color: MUTED, margin: 0, lineHeight: 1.5 }}>แอดเหล่านี้จะถูกลบทั้งใน Facebook และในระบบ ไม่สามารถกู้คืนได้</p>
+                  </div>
+                  <div style={{ maxHeight: 280, overflow: 'auto', marginBottom: 16 }}>
+                    {cleanupPreview.campaigns.map((c: any) => (
+                      <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', marginBottom: 6, background: SURFACE2, borderRadius: 10, border: `1px solid ${BORDER}` }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {c.isABVariant && <span style={{ color: '#7c3aed', marginRight: 4 }}>[AB]</span>}
+                            {c.name}
+                          </div>
+                          <div style={{ fontSize: 10, color: MUTED, marginTop: 2 }}>{c.reason}</div>
+                        </div>
+                        <span style={{
+                          fontSize: 10, fontWeight: 700, flexShrink: 0, padding: '2px 8px', borderRadius: 999,
+                          color: c.status === 'error' ? RED : c.status === 'completed' ? GREEN : YELLOW,
+                          background: c.status === 'error' ? RED_L : c.status === 'completed' ? GREEN_L : YELLOW_L,
+                        }}>{c.status}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <button onClick={handleCleanup} disabled={cleaning}
+                    style={{
+                      width: '100%', padding: '14px', border: 'none', borderRadius: 14, cursor: cleaning ? 'not-allowed' : 'pointer',
+                      fontFamily: 'inherit', fontSize: 15, fontWeight: 900,
+                      background: cleaning ? '#fca5a5' : 'linear-gradient(135deg, #dc2626, #f87171)',
+                      color: 'white', boxShadow: '0 6px 20px rgba(220,38,38,0.35)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                    }}>
+                    {cleaning ? (
+                      <><RefreshCw size={16} style={{ animation: 'spin 1s linear infinite' }} /> กำลังลบ...</>
+                    ) : (
+                      <><Trash2 size={16} /> ลบทั้ง {cleanupPreview.count} แอด</>
+                    )}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+          <style>{`@keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }`}</style>
+        </div>
+      )}
     </div>
   )
 }
