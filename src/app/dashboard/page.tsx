@@ -278,15 +278,18 @@ export default function Dashboard() {
                   onMouseEnter={e => { e.currentTarget.style.boxShadow = SHADOW_MD }}
                   onMouseLeave={e => { e.currentTarget.style.boxShadow = SHADOW_SM }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <BarChart3 size={15} color="#7c3aed" />
-                        A/B Test — {(t.post_message || t.fb_post_id || '').slice(0, 50)}
-                      </div>
-                      <div style={{ fontSize: 11, color: MUTED, fontWeight: 600 }}>
-                        <span style={{ marginRight: 14 }}>💰 ฿{t.total_daily_budget}/วัน</span>
-                        <span style={{ marginRight: 14 }}>{t.variant_count || 0} variants</span>
-                        <span>{fmtDate(t.created_at)}</span>
+                    <div style={{ display: 'flex', gap: 12, alignItems: 'center', flex: 1, minWidth: 0 }}>
+                      {t.post_image && <img src={t.post_image} alt="" style={{ width: 48, height: 48, borderRadius: 10, objectFit: 'cover', flexShrink: 0, border: '1.5px solid rgba(124,58,237,0.2)' }} />}
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <BarChart3 size={15} color="#7c3aed" />
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>A/B Test — {(t.post_message || t.fb_post_id || '').slice(0, 40)}</span>
+                        </div>
+                        <div style={{ fontSize: 11, color: MUTED, fontWeight: 600 }}>
+                          <span style={{ marginRight: 14 }}>💰 ฿{t.total_daily_budget}/วัน</span>
+                          <span style={{ marginRight: 14 }}>{t.variant_count || 0} variants</span>
+                          <span>{fmtDate(t.created_at)}</span>
+                        </div>
                       </div>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -302,23 +305,31 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ── Campaign List ── */}
-        {loading ? (
-          <div style={{ textAlign: 'center', padding: 72, color: MUTED }}>
-            <div style={{ fontSize: 38, marginBottom: 14, opacity: 0.5 }}>⏳</div>
-            <p style={{ fontSize: 14, fontWeight: 600 }}>กำลังโหลด...</p>
-          </div>
-        ) : campaigns.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: 64, background: SURFACE, border: `1.5px solid ${BORDER}`, borderRadius: 22, boxShadow: SHADOW_MD }}>
-            <div style={{ fontSize: 56, marginBottom: 16 }}>📢</div>
-            <p style={{ color: MUTED, marginBottom: 24, fontSize: 15, fontWeight: 600 }}>ยังไม่มีแอดใดๆ</p>
-            <button onClick={() => setShowModal(true)} style={{ ...btnPrimary, padding: '13px 32px', fontSize: 14 }}>+ สร้างแอดแรกเลย</button>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {campaigns.map((c: any) => <CampaignCard key={c.id} campaign={c} onToggle={handleToggle} onDelete={handleDelete} deleting={deleting} onApply={handleApplyRecommendation} applying={applying} />)}
-          </div>
-        )}
+        {/* ── Campaign List (hide AB test variants) ── */}
+        {(() => {
+          const standalone = campaigns.filter((c: any) => !c.test_group_id)
+          return loading ? (
+            <div style={{ textAlign: 'center', padding: 72, color: MUTED }}>
+              <div style={{ fontSize: 38, marginBottom: 14, opacity: 0.5 }}>⏳</div>
+              <p style={{ fontSize: 14, fontWeight: 600 }}>กำลังโหลด...</p>
+            </div>
+          ) : standalone.length === 0 && abTests.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 64, background: SURFACE, border: `1.5px solid ${BORDER}`, borderRadius: 22, boxShadow: SHADOW_MD }}>
+              <div style={{ fontSize: 56, marginBottom: 16 }}>📢</div>
+              <p style={{ color: MUTED, marginBottom: 24, fontSize: 15, fontWeight: 600 }}>ยังไม่มีแอดใดๆ</p>
+              <button onClick={() => setShowModal(true)} style={{ ...btnPrimary, padding: '13px 32px', fontSize: 14 }}>+ สร้างแอดแรกเลย</button>
+            </div>
+          ) : standalone.length > 0 ? (
+            <>
+              <h3 style={{ fontSize: 14, fontWeight: 800, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                📌 แอดปกติ <span style={{ fontSize: 11, fontWeight: 600, color: MUTED }}>({standalone.length})</span>
+              </h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                {standalone.map((c: any) => <CampaignCard key={c.id} campaign={c} onToggle={handleToggle} onDelete={handleDelete} deleting={deleting} onApply={handleApplyRecommendation} applying={applying} />)}
+              </div>
+            </>
+          ) : null
+        })()}
       </div>
 
       {showModal && <BoostModal pages={pages} onClose={() => setShowModal(false)} onSuccess={loadAll} />}
@@ -385,12 +396,24 @@ function CampaignCard({ campaign: c, onToggle, onDelete, deleting, onApply, appl
       onMouseEnter={e => { e.currentTarget.style.boxShadow = '0 10px 36px rgba(67,56,202,0.18)'; e.currentTarget.style.transform = 'translateY(-3px)' }}
       onMouseLeave={e => { e.currentTarget.style.boxShadow = SHADOW_RAISED; e.currentTarget.style.transform = 'translateY(0)' }}>
 
-      {/* Top row: name + status + toggle */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+      {/* Top row: post image + name + status + toggle */}
+      <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', marginBottom: 14 }}>
+        {/* Post thumbnail */}
+        {c.post_image && (
+          <a href={`/dashboard/campaign/${c.id}`} style={{ flexShrink: 0 }}>
+            <img src={c.post_image} alt="" style={{ width: 56, height: 56, borderRadius: 12, objectFit: 'cover', border: `1.5px solid ${BORDER}` }} />
+          </a>
+        )}
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <a href={`/dashboard/campaign/${c.id}`} style={{ flex: 1, minWidth: 0, textDecoration: 'none', color: 'inherit' }}>
-          <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>
-            📌 {c.campaign_name}
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>
+            {c.campaign_name}
           </div>
+          {c.post_message && (
+            <div style={{ fontSize: 11, color: MUTED, marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 500, maxWidth: '70%' }}>
+              {c.post_message.slice(0, 60)}{c.post_message.length > 60 ? '...' : ''}
+            </div>
+          )}
           <div style={{ fontSize: 11, color: MUTED, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <span style={{ fontWeight: 700, color: GREEN, background: GREEN_L, padding: '2px 10px', borderRadius: 999 }}>฿{fmt(c.daily_budget)}/วัน</span>
             {campaignGoal && <span style={{ fontWeight: 700, color: campaignGoal.color, background: campaignGoal.bg, padding: '2px 10px', borderRadius: 999 }}>{campaignGoal.icon} {campaignGoal.label}</span>}
@@ -453,6 +476,7 @@ function CampaignCard({ campaign: c, onToggle, onDelete, deleting, onApply, appl
               <ChevronRight size={15} />
             </div>
           </a>
+        </div>
         </div>
       </div>
 
