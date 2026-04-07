@@ -306,12 +306,12 @@ export default function Dashboard() {
                 const pausedCount = variants.filter((v: any) => v.status === 'paused').length
                 return (
                 <div key={t.id} onClick={() => setShowABView(t.id)}
-                  style={{ width: '100%', background: SURFACE, border: `1.5px solid rgba(124,58,237,0.2)`, borderRadius: 20, padding: '18px 22px', cursor: 'pointer', color: TEXT, fontFamily: 'inherit', boxShadow: SHADOW_RAISED, transition: 'all 0.2s' }}
+                  style={{ width: '100%', background: SURFACE, border: `1.5px solid rgba(124,58,237,0.2)`, borderRadius: 20, padding: '18px 22px', cursor: 'pointer', color: TEXT, fontFamily: 'inherit', boxShadow: SHADOW_RAISED, transition: 'all 0.2s', overflow: 'hidden', boxSizing: 'border-box' }}
                   onMouseEnter={e => { e.currentTarget.style.boxShadow = '0 10px 36px rgba(124,58,237,0.18)'; e.currentTarget.style.transform = 'translateY(-2px)' }}
                   onMouseLeave={e => { e.currentTarget.style.boxShadow = SHADOW_RAISED; e.currentTarget.style.transform = 'translateY(0)' }}>
                   {/* Header row */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-                    <div style={{ display: 'flex', gap: 12, alignItems: 'center', flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12, overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', gap: 12, alignItems: 'center', flex: 1, minWidth: 0, overflow: 'hidden' }}>
                       {t.post_image && <img src={t.post_image} alt="" style={{ width: 52, height: 52, borderRadius: 12, objectFit: 'cover', flexShrink: 0, border: '1.5px solid rgba(124,58,237,0.15)' }} />}
                       <div style={{ minWidth: 0 }}>
                         <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -335,7 +335,7 @@ export default function Dashboard() {
                   </div>
                   {/* Variant breakdown */}
                   {variants.length > 0 && (
-                    <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(variants.length, 4)}, 1fr)`, gap: 8 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(variants.length, 4)}, minmax(0, 1fr))`, gap: 8 }}>
                       {variants.map((v: any) => {
                         const isActive = v.status === 'active'
                         const isPaused = v.status === 'paused'
@@ -351,7 +351,7 @@ export default function Dashboard() {
                           <div key={v.id} style={{
                             background: isActive ? 'linear-gradient(135deg, #f0fdf4, #dcfce7)' : isPaused ? '#fffbeb' : SURFACE2,
                             border: `1px solid ${isActive ? 'rgba(5,150,105,0.2)' : isPaused ? 'rgba(217,119,6,0.2)' : BORDER}`,
-                            borderRadius: 12, padding: '10px 12px',
+                            borderRadius: 12, padding: '10px 12px', overflow: 'hidden', minWidth: 0,
                           }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                               <div style={{ fontSize: 12, fontWeight: 800, color: isActive ? GREEN : isPaused ? YELLOW : TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
