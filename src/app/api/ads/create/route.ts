@@ -149,6 +149,7 @@ export async function POST(req: Request) {
       age_min: aiTargeting.targeting.ageMin || 20,
       age_max: aiTargeting.targeting.ageMax || 65,
       geo_locations: { countries: ['TH'] },
+      targeting_automation: { advantage_audience: 1 },
     }
 
     if (aiTargeting.targeting.genders && aiTargeting.targeting.genders.length > 0) {

@@ -137,6 +137,7 @@ export async function createAdSet(
     age_max: opts.targeting.ageMax || 65,
     genders: opts.targeting.genders,
     geo_locations: opts.targeting.geoLocations || { countries: ['TH'] },
+    targeting_automation: { advantage_audience: 1 },
   }
 
   // เพิ่ม interests ถ้ามี (validated แล้ว)
