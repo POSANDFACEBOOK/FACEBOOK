@@ -43,6 +43,43 @@ export async function getPagePosts(pageId: string, pageToken: string, limit = 20
 }
 
 // ============================================
+// Interest Validation
+// ============================================
+
+/** ค้นหา interest จริงจาก Facebook Ad Interest Search API โดยใช้ชื่อ
+ *  AI มักสร้าง interest IDs ปลอม — ฟังก์ชันนี้ใช้ชื่อค้นหา ID จริงแทน */
+export async function validateInterests(
+  accessToken: string,
+  interests: { id: string; name: string }[]
+): Promise<{ id: string; name: string }[]> {
+  if (!interests || interests.length === 0) return []
+  const valid: { id: string; name: string }[] = []
+  const seen = new Set<string>() // ป้องกัน duplicate
+
+  for (const interest of interests) {
+    try {
+      // ใช้ Ad Interest Search API ค้นหาจากชื่อ — ได้ ID จริงที่ใช้ targeting ได้
+      const q = encodeURIComponent(interest.name)
+      const r = await fetch(
+        `${FB_API}/search?type=adinterest&q=${q}&limit=3&locale=th_TH&access_token=${accessToken}`
+      )
+      const d = await r.json()
+      if (!d.error && d.data && d.data.length > 0) {
+        // เอาตัวแรกที่ตรงที่สุด
+        const match = d.data[0]
+        if (!seen.has(match.id)) {
+          seen.add(match.id)
+          valid.push({ id: match.id, name: match.name })
+        }
+      }
+    } catch {
+      // ข้ามถ้า search ไม่ได้
+    }
+  }
+  return valid
+}
+
+// ============================================
 // Ad Creation
 // ============================================
 
@@ -86,6 +123,12 @@ export async function createAdSet(
     destinationType?: string
   }
 ) {
+  // Validate interests before using
+  let validInterests = opts.targeting.interests || []
+  if (validInterests.length > 0) {
+    validInterests = await validateInterests(pageToken, validInterests)
+  }
+
   const adsetBody: any = {
     name: opts.name,
     campaign_id: campaignId,
@@ -99,8 +142,8 @@ export async function createAdSet(
       age_max: opts.targeting.ageMax,
       genders: opts.targeting.genders,
       geo_locations: opts.targeting.geoLocations || { countries: ['TH'] },
-      flexible_spec: opts.targeting.interests?.length
-        ? [{ interests: opts.targeting.interests }]
+      flexible_spec: validInterests.length > 0
+        ? [{ interests: validInterests }]
         : undefined,
     },
     promoted_object: { page_id: opts.pageId },
