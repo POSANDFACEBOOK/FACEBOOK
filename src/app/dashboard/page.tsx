@@ -268,36 +268,74 @@ export default function Dashboard() {
             <h3 style={{ fontSize: 14, fontWeight: 800, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
               <Zap size={16} color={PRIMARY} /> AI A/B Tests
             </h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {abTests.map((t: any) => (
-                <button key={t.id} onClick={() => setShowABView(t.id)}
-                  style={{ width: '100%', background: 'linear-gradient(145deg, #f5f3ff, #ede9fe)', border: `1.5px solid rgba(124,58,237,0.25)`, borderRadius: 16, padding: '16px 20px', cursor: 'pointer', textAlign: 'left', color: TEXT, fontFamily: 'inherit', boxShadow: SHADOW_SM, transition: 'all 0.18s' }}
-                  onMouseEnter={e => { e.currentTarget.style.boxShadow = SHADOW_MD }}
-                  onMouseLeave={e => { e.currentTarget.style.boxShadow = SHADOW_SM }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {abTests.map((t: any) => {
+                const variants = t.variants || []
+                const activeCount = variants.filter((v: any) => v.status === 'active').length
+                const pausedCount = variants.filter((v: any) => v.status === 'paused').length
+                return (
+                <div key={t.id} onClick={() => setShowABView(t.id)}
+                  style={{ width: '100%', background: SURFACE, border: `1.5px solid rgba(124,58,237,0.2)`, borderRadius: 20, padding: '18px 22px', cursor: 'pointer', color: TEXT, fontFamily: 'inherit', boxShadow: SHADOW_RAISED, transition: 'all 0.2s' }}
+                  onMouseEnter={e => { e.currentTarget.style.boxShadow = '0 10px 36px rgba(124,58,237,0.18)'; e.currentTarget.style.transform = 'translateY(-2px)' }}
+                  onMouseLeave={e => { e.currentTarget.style.boxShadow = SHADOW_RAISED; e.currentTarget.style.transform = 'translateY(0)' }}>
+                  {/* Header row */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
                     <div style={{ display: 'flex', gap: 12, alignItems: 'center', flex: 1, minWidth: 0 }}>
-                      {t.post_image && <img src={t.post_image} alt="" style={{ width: 48, height: 48, borderRadius: 10, objectFit: 'cover', flexShrink: 0, border: '1.5px solid rgba(124,58,237,0.2)' }} />}
+                      {t.post_image && <img src={t.post_image} alt="" style={{ width: 52, height: 52, borderRadius: 12, objectFit: 'cover', flexShrink: 0, border: '1.5px solid rgba(124,58,237,0.15)' }} />}
                       <div style={{ minWidth: 0 }}>
-                        <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <BarChart3 size={15} color="#7c3aed" />
-                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>A/B Test — {(t.post_message || t.fb_post_id || '').slice(0, 40)}</span>
+                        <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {(t.post_message || t.fb_post_id || 'A/B Test').slice(0, 50)}
                         </div>
-                        <div style={{ fontSize: 11, color: MUTED, fontWeight: 600 }}>
-                          <span style={{ marginRight: 14 }}>💰 ฿{t.total_daily_budget}/วัน</span>
-                          <span style={{ marginRight: 14 }}>{t.variant_count || 0} variants</span>
+                        <div style={{ fontSize: 11, color: MUTED, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                          <span style={{ fontWeight: 700, color: GREEN, background: GREEN_L, padding: '1px 9px', borderRadius: 999 }}>฿{t.total_daily_budget}/วัน</span>
                           <span>{fmtDate(t.created_at)}</span>
+                          {t.totalSpend > 0 && <span>ใช้แล้ว ฿{fmt(t.totalSpend, 2)}</span>}
                         </div>
                       </div>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ fontSize: 11, fontWeight: 800, color: t.status === 'running' ? GREEN : MUTED, background: t.status === 'running' ? GREEN_L : '#f1f5f9', padding: '3px 12px', borderRadius: 999 }}>
-                        {t.status === 'running' ? '● กำลังทดสอบ' : t.status === 'completed' ? '✅ เสร็จ' : t.status}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                      {activeCount > 0 && <span style={{ fontSize: 10, fontWeight: 800, color: GREEN, background: GREEN_L, padding: '3px 10px', borderRadius: 999 }}>● วิ่ง {activeCount}</span>}
+                      {pausedCount > 0 && <span style={{ fontSize: 10, fontWeight: 800, color: YELLOW, background: YELLOW_L, padding: '3px 10px', borderRadius: 999 }}>⏸ หยุด {pausedCount}</span>}
+                      <span style={{ fontSize: 10, fontWeight: 800, color: t.status === 'running' ? '#7c3aed' : MUTED, background: t.status === 'running' ? '#f3e8ff' : '#f1f5f9', padding: '3px 10px', borderRadius: 999 }}>
+                        {t.status === 'running' ? 'กำลังทดสอบ' : t.status === 'completed' ? 'เสร็จ' : t.status}
                       </span>
                       <ChevronRight size={14} color={MUTED} />
                     </div>
                   </div>
-                </button>
-              ))}
+                  {/* Variant breakdown */}
+                  {variants.length > 0 && (
+                    <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(variants.length, 4)}, 1fr)`, gap: 8 }}>
+                      {variants.map((v: any) => {
+                        const isActive = v.status === 'active'
+                        const isPaused = v.status === 'paused'
+                        const fbLabel = v.fbStatus === 'ACTIVE' ? 'ACTIVE' : v.fbStatus === 'PAUSED' || v.fbStatus === 'CAMPAIGN_PAUSED' || v.fbStatus === 'ADSET_PAUSED' ? 'PAUSED' : v.fbStatus === 'PENDING_REVIEW' ? 'รอตรวจ' : v.fbStatus === 'IN_PROCESS' ? 'ประมวลผล' : null
+                        const fbColor = v.fbStatus === 'ACTIVE' ? GREEN : v.fbStatus?.includes('PAUSED') ? YELLOW : '#2563eb'
+                        return (
+                          <div key={v.id} style={{
+                            background: isActive ? 'linear-gradient(135deg, #f0fdf4, #dcfce7)' : isPaused ? '#fffbeb' : SURFACE2,
+                            border: `1px solid ${isActive ? 'rgba(5,150,105,0.2)' : isPaused ? 'rgba(217,119,6,0.2)' : BORDER}`,
+                            borderRadius: 12, padding: '10px 12px',
+                          }}>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: isActive ? GREEN : isPaused ? YELLOW : TEXT, marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {v.label || 'Variant'}
+                            </div>
+                            <div style={{ fontSize: 18, fontWeight: 900, color: TEXT, marginBottom: 2 }}>฿{v.dailyBudget}<span style={{ fontSize: 10, fontWeight: 600, color: MUTED }}>/วัน</span></div>
+                            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 4 }}>
+                              {fbLabel && <span style={{ fontSize: 9, fontWeight: 700, color: fbColor, background: fbColor + '15', padding: '1px 6px', borderRadius: 999 }}>{fbLabel}</span>}
+                              {v.spend > 0 && <span style={{ fontSize: 9, fontWeight: 700, color: MUTED, background: SURFACE2, padding: '1px 6px', borderRadius: 999 }}>ใช้ ฿{fmt(v.spend, 1)}</span>}
+                            </div>
+                            {v.impressions > 0 && (
+                              <div style={{ fontSize: 10, color: MUTED, fontWeight: 600 }}>
+                                {fmt(v.impressions)} imp • {fmt(v.clicks)} clicks
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )})}
             </div>
           </div>
         )}

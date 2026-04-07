@@ -34,7 +34,7 @@ export async function GET() {
       return NextResponse.json({ tests: [] })
     }
 
-    // Get all AB test groups with connected page info
+    // Get all AB test groups for this user
     const { data: tests, error } = await supabase
       .from('ab_test_groups')
       .select('*')
@@ -43,61 +43,69 @@ export async function GET() {
 
     if (error) throw new Error(error.message)
 
-    // For each test, get page name + variants with latest performance
-    const testsWithDetails = await Promise.all(
-      (tests || []).map(async (test) => {
-        // Get page name
-        const { data: page } = await supabase
-          .from('connected_pages')
-          .select('page_name, page_id')
-          .eq('id', test.page_id)
-          .single()
+    // Get variants for each test (with budget, status, label, performance)
+    const testIds = (tests || []).map(t => t.id)
+    const { data: allVariants } = await supabase
+      .from('ad_campaigns')
+      .select('id, test_group_id, variant_label, daily_budget, status, fb_campaign_id, fb_adset_id, fb_ad_id, start_time, end_time')
+      .in('test_group_id', testIds)
 
-        // Get variants (ad_campaigns) for this test
-        const { data: variants } = await supabase
-          .from('ad_campaigns')
-          .select('id, campaign_name, variant_label, variant_strategy, daily_budget, status, fb_campaign_id, fb_adset_id, fb_ad_id, start_time, end_time')
-          .eq('test_group_id', test.id)
-          .order('created_at', { ascending: true })
+    // Get latest performance per variant
+    const variantIds = (allVariants || []).map(v => v.id)
+    const { data: allPerf } = variantIds.length > 0
+      ? await supabase
+          .from('ad_performance')
+          .select('campaign_id, impressions, reach, clicks, spend, ctr, cpc, cpm')
+          .in('campaign_id', variantIds)
+          .order('fetched_at', { ascending: false })
+      : { data: [] }
 
-        // Get latest performance for each variant
-        const variantsWithPerf = await Promise.all(
-          (variants || []).map(async (v) => {
-            const { data: perf } = await supabase
-              .from('ad_performance')
-              .select('impressions, reach, clicks, spend, cpm, cpc, ctr, frequency')
-              .eq('campaign_id', v.id)
-              .order('fetched_at', { ascending: false })
-              .limit(1)
-              .single()
+    const perfMap: Record<string, any> = {}
+    for (const p of (allPerf || [])) {
+      if (!perfMap[p.campaign_id]) perfMap[p.campaign_id] = p
+    }
 
-            return { ...v, perf: perf || null }
-          })
-        )
-
-        // Calculate totals
-        const totalSpend = variantsWithPerf.reduce((sum, v) => sum + (v.perf?.spend || 0), 0)
-        const totalImpressions = variantsWithPerf.reduce((sum, v) => sum + (v.perf?.impressions || 0), 0)
-        const totalReach = variantsWithPerf.reduce((sum, v) => sum + (v.perf?.reach || 0), 0)
-        const totalClicks = variantsWithPerf.reduce((sum, v) => sum + (v.perf?.clicks || 0), 0)
-
-        return {
-          ...test,
-          page_name: page?.page_name || 'ไม่ทราบชื่อเพจ',
-          fb_page_id: page?.page_id || '',
-          variant_count: variantsWithPerf.length,
-          variants: variantsWithPerf,
-          totals: {
-            spend: totalSpend,
-            impressions: totalImpressions,
-            reach: totalReach,
-            clicks: totalClicks,
-          },
-        }
+    // Get real FB status for active variants
+    const userToken = session.accessToken as string
+    const { getRealStatus } = await import('@/lib/facebook')
+    const fbStatusMap: Record<string, any> = {}
+    await Promise.all(
+      (allVariants || []).filter(v => v.fb_campaign_id).map(async (v) => {
+        try {
+          fbStatusMap[v.id] = await getRealStatus(userToken, v.fb_campaign_id, v.fb_adset_id, v.fb_ad_id)
+        } catch {}
       })
     )
 
-    return NextResponse.json({ tests: testsWithDetails })
+    // Group variants by test
+    const variantsByTest: Record<string, any[]> = {}
+    for (const v of (allVariants || [])) {
+      if (!variantsByTest[v.test_group_id]) variantsByTest[v.test_group_id] = []
+      const perf = perfMap[v.id]
+      const fbStatus = fbStatusMap[v.id]
+      variantsByTest[v.test_group_id].push({
+        id: v.id,
+        label: v.variant_label,
+        dailyBudget: v.daily_budget,
+        status: v.status,
+        startTime: v.start_time,
+        endTime: v.end_time,
+        fbStatus: fbStatus?.overall || null,
+        spend: perf?.spend || 0,
+        impressions: perf?.impressions || 0,
+        clicks: perf?.clicks || 0,
+        ctr: perf?.ctr || 0,
+      })
+    }
+
+    const testsEnriched = (tests || []).map(test => ({
+      ...test,
+      variant_count: variantsByTest[test.id]?.length || 0,
+      variants: variantsByTest[test.id] || [],
+      totalSpend: (variantsByTest[test.id] || []).reduce((s: number, v: any) => s + (v.spend || 0), 0),
+    }))
+
+    return NextResponse.json({ tests: testsEnriched })
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 })
   }
