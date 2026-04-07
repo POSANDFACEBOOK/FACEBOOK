@@ -143,11 +143,14 @@ export async function POST(req: Request) {
     }
 
     // ── 8. Build Targeting (AI-driven) ─────────────────────────
+    // Use Advantage+ audience (advantage_audience: 1) — AI targeting
+    // becomes "suggestions" that Facebook can expand for better results.
+    // This is what Facebook's own Boost Post uses.
     const targeting: any = {
       age_min: aiTargeting.targeting.ageMin,
       age_max: aiTargeting.targeting.ageMax,
       geo_locations: { countries: ['TH'] },
-      targeting_automation: { advantage_audience: 0 },
+      targeting_automation: { advantage_audience: 1 },
     }
 
     if (aiTargeting.targeting.genders.length > 0) {
@@ -155,7 +158,6 @@ export async function POST(req: Request) {
     }
 
     if (aiTargeting.targeting.interests && aiTargeting.targeting.interests.length > 0) {
-      // Validate interest IDs with Facebook API before using
       const validInterests = await validateInterests(
         userToken,
         aiTargeting.targeting.interests.map((i: any) => ({ id: i.id, name: i.name }))
@@ -177,9 +179,7 @@ export async function POST(req: Request) {
           name: campaignName,
           objective: 'OUTCOME_ENGAGEMENT',
           status: 'ACTIVE',
-          buying_type: 'AUCTION',
           special_ad_categories: [],
-          is_adset_budget_sharing_enabled: false,
           access_token: userToken,
         }),
       })
@@ -198,10 +198,10 @@ export async function POST(req: Request) {
         name: `${campaignName} - Ad Set`,
         campaign_id: fbCampaignId,
         daily_budget: dailyBudgetSatang,
-        bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
         start_time: startDate || new Date().toISOString(),
         end_time: endDate,
         billing_event: 'IMPRESSIONS',
+        optimization_goal: 'POST_ENGAGEMENT',
         targeting,
         promoted_object: { page_id: pageId },
         access_token: userToken,
