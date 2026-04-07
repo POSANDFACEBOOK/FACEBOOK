@@ -308,8 +308,8 @@ export default function Dashboard() {
                       {variants.map((v: any) => {
                         const isActive = v.status === 'active'
                         const isPaused = v.status === 'paused'
-                        const fbLabel = v.fbStatus === 'ACTIVE' ? 'ACTIVE' : v.fbStatus === 'PAUSED' || v.fbStatus === 'CAMPAIGN_PAUSED' || v.fbStatus === 'ADSET_PAUSED' ? 'PAUSED' : v.fbStatus === 'PENDING_REVIEW' ? 'รอตรวจ' : v.fbStatus === 'IN_PROCESS' ? 'ประมวลผล' : null
-                        const fbColor = v.fbStatus === 'ACTIVE' ? GREEN : v.fbStatus?.includes('PAUSED') ? YELLOW : '#2563eb'
+                        const statusLabel = isActive ? 'กำลังวิ่ง' : isPaused ? 'หยุด' : v.status
+                        const statusClr = isActive ? GREEN : isPaused ? YELLOW : MUTED
                         const start = v.startTime ? new Date(v.startTime) : new Date()
                         const end = v.endTime ? new Date(v.endTime) : new Date()
                         const totalDays = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / 86400000))
@@ -326,7 +326,7 @@ export default function Dashboard() {
                               <div style={{ fontSize: 12, fontWeight: 800, color: isActive ? GREEN : isPaused ? YELLOW : TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                                 {v.label || 'Variant'}
                               </div>
-                              {fbLabel && <span style={{ fontSize: 9, fontWeight: 700, color: fbColor, background: fbColor + '15', padding: '1px 6px', borderRadius: 999, flexShrink: 0 }}>{fbLabel}</span>}
+                              <span style={{ fontSize: 9, fontWeight: 700, color: statusClr, background: statusClr + '15', padding: '1px 6px', borderRadius: 999, flexShrink: 0 }}>{statusLabel}</span>
                             </div>
                             <div style={{ fontSize: 16, fontWeight: 900, color: TEXT, marginBottom: 6 }}>฿{v.dailyBudget}<span style={{ fontSize: 10, fontWeight: 600, color: MUTED }}>/วัน</span></div>
                             {/* Budget progress bar */}

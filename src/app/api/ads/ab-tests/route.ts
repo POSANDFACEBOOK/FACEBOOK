@@ -65,24 +65,11 @@ export async function GET() {
       if (!perfMap[p.campaign_id]) perfMap[p.campaign_id] = p
     }
 
-    // Get real FB status for active variants
-    const userToken = session.accessToken as string
-    const { getRealStatus } = await import('@/lib/facebook')
-    const fbStatusMap: Record<string, any> = {}
-    await Promise.all(
-      (allVariants || []).filter(v => v.fb_campaign_id).map(async (v) => {
-        try {
-          fbStatusMap[v.id] = await getRealStatus(userToken, v.fb_campaign_id, v.fb_adset_id, v.fb_ad_id)
-        } catch {}
-      })
-    )
-
-    // Group variants by test
+    // Group variants by test (use DB status to avoid FB rate limits)
     const variantsByTest: Record<string, any[]> = {}
     for (const v of (allVariants || [])) {
       if (!variantsByTest[v.test_group_id]) variantsByTest[v.test_group_id] = []
       const perf = perfMap[v.id]
-      const fbStatus = fbStatusMap[v.id]
       variantsByTest[v.test_group_id].push({
         id: v.id,
         label: v.variant_label,
@@ -90,7 +77,6 @@ export async function GET() {
         status: v.status,
         startTime: v.start_time,
         endTime: v.end_time,
-        fbStatus: fbStatus?.overall || null,
         spend: perf?.spend || 0,
         impressions: perf?.impressions || 0,
         clicks: perf?.clicks || 0,
