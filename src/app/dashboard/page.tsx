@@ -69,6 +69,7 @@ export default function Dashboard() {
   const [showABView, setShowABView] = useState<string | null>(null)
   const [abTests, setAbTests] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [dataReason, setDataReason] = useState<string | null>(null)
   const notifRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -91,6 +92,7 @@ export default function Dashboard() {
     setPages(pagesRes.pages || [])
     setCampaigns(campaignsRes.campaigns || [])
     setSummary(campaignsRes.summary || null)
+    setDataReason(campaignsRes.reason || null)
     setNotifications(notifsRes.notifications || [])
     setUnreadCount(notifsRes.unreadCount || 0)
     setAbTests(abTestsRes.tests || [])
@@ -396,9 +398,20 @@ export default function Dashboard() {
             </div>
           ) : standalone.length === 0 && abTests.length === 0 ? (
             <div style={{ textAlign: 'center', padding: 64, background: SURFACE, border: `1.5px solid ${BORDER}`, borderRadius: 22, boxShadow: SHADOW_MD }}>
-              <div style={{ fontSize: 56, marginBottom: 16 }}>📢</div>
-              <p style={{ color: MUTED, marginBottom: 24, fontSize: 15, fontWeight: 600 }}>ยังไม่มีแอดใดๆ</p>
-              <button onClick={() => setShowModal(true)} style={{ ...btnPrimary, padding: '13px 32px', fontSize: 14 }}>+ สร้างแอดแรกเลย</button>
+              <div style={{ fontSize: 56, marginBottom: 16 }}>{dataReason === 'fb_token_expired' ? '🔒' : '📢'}</div>
+              <p style={{ color: MUTED, marginBottom: 8, fontSize: 15, fontWeight: 600 }}>
+                {dataReason === 'fb_token_expired' ? 'Facebook Token หมดอายุ' : 'ยังไม่มีแอดใดๆ'}
+              </p>
+              {dataReason === 'fb_token_expired' && (
+                <p style={{ color: MUTED, marginBottom: 16, fontSize: 13 }}>กรุณา Logout แล้ว Login ใหม่เพื่อต่ออายุ Token</p>
+              )}
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+                {dataReason === 'fb_token_expired' ? (
+                  <button onClick={() => signOut()} style={{ ...btnPrimary, padding: '13px 32px', fontSize: 14 }}>🔄 Login ใหม่</button>
+                ) : (
+                  <button onClick={() => setShowModal(true)} style={{ ...btnPrimary, padding: '13px 32px', fontSize: 14 }}>+ สร้างแอดแรกเลย</button>
+                )}
+              </div>
             </div>
           ) : standalone.length > 0 ? (
             <>
