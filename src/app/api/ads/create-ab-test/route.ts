@@ -6,6 +6,8 @@ import { generateTestVariants, type PostContext } from '@/lib/ai-analyzer'
 
 export const dynamic = 'force-dynamic'
 
+// All post-boost campaigns use OUTCOME_AWARENESS + REACH (proven working combo)
+
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions)
@@ -14,7 +16,7 @@ export async function POST(req: Request) {
     }
 
     const body = await req.json()
-    const { postId, pageId, pageToken, pageName, pageCategory, postMessage, postImage, dailyBudget, days, existingReactions, existingComments, existingShares } = body
+    const { postId, pageId, pageToken, pageName, pageCategory, postMessage, postImage, dailyBudget, days, existingReactions, existingComments, existingShares, goal } = body
 
     if (!postId || !pageId || !pageToken) {
       return NextResponse.json({ error: 'ข้อมูลไม่ครบถ้วน' }, { status: 400 })
@@ -130,10 +132,10 @@ export async function POST(req: Request) {
 
         const campaignName = `[AB Test] ${variant.label} — ${(postMessage || postId).slice(0, 30)}`
 
-        // Create Facebook Campaign
-        const fbCampaignId = await createCampaign(adAccountId, pageToken, campaignName)
+        // Create Facebook Campaign — OUTCOME_AWARENESS for post boost (proven working)
+        const fbCampaignId = await createCampaign(adAccountId, pageToken, campaignName, 'OUTCOME_AWARENESS')
 
-        // Create Ad Set with variant-specific targeting
+        // Create Ad Set — don't send optimization_goal, let Facebook pick default
         const fbAdSetId = await createAdSet(adAccountId, pageToken, fbCampaignId, {
           name: `${variant.label} - Ad Set`,
           dailyBudget: variantBudget,
@@ -172,6 +174,7 @@ export async function POST(req: Request) {
             start_time: startDate,
             end_time: endDateStr,
             status: 'active',
+            goal: goal || 'auto_engagement',
             test_group_id: testGroup.id,
             variant_label: variant.label,
             variant_strategy: {

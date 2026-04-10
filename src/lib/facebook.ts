@@ -43,23 +43,71 @@ export async function getPagePosts(pageId: string, pageToken: string, limit = 20
 }
 
 // ============================================
+// Interest Validation
+// ============================================
+
+/** ค้นหา interest จริงจาก Facebook Ad Interest Search API โดยใช้ชื่อ
+ *  AI มักสร้าง interest IDs ปลอม — ฟังก์ชันนี้ใช้ชื่อค้นหา ID จริงแทน */
+export async function validateInterests(
+  accessToken: string,
+  interests: { id: string; name: string }[]
+): Promise<{ id: string; name: string }[]> {
+  if (!interests || interests.length === 0) return []
+  const valid: { id: string; name: string }[] = []
+  const seen = new Set<string>() // ป้องกัน duplicate
+
+  for (const interest of interests) {
+    try {
+      // ใช้ Ad Interest Search API ค้นหาจากชื่อ — ได้ ID จริงที่ใช้ targeting ได้
+      const q = encodeURIComponent(interest.name)
+      const r = await fetch(
+        `${FB_API}/search?type=adinterest&q=${q}&limit=3&locale=th_TH&access_token=${accessToken}`
+      )
+      const d = await r.json()
+      if (!d.error && d.data && d.data.length > 0) {
+        // เอาตัวแรกที่ตรงที่สุด
+        const match = d.data[0]
+        if (!seen.has(match.id)) {
+          seen.add(match.id)
+          valid.push({ id: match.id, name: match.name })
+        }
+      }
+    } catch {
+      // ข้ามถ้า search ไม่ได้
+    }
+  }
+  return valid
+}
+
+/** Alias for backward compat — same as validateInterests */
+export async function resolveInterests(
+  keywords: { id?: string; name: string }[],
+  accessToken: string
+): Promise<{ id: string; name: string }[]> {
+  return validateInterests(accessToken, keywords.map(k => ({ id: k.id || '', name: k.name })))
+}
+
+// ============================================
 // Ad Creation
 // ============================================
 
-/** สร้าง Campaign */
+/** สร้าง Campaign — ใช้ OUTCOME_AWARENESS เป็น default เพราะ compatible กับ post boost */
 export async function createCampaign(
   adAccountId: string,
   pageToken: string,
-  name: string
+  name: string,
+  objective: string = 'OUTCOME_AWARENESS'
 ) {
   const res = await fetch(`${FB_API}/${adAccountId}/campaigns`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       name,
-      objective: 'OUTCOME_ENGAGEMENT',
+      objective,
       status: 'ACTIVE',
+      buying_type: 'AUCTION',
       special_ad_categories: [],
+      is_adset_budget_sharing_enabled: false,
       access_token: pageToken,
     }),
   })
@@ -75,40 +123,58 @@ export async function createAdSet(
   campaignId: string,
   opts: {
     name: string
-    dailyBudget: number   // หน่วย: สตางค์ (THB * 100)
+    dailyBudget: number   // หน่วย: บาท (จะ convert เป็นสตางค์ในฟังก์ชัน)
     startTime: string     // ISO string
     endTime: string
     targeting: AdTargeting
     pageId: string
+    optimizationGoal?: string
+    billingEvent?: string
+    destinationType?: string
   }
 ) {
+  // Validate interests before using
+  let validInterests = opts.targeting.interests || []
+  if (validInterests.length > 0) {
+    validInterests = await validateInterests(pageToken, validInterests)
+  }
+
+  // Targeting แบบเรียบง่าย — ไม่ใช้ targeting_automation เพราะ conflict กับบาง objective
+  const targetingObj: any = {
+    age_min: opts.targeting.ageMin || 18,
+    age_max: 65,  // Advantage+ audience ต้องเป็น 65 เท่านั้น
+    genders: opts.targeting.genders,
+    geo_locations: opts.targeting.geoLocations || { countries: ['TH'] },
+    targeting_automation: { advantage_audience: 1 },
+  }
+
+  // เพิ่ม interests ถ้ามี (validated แล้ว)
+  if (validInterests.length > 0) {
+    targetingObj.flexible_spec = [{ interests: validInterests }]
+  }
+
+  const adsetBody: any = {
+    name: opts.name,
+    campaign_id: campaignId,
+    daily_budget: Math.round(opts.dailyBudget * 100),
+    bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
+    start_time: opts.startTime,
+    end_time: opts.endTime,
+    billing_event: 'IMPRESSIONS',
+    optimization_goal: 'REACH',
+    targeting: targetingObj,
+    promoted_object: { page_id: opts.pageId },
+    access_token: pageToken,
+    status: 'ACTIVE',
+  }
+
   const res = await fetch(`${FB_API}/${adAccountId}/adsets`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      name: opts.name,
-      campaign_id: campaignId,
-      daily_budget: Math.round(opts.dailyBudget * 100), // convert to satang
-      start_time: opts.startTime,
-      end_time: opts.endTime,
-      billing_event: 'IMPRESSIONS',
-      optimization_goal: 'ENGAGED_USERS',
-      targeting: {
-        age_min: opts.targeting.ageMin,
-        age_max: opts.targeting.ageMax,
-        genders: opts.targeting.genders,
-        geo_locations: opts.targeting.geoLocations || { countries: ['TH'] },
-        flexible_spec: opts.targeting.interests?.length
-          ? [{ interests: opts.targeting.interests }]
-          : undefined,
-      },
-      promoted_object: { page_id: opts.pageId },
-      access_token: pageToken,
-      status: 'ACTIVE',
-    }),
+    body: JSON.stringify(adsetBody),
   })
   const data = await res.json()
-  if (data.error) throw new Error(data.error.message)
+  if (data.error) throw new Error(data.error.error_user_msg || data.error.message)
   return data.id as string
 }
 

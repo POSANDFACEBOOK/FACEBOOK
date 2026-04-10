@@ -1,25 +1,24 @@
 import { getServerSession } from 'next-auth'
 import { NextResponse } from 'next/server'
 import { authOptions } from '@/lib/auth'
-import { updateAllStatus } from '@/lib/facebook'
+import { updateAllStatus, resolveInterests } from '@/lib/facebook'
 import { generateAutoTargeting } from '@/lib/ai-analyzer'
 
 export const dynamic = 'force-dynamic'
 
 const FB = 'https://graph.facebook.com/v19.0'
 
-// ── Goal → Facebook API mapping ──────────────────────────────
+// ── Goal → Facebook API mapping (from working version) ───────
 const GOAL_CONFIG: Record<string, {
   objective: string
   optimization_goal: string
   billing_event: string
   destination_type?: string
 }> = {
-  messages: {
+  engagement: {
     objective: 'OUTCOME_ENGAGEMENT',
-    optimization_goal: 'CONVERSATIONS',
+    optimization_goal: 'ENGAGED_USERS',
     billing_event: 'IMPRESSIONS',
-    destination_type: 'MESSENGER',
   },
   traffic: {
     objective: 'OUTCOME_TRAFFIC',
@@ -46,7 +45,7 @@ export async function POST(req: Request) {
     const body = await req.json()
     const {
       postId, pageId, pageToken, pageName, pageCategory, postMessage, postImage,
-      campaignName, dailyBudget, startDate, endDate,
+      campaignName, dailyBudget, startDate, endDate, goal,
     } = body
 
     if (!postId || !pageId || !pageToken || !campaignName || !dailyBudget) {
@@ -61,11 +60,11 @@ export async function POST(req: Request) {
       pageName: pageName || '',
     })
 
-    // Map AI objective to Facebook goal config
+    // Map AI objective to Facebook goal config (AI decides, not user)
     const aiGoal = aiTargeting.objective === 'LINK_CLICKS' ? 'traffic'
       : aiTargeting.objective === 'REACH' ? 'reach'
-      : 'messages'
-    const goalConfig = GOAL_CONFIG[aiGoal] || GOAL_CONFIG.messages
+      : 'engagement'
+    const goalConfig = GOAL_CONFIG[aiGoal] || GOAL_CONFIG.engagement
 
     // ── 3. Supabase ───────────────────────────────────────────
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -160,9 +159,19 @@ export async function POST(req: Request) {
     }
 
     // ── 8. Build Targeting (AI-driven) ─────────────────────────
+    let validInterests: { id: string; name: string }[] = []
+    if (aiTargeting.targeting.interests && aiTargeting.targeting.interests.length > 0) {
+      validInterests = await resolveInterests(aiTargeting.targeting.interests, userToken)
+    }
+
+    // Thailand requires ageMin >= 20 when using interest targeting
+    const ageMin = validInterests.length > 0
+      ? Math.max(20, aiTargeting.targeting.ageMin)
+      : Math.max(18, aiTargeting.targeting.ageMin)
+
     const targeting: any = {
-      age_min: aiTargeting.targeting.ageMin,
-      age_max: aiTargeting.targeting.ageMax,
+      age_min: ageMin,
+      age_max: Math.min(65, aiTargeting.targeting.ageMax),
       geo_locations: { countries: ['TH'] },
     }
 
@@ -170,11 +179,14 @@ export async function POST(req: Request) {
       targeting.genders = aiTargeting.targeting.genders
     }
 
-    if (aiTargeting.targeting.interests && aiTargeting.targeting.interests.length > 0) {
+    if (validInterests.length > 0) {
       targeting.flexible_spec = [{
-        interests: aiTargeting.targeting.interests.map((i: any) => ({ id: i.id, name: i.name })),
+        interests: validInterests,
       }]
     }
+
+    // Facebook requires Advantage audience flag
+    targeting.targeting_automation = { advantage_audience: 0 }
 
     // ── 9. Create Campaign ────────────────────────────────────
     let fbCampaignId: string
@@ -218,7 +230,6 @@ export async function POST(req: Request) {
         status: 'ACTIVE',
       }
 
-      // Messages goal needs destination_type
       if (goalConfig.destination_type) {
         adsetBody.destination_type = goalConfig.destination_type
       }
@@ -281,7 +292,7 @@ export async function POST(req: Request) {
       console.warn('[create] force-activate warning:', e.message)
     }
 
-    // ── 13. Save to Supabase ──────────────────────────────────
+    // ── 13. Save to Supabase (with user-selected goal) ────────
     const { data: campaign, error: campaignError } = await supabase
       .from('ad_campaigns')
       .insert({
@@ -293,10 +304,12 @@ export async function POST(req: Request) {
         fb_post_id: postId,
         campaign_name: campaignName,
         post_message: postMessage,
+        post_image: postImage || null,
         daily_budget: dailyBudget,
         start_time: startDate || new Date().toISOString(),
         end_time: endDate,
         status: 'active',
+        goal: goal || 'auto_engagement',
       })
       .select()
       .single()

@@ -77,10 +77,10 @@ export async function GET() {
       if (!analysisMap[a.campaign_id]) analysisMap[a.campaign_id] = a
     }
 
-    // Fetch real Facebook status for each campaign (parallel, max 5 at a time)
+    // Fetch real Facebook status only for non-AB-test standalone campaigns (reduce API calls)
     const fbStatusMap: Record<string, any> = {}
-    const statusPromises = campaigns.map(async (c) => {
-      if (!c.fb_campaign_id) return
+    const standaloneCampaigns = campaigns.filter(c => !c.test_group_id && c.fb_campaign_id)
+    const statusPromises = standaloneCampaigns.map(async (c) => {
       try {
         const status = await getRealStatus(userToken, c.fb_campaign_id, c.fb_adset_id, c.fb_ad_id)
         fbStatusMap[c.id] = status
