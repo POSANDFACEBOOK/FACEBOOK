@@ -1,22 +1,35 @@
 import { getServerSession } from 'next-auth'
 import { NextResponse } from 'next/server'
 import { authOptions } from '@/lib/auth'
-import { updateAllStatus, validateInterests } from '@/lib/facebook'
+import { updateAllStatus, resolveInterests } from '@/lib/facebook'
 import { generateAutoTargeting } from '@/lib/ai-analyzer'
 
 export const dynamic = 'force-dynamic'
 
 const FB = 'https://graph.facebook.com/v19.0'
 
-// ── Goal labels for UI display ──────────────────────────────
-const GOAL_LABELS: Record<string, string> = {
-  auto_engagement: 'อัตโนมัติ - เพิ่มการมีส่วนร่วม',
-  messages: 'เพิ่มจำนวนข้อความ',
-  sales_messages: 'เพิ่มยอดขายผ่านข้อความ',
-  leads_messages: 'เก็บข้อมูลลูกค้าผ่านข้อความ',
-  traffic: 'เพิ่มผู้เยี่ยมชมเว็บไซต์',
-  calls: 'เพิ่มการมีส่วนร่วม (โทร)',
-  reach: 'เข้าถึงคนมากสุด',
+// ── Goal → Facebook API mapping (from working version) ───────
+const GOAL_CONFIG: Record<string, {
+  objective: string
+  optimization_goal: string
+  billing_event: string
+  destination_type?: string
+}> = {
+  engagement: {
+    objective: 'OUTCOME_ENGAGEMENT',
+    optimization_goal: 'ENGAGED_USERS',
+    billing_event: 'IMPRESSIONS',
+  },
+  traffic: {
+    objective: 'OUTCOME_TRAFFIC',
+    optimization_goal: 'LINK_CLICKS',
+    billing_event: 'IMPRESSIONS',
+  },
+  reach: {
+    objective: 'OUTCOME_AWARENESS',
+    optimization_goal: 'REACH',
+    billing_event: 'IMPRESSIONS',
+  },
 }
 
 export async function POST(req: Request) {
@@ -47,8 +60,11 @@ export async function POST(req: Request) {
       pageName: pageName || '',
     })
 
-    // Use user-selected goal label
-    const goalKey = goal && GOAL_LABELS[goal] ? goal : 'auto_engagement'
+    // Map AI objective to Facebook goal config (AI decides, not user)
+    const aiGoal = aiTargeting.objective === 'LINK_CLICKS' ? 'traffic'
+      : aiTargeting.objective === 'REACH' ? 'reach'
+      : 'engagement'
+    const goalConfig = GOAL_CONFIG[aiGoal] || GOAL_CONFIG.engagement
 
     // ── 3. Supabase ───────────────────────────────────────────
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -142,22 +158,37 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: `Supabase page error: ${pageError.message}` }, { status: 500 })
     }
 
-    // ── 8. Build Targeting (AI-driven, simple format) ───────────
-    // ใช้ targeting แบบเรียบง่าย — เหมือนเวอร์ชันที่ work ก่อนหน้า
-    // ไม่ใช้ targeting_automation เพราะ conflict กับหลาย optimization_goal
-    const targeting: any = {
-      age_min: aiTargeting.targeting.ageMin || 18,
-      age_max: 65,  // Advantage+ audience ต้องเป็น 65 เท่านั้น
-      geo_locations: { countries: ['TH'] },
-      targeting_automation: { advantage_audience: 1 },
+    // ── 8. Build Targeting (AI-driven) ─────────────────────────
+    let validInterests: { id: string; name: string }[] = []
+    if (aiTargeting.targeting.interests && aiTargeting.targeting.interests.length > 0) {
+      validInterests = await resolveInterests(aiTargeting.targeting.interests, userToken)
     }
 
-    if (aiTargeting.targeting.genders && aiTargeting.targeting.genders.length > 0) {
+    // Thailand requires ageMin >= 20 when using interest targeting
+    const ageMin = validInterests.length > 0
+      ? Math.max(20, aiTargeting.targeting.ageMin)
+      : Math.max(18, aiTargeting.targeting.ageMin)
+
+    const targeting: any = {
+      age_min: ageMin,
+      age_max: Math.min(65, aiTargeting.targeting.ageMax),
+      geo_locations: { countries: ['TH'] },
+    }
+
+    if (aiTargeting.targeting.genders.length > 0) {
       targeting.genders = aiTargeting.targeting.genders
     }
 
+    if (validInterests.length > 0) {
+      targeting.flexible_spec = [{
+        interests: validInterests,
+      }]
+    }
+
+    // Facebook requires Advantage audience flag
+    targeting.targeting_automation = { advantage_audience: 0 }
+
     // ── 9. Create Campaign ────────────────────────────────────
-    // ใช้ OUTCOME_AWARENESS เหมือนเวอร์ชันเดิมที่ work ได้ 100%
     let fbCampaignId: string
     try {
       const r = await fetch(`${FB}/${adAccountId}/campaigns`, {
@@ -165,7 +196,7 @@ export async function POST(req: Request) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: campaignName,
-          objective: 'OUTCOME_AWARENESS',
+          objective: goalConfig.objective,
           status: 'ACTIVE',
           buying_type: 'AUCTION',
           special_ad_categories: [],
@@ -184,23 +215,29 @@ export async function POST(req: Request) {
     let fbAdSetId: string
     try {
       const dailyBudgetSatang = Math.round(Number(dailyBudget) * 100)
+      const adsetBody: any = {
+        name: `${campaignName} - Ad Set`,
+        campaign_id: fbCampaignId,
+        daily_budget: dailyBudgetSatang,
+        bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
+        start_time: startDate || new Date().toISOString(),
+        end_time: endDate,
+        billing_event: goalConfig.billing_event,
+        optimization_goal: goalConfig.optimization_goal,
+        targeting,
+        promoted_object: { page_id: pageId },
+        access_token: userToken,
+        status: 'ACTIVE',
+      }
+
+      if (goalConfig.destination_type) {
+        adsetBody.destination_type = goalConfig.destination_type
+      }
+
       const r = await fetch(`${FB}/${adAccountId}/adsets`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: `${campaignName} - Ad Set`,
-          campaign_id: fbCampaignId,
-          daily_budget: dailyBudgetSatang,
-          bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
-          start_time: startDate || new Date().toISOString(),
-          end_time: endDate,
-          billing_event: 'IMPRESSIONS',
-          optimization_goal: 'REACH',
-          targeting,
-          promoted_object: { page_id: pageId },
-          access_token: userToken,
-          status: 'ACTIVE',
-        }),
+        body: JSON.stringify(adsetBody),
       })
       const d = await r.json()
       if (d.error) return NextResponse.json({ error: `สร้าง Ad Set ไม่ได้: ${d.error.error_user_msg || d.error.message} [${JSON.stringify(d.error)}]` }, { status: 400 })
@@ -209,56 +246,37 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: `สร้าง Ad Set ไม่ได้: ${e.message}` }, { status: 500 })
     }
 
-    // ── 11. Create Ad (inline creative with object_story_id) ───
+    // ── 11. Create Creative + Ad ──────────────────────────────
     let fbAdId: string
     try {
-      // สร้าง Ad พร้อม creative inline — ไม่ต้องสร้าง creative แยก
-      // ใช้ pageToken เพราะ page เป็นเจ้าของโพสต์
+      const creativeRes = await fetch(`${FB}/${adAccountId}/adcreatives`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: `Creative - ${campaignName}`,
+          object_story_id: postId,
+          access_token: pageToken,
+        }),
+      })
+      const creativeData = await creativeRes.json()
+      if (creativeData.error) {
+        return NextResponse.json({ error: `สร้าง Creative ไม่ได้: ${creativeData.error.error_user_msg || creativeData.error.message}` }, { status: 400 })
+      }
+
       const adRes = await fetch(`${FB}/${adAccountId}/ads`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: `${campaignName} - Ad`,
           adset_id: fbAdSetId,
-          creative: { object_story_id: postId },
+          creative: { creative_id: creativeData.id },
           status: 'ACTIVE',
-          access_token: pageToken,
+          access_token: userToken,
         }),
       })
       const adData = await adRes.json()
-      if (adData.error) {
-        // Fallback: ลองสร้าง creative แยกแล้วค่อยสร้าง ad
-        const creativeRes = await fetch(`${FB}/${adAccountId}/adcreatives`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: `Creative - ${campaignName}`,
-            object_story_id: postId,
-            access_token: pageToken,
-          }),
-        })
-        const creativeData = await creativeRes.json()
-        if (creativeData.error) {
-          return NextResponse.json({ error: `สร้าง Ad ไม่ได้: ${adData.error.error_user_msg || adData.error.message} | Creative: ${creativeData.error.message}` }, { status: 400 })
-        }
-
-        const adRes2 = await fetch(`${FB}/${adAccountId}/ads`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: `${campaignName} - Ad`,
-            adset_id: fbAdSetId,
-            creative: { creative_id: creativeData.id },
-            status: 'ACTIVE',
-            access_token: pageToken,
-          }),
-        })
-        const adData2 = await adRes2.json()
-        if (adData2.error) return NextResponse.json({ error: `สร้าง Ad ไม่ได้: ${adData2.error.error_user_msg || adData2.error.message}` }, { status: 400 })
-        fbAdId = adData2.id
-      } else {
-        fbAdId = adData.id
-      }
+      if (adData.error) return NextResponse.json({ error: `สร้าง Ad ไม่ได้: ${adData.error.error_user_msg || adData.error.message}` }, { status: 400 })
+      fbAdId = adData.id
     } catch (e: any) {
       return NextResponse.json({ error: `สร้าง Ad ไม่ได้: ${e.message}` }, { status: 500 })
     }
@@ -274,7 +292,7 @@ export async function POST(req: Request) {
       console.warn('[create] force-activate warning:', e.message)
     }
 
-    // ── 13. Save to Supabase ──────────────────────────────────
+    // ── 13. Save to Supabase (with user-selected goal) ────────
     const { data: campaign, error: campaignError } = await supabase
       .from('ad_campaigns')
       .insert({
@@ -291,7 +309,7 @@ export async function POST(req: Request) {
         start_time: startDate || new Date().toISOString(),
         end_time: endDate,
         status: 'active',
-        goal: goalKey,
+        goal: goal || 'auto_engagement',
       })
       .select()
       .single()

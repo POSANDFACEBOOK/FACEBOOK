@@ -79,6 +79,14 @@ export async function validateInterests(
   return valid
 }
 
+/** Alias for backward compat — same as validateInterests */
+export async function resolveInterests(
+  keywords: { id?: string; name: string }[],
+  accessToken: string
+): Promise<{ id: string; name: string }[]> {
+  return validateInterests(accessToken, keywords.map(k => ({ id: k.id || '', name: k.name })))
+}
+
 // ============================================
 // Ad Creation
 // ============================================
