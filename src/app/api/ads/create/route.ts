@@ -211,37 +211,39 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: `สร้าง Campaign ไม่ได้: ${e.message}` }, { status: 500 })
     }
 
-    // ── 10. Create Ad Set ─────────────────────────────────────
+    // ── 10. Create Ad Set (try multiple optimization goals) ──
     let fbAdSetId: string
     try {
       const dailyBudgetSatang = Math.round(Number(dailyBudget) * 100)
-      const adsetBody: any = {
-        name: `${campaignName} - Ad Set`,
-        campaign_id: fbCampaignId,
-        daily_budget: dailyBudgetSatang,
-        bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
-        start_time: startDate || new Date().toISOString(),
-        end_time: endDate,
-        billing_event: goalConfig.billing_event,
-        optimization_goal: goalConfig.optimization_goal,
-        targeting,
-        promoted_object: { page_id: pageId },
-        access_token: userToken,
-        status: 'ACTIVE',
-      }
+      const optimizationGoals = ['POST_ENGAGEMENT', 'IMPRESSIONS', 'ENGAGED_USERS', 'REACH']
+      let lastError = ''
 
-      if (goalConfig.destination_type) {
-        adsetBody.destination_type = goalConfig.destination_type
-      }
+      for (const optGoal of optimizationGoals) {
+        const adsetBody: any = {
+          name: `${campaignName} - Ad Set`,
+          campaign_id: fbCampaignId,
+          daily_budget: dailyBudgetSatang,
+          bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
+          start_time: startDate || new Date().toISOString(),
+          end_time: endDate,
+          billing_event: 'IMPRESSIONS',
+          optimization_goal: optGoal,
+          targeting,
+          promoted_object: { page_id: pageId },
+          access_token: userToken,
+          status: 'ACTIVE',
+        }
 
-      const r = await fetch(`${FB}/${adAccountId}/adsets`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(adsetBody),
-      })
-      const d = await r.json()
-      if (d.error) return NextResponse.json({ error: `สร้าง Ad Set ไม่ได้: ${d.error.error_user_msg || d.error.message} [${JSON.stringify(d.error)}]` }, { status: 400 })
-      fbAdSetId = d.id
+        const r = await fetch(`${FB}/${adAccountId}/adsets`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(adsetBody),
+        })
+        const d = await r.json()
+        if (!d.error) { fbAdSetId = d.id; break }
+        lastError = d.error.error_user_msg || d.error.message
+      }
+      if (!fbAdSetId!) return NextResponse.json({ error: `สร้าง Ad Set ไม่ได้: ${lastError}` }, { status: 400 })
     } catch (e: any) {
       return NextResponse.json({ error: `สร้าง Ad Set ไม่ได้: ${e.message}` }, { status: 500 })
     }

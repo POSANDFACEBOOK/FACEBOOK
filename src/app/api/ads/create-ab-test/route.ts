@@ -217,29 +217,39 @@ export async function POST(req: Request) {
           targeting.flexible_spec = [{ interests: validInterests }]
         }
 
-        // ── Create Ad Set (inline, proven working) ────────────
+        // ── Create Ad Set (try multiple optimization goals) ────────────
         const dailyBudgetSatang = Math.round(variantBudget * 100)
-        const adsetRes = await fetch(`${FB}/${adAccountId}/adsets`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: `${variant.label} - Ad Set`,
-            campaign_id: fbCampaignId,
-            daily_budget: dailyBudgetSatang,
-            bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
-            start_time: startDate,
-            end_time: endDateStr,
-            billing_event: goalConfig.billing_event,
-            optimization_goal: goalConfig.optimization_goal,
-            targeting,
-            promoted_object: { page_id: pageId },
-            access_token: userToken,
-            status: 'ACTIVE',
-          }),
-        })
-        const adsetData = await adsetRes.json()
-        if (adsetData.error) throw new Error(`AdSet: ${adsetData.error.error_user_msg || adsetData.error.message}`)
-        const fbAdSetId = adsetData.id
+        const optimizationGoals = ['POST_ENGAGEMENT', 'IMPRESSIONS', 'ENGAGED_USERS', 'REACH']
+        let fbAdSetId: string = ''
+        let lastAdsetError = ''
+
+        for (const optGoal of optimizationGoals) {
+          const adsetRes = await fetch(`${FB}/${adAccountId}/adsets`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: `${variant.label} - Ad Set`,
+              campaign_id: fbCampaignId,
+              daily_budget: dailyBudgetSatang,
+              bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
+              start_time: startDate,
+              end_time: endDateStr,
+              billing_event: 'IMPRESSIONS',
+              optimization_goal: optGoal,
+              targeting,
+              promoted_object: { page_id: pageId },
+              access_token: userToken,
+              status: 'ACTIVE',
+            }),
+          })
+          const adsetData = await adsetRes.json()
+          if (!adsetData.error) {
+            fbAdSetId = adsetData.id
+            break
+          }
+          lastAdsetError = adsetData.error.error_user_msg || adsetData.error.message
+        }
+        if (!fbAdSetId) throw new Error(`AdSet: ${lastAdsetError}`)
 
         // ── Create Ad with inline creative ──────────────────────
         // Try multiple approaches for compatibility
