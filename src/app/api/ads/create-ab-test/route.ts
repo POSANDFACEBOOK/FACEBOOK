@@ -169,11 +169,9 @@ export async function POST(req: Request) {
 
         const campaignName = `[AB Test] ${variant.label} — ${(postMessage || postId).slice(0, 30)}`
 
-        // Map variant objective to goal config (same as create/route.ts)
-        const variantGoal = variant.objective === 'LINK_CLICKS' ? 'traffic'
-          : variant.objective === 'REACH' ? 'reach'
-          : 'engagement'
-        const goalConfig = GOAL_CONFIG[variantGoal] || GOAL_CONFIG.engagement
+        // Use single proven working objective for ALL variants
+        // Only targeting differs between variants (age, gender, interests)
+        const goalConfig = GOAL_CONFIG.engagement
 
         // ── Create Campaign (inline, proven working) ──────────
         const campRes = await fetch(`${FB}/${adAccountId}/campaigns`, {
