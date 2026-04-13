@@ -232,52 +232,34 @@ export async function POST(req: Request) {
         let fbAdId: string = ''
         const allAdErrors: string[] = []
 
-        // Build creative specs to try (photo_data for image posts, link_data for text-only)
-        const creativeSpecs: { label: string; spec: any; token: string }[] = []
-
-        if (postImage) {
-          // photo_data approach — simplest for image posts
-          creativeSpecs.push({
-            label: 'photo_userToken',
-            spec: { page_id: pageId, photo_data: { image_url: postImage, message: postMessage || '' } },
-            token: userToken,
-          })
-          creativeSpecs.push({
-            label: 'photo_pageToken',
-            spec: { page_id: pageId, photo_data: { image_url: postImage, message: postMessage || '' } },
-            token: pageToken,
-          })
-        }
-        // link_data approach — link to the page itself (NOT facebook.com/post)
-        creativeSpecs.push({
-          label: 'link_userToken',
-          spec: { page_id: pageId, link_data: { link: `https://facebook.com/${pageId}`, message: postMessage || '' } },
-          token: userToken,
-        })
-
-        for (const cs of creativeSpecs) {
-          const cRes = await fetch(`${FB}/${adAccountId}/adcreatives`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: `Creative - ${variant.label}`, object_story_spec: cs.spec, access_token: cs.token }),
-          })
-          const cData = await cRes.json()
-          if (cData.error) {
-            allAdErrors.push(`creative(${cs.label}): ${cData.error.error_user_msg || cData.error.message}`)
-            continue
-          }
-          // Creative created — now create Ad
+        // Helper: try to create ad from a creative ID
+        const tryCreateAd = async (creativeId: string, label: string): Promise<boolean> => {
           const adRes = await fetch(`${FB}/${adAccountId}/ads`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: `${variant.label} - Ad`, adset_id: fbAdSetId, creative: { creative_id: cData.id }, status: 'ACTIVE', access_token: userToken }),
+            body: JSON.stringify({ name: `${variant.label} - Ad`, adset_id: fbAdSetId, creative: { creative_id: creativeId }, status: 'ACTIVE', access_token: userToken }),
           })
           const adData = await adRes.json()
-          if (!adData.error) { fbAdId = adData.id; break }
-          allAdErrors.push(`ad(${cs.label}): ${adData.error.error_user_msg || adData.error.message}`)
+          if (!adData.error) { fbAdId = adData.id; return true }
+          allAdErrors.push(`ad(${label}): ${adData.error.error_user_msg || adData.error.message}`)
+          return false
         }
 
-        // Last resort: source_story_id
+        // Strategy 1: object_story_id as separate creative (promotes existing post)
+        if (!fbAdId) {
+          for (const token of [pageToken, userToken]) {
+            const cRes = await fetch(`${FB}/${adAccountId}/adcreatives`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: `Creative - ${variant.label}`, object_story_id: storyId, access_token: token }),
+            })
+            const cData = await cRes.json()
+            if (cData.error) { allAdErrors.push(`obj_creative(${token === pageToken ? 'page' : 'user'}): ${cData.error.error_user_msg || cData.error.message}`); continue }
+            if (await tryCreateAd(cData.id, `obj_story_${token === pageToken ? 'page' : 'user'}`)) break
+          }
+        }
+
+        // Strategy 2: source_story_id creative
         if (!fbAdId) {
           for (const token of [pageToken, userToken]) {
             const cRes = await fetch(`${FB}/${adAccountId}/adcreatives`, {
@@ -286,15 +268,40 @@ export async function POST(req: Request) {
               body: JSON.stringify({ name: `Creative - ${variant.label}`, source_story_id: storyId, access_token: token }),
             })
             const cData = await cRes.json()
-            if (cData.error) { allAdErrors.push(`src_creative: ${cData.error.error_user_msg || cData.error.message}`); continue }
+            if (cData.error) { allAdErrors.push(`src_creative(${token === pageToken ? 'page' : 'user'}): ${cData.error.error_user_msg || cData.error.message}`); continue }
+            if (await tryCreateAd(cData.id, `src_story_${token === pageToken ? 'page' : 'user'}`)) break
+          }
+        }
+
+        // Strategy 3: photo_data spec (requires app in Live mode)
+        if (!fbAdId && postImage) {
+          for (const token of [pageToken, userToken]) {
+            const cRes = await fetch(`${FB}/${adAccountId}/adcreatives`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                name: `Creative - ${variant.label}`,
+                object_story_spec: { page_id: pageId, photo_data: { url: postImage, message: postMessage || '' } },
+                access_token: token,
+              }),
+            })
+            const cData = await cRes.json()
+            if (cData.error) { allAdErrors.push(`photo(${token === pageToken ? 'page' : 'user'}): ${cData.error.error_user_msg || cData.error.message}`); continue }
+            if (await tryCreateAd(cData.id, `photo_${token === pageToken ? 'page' : 'user'}`)) break
+          }
+        }
+
+        // Strategy 4: inline object_story_id (direct ad creation)
+        if (!fbAdId) {
+          for (const token of [pageToken, userToken]) {
             const adRes = await fetch(`${FB}/${adAccountId}/ads`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ name: `${variant.label} - Ad`, adset_id: fbAdSetId, creative: { creative_id: cData.id }, status: 'ACTIVE', access_token: userToken }),
+              body: JSON.stringify({ name: `${variant.label} - Ad`, adset_id: fbAdSetId, creative: { object_story_id: storyId }, status: 'ACTIVE', access_token: token }),
             })
             const adData = await adRes.json()
             if (!adData.error) { fbAdId = adData.id; break }
-            allAdErrors.push(`src_ad: ${adData.error.error_user_msg || adData.error.message}`)
+            allAdErrors.push(`inline(${token === pageToken ? 'page' : 'user'}): ${adData.error.error_user_msg || adData.error.message}`)
           }
         }
 
