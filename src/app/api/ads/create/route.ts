@@ -168,6 +168,20 @@ export async function POST(req: Request) {
     // Facebook requires Advantage audience flag
     targeting.targeting_automation = { advantage_audience: 0 }
 
+    // ── Link page to ad account (required for promoting page posts) ──
+    await Promise.allSettled([
+      fetch(`${FB}/${adAccountId}/promoted_objects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ object_id: pageId, access_token: userToken }),
+      }),
+      fetch(`${FB}/${adAccountId}/pages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ page_id: pageId, access_token: userToken }),
+      }),
+    ])
+
     // ── 9+10. Create Campaign + Ad Set (try full configs until one works) ──
     let fbCampaignId: string = ''
     let fbAdSetId: string = ''
