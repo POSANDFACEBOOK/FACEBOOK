@@ -135,11 +135,22 @@ export async function POST(req: Request) {
       .single()
     if (testGroupError) throw new Error(testGroupError.message)
 
-    // Step 3: Create Facebook campaigns for each variant
-    // Uses same proven working config as create/route.ts:
-    // - AI-selected objective mapped to GOAL_CONFIG
-    // - advantage_audience: 0
-    // - Creative with pageToken, Ad with userToken
+    // Step 3: Link page to ad account (required for promoting page posts)
+    // Try multiple ways to establish the relationship
+    await Promise.allSettled([
+      fetch(`${FB}/${adAccountId}/promoted_objects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ object_id: pageId, access_token: userToken }),
+      }),
+      fetch(`${FB}/${adAccountId}/pages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ page_id: pageId, access_token: userToken }),
+      }),
+    ])
+
+    // Step 4: Create Facebook campaigns for each variant
     const startDate = new Date().toISOString()
     const endDate = new Date()
     endDate.setDate(endDate.getDate() + finalDays)
