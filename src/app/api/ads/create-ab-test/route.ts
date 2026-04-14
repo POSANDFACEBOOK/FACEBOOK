@@ -305,88 +305,73 @@ export async function POST(req: Request) {
           }
         }
 
-        // Strategy 5: OUTCOME_TRAFFIC campaign + object_story_id
+        // Strategy 5: Try different campaign objectives + object_story_id
         // Fallback when app is in dev mode (photo_data blocked) and OUTCOME_AWARENESS blocks object_story_id
         if (!fbAdId) {
-          try {
-            // Pause the empty awareness campaign
-            await fetch(`${FB}/${fbCampaignId}`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ status: 'PAUSED', access_token: userToken }),
-            }).catch(() => {})
+          await fetch(`${FB}/${fbCampaignId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: 'PAUSED', access_token: userToken }),
+          }).catch(() => {})
 
-            const camp2Res = await fetch(`${FB}/${adAccountId}/campaigns`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                name: campaignName,
-                objective: 'OUTCOME_TRAFFIC',
-                status: 'ACTIVE',
-                buying_type: 'AUCTION',
-                special_ad_categories: [],
-                is_adset_budget_sharing_enabled: false,
-                access_token: userToken,
-              }),
-            })
-            const camp2 = await camp2Res.json()
-            if (!camp2.error) {
-              const adset2Res = await fetch(`${FB}/${adAccountId}/adsets`, {
+          const fallbackCombos = [
+            { objective: 'OUTCOME_TRAFFIC', goals: ['REACH', 'IMPRESSIONS'] },
+            { objective: 'OUTCOME_ENGAGEMENT', goals: ['POST_ENGAGEMENT', 'ENGAGED_USERS', 'REACH', 'IMPRESSIONS'] },
+          ]
+
+          for (const combo of fallbackCombos) {
+            if (fbAdId) break
+            try {
+              const cmpRes = await fetch(`${FB}/${adAccountId}/campaigns`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  name: `${variant.label} - Ad Set`,
-                  campaign_id: camp2.id,
-                  daily_budget: dailyBudgetSatang,
-                  bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
-                  start_time: startDate,
-                  end_time: endDateStr,
-                  billing_event: 'IMPRESSIONS',
-                  optimization_goal: 'LINK_CLICKS',
-                  targeting,
-                  promoted_object: { page_id: pageId },
-                  access_token: userToken,
-                  status: 'ACTIVE',
+                  name: campaignName, objective: combo.objective, status: 'ACTIVE',
+                  buying_type: 'AUCTION', special_ad_categories: [],
+                  is_adset_budget_sharing_enabled: false, access_token: userToken,
                 }),
               })
-              const adset2 = await adset2Res.json()
-              if (!adset2.error) {
+              const cmp = await cmpRes.json()
+              if (cmp.error) { allAdErrors.push(`${combo.objective}: ${cmp.error.error_user_msg || cmp.error.message}`); continue }
+
+              for (const goal of combo.goals) {
+                if (fbAdId) break
+                const asRes = await fetch(`${FB}/${adAccountId}/adsets`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    name: `${variant.label} - Ad Set`, campaign_id: cmp.id,
+                    daily_budget: dailyBudgetSatang, bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
+                    start_time: startDate, end_time: endDateStr, billing_event: 'IMPRESSIONS',
+                    optimization_goal: goal, targeting, promoted_object: { page_id: pageId },
+                    access_token: userToken, status: 'ACTIVE',
+                  }),
+                })
+                const as2 = await asRes.json()
+                if (as2.error) { allAdErrors.push(`${combo.objective}_${goal}: ${as2.error.error_user_msg || as2.error.message}`); continue }
+
                 for (const token of [pageToken, userToken]) {
                   const adRes = await fetch(`${FB}/${adAccountId}/ads`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                      name: `${variant.label} - Ad`,
-                      adset_id: adset2.id,
-                      creative: { object_story_id: storyId },
-                      status: 'ACTIVE',
-                      access_token: token,
+                      name: `${variant.label} - Ad`, adset_id: as2.id,
+                      creative: { object_story_id: storyId }, status: 'ACTIVE', access_token: token,
                     }),
                   })
                   const ad = await adRes.json()
-                  if (!ad.error) {
-                    fbCampaignId = camp2.id
-                    fbAdSetId = adset2.id
-                    fbAdId = ad.id
-                    break
-                  }
-                  allAdErrors.push(`traffic(${token === pageToken ? 'page' : 'user'}): ${ad.error.error_user_msg || ad.error.message}`)
+                  if (!ad.error) { fbCampaignId = cmp.id; fbAdSetId = as2.id; fbAdId = ad.id; break }
+                  allAdErrors.push(`${combo.objective}_${goal}(${token === pageToken ? 'page' : 'user'}): ${ad.error.error_user_msg || ad.error.message}`)
                 }
-              } else {
-                allAdErrors.push(`traffic_adset: ${adset2.error.error_user_msg || adset2.error.message}`)
               }
+
               if (!fbAdId) {
-                await fetch(`${FB}/${camp2.id}`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
+                await fetch(`${FB}/${cmp.id}`, {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ status: 'PAUSED', access_token: userToken }),
                 }).catch(() => {})
               }
-            } else {
-              allAdErrors.push(`traffic_camp: ${camp2.error.error_user_msg || camp2.error.message}`)
-            }
-          } catch (e: any) {
-            allAdErrors.push(`traffic: ${e.message}`)
+            } catch (e: any) { allAdErrors.push(`${combo.objective}: ${e.message}`) }
           }
         }
 
