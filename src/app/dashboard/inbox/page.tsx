@@ -314,8 +314,25 @@ export default function InboxPage() {
         </button>
       </aside>
 
+      {/* Mobile top bar (visible < 820px) */}
+      <div className="ib-mobile-bar" style={{
+        display: 'none', position: 'fixed', top: 0, left: 0, right: 0, zIndex: 40,
+        background: 'rgba(255,255,255,0.96)', backdropFilter: 'blur(20px)',
+        borderBottom: `1.5px solid ${BORDER}`, padding: '10px 14px',
+        alignItems: 'center', gap: 10, height: 52, boxSizing: 'border-box',
+      }}>
+        <Link href="/dashboard" style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ width: 32, height: 32, background: 'linear-gradient(135deg, #4338ca, #818cf8)', borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15 }}>⚡</div>
+          <div style={{ fontWeight: 900, fontSize: 13, color: TEXT }}>FB Ads AI</div>
+        </Link>
+        <div style={{ flex: 1 }} />
+        <Link href="/dashboard" style={{ ...btnGhost, padding: '7px 11px', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5, textDecoration: 'none', color: MUTED } as any}>
+          <BarChart3 size={13} /> แดชบอร์ด
+        </Link>
+      </div>
+
       {/* Main 3-column layout */}
-      <main style={{ marginLeft: 244, height: '100vh', display: 'flex', position: 'relative', zIndex: 1, overflow: 'hidden' }} className="ib-main">
+      <main data-active={activeConv ? '1' : '0'} style={{ marginLeft: 244, height: '100vh', display: 'flex', position: 'relative', zIndex: 1, overflow: 'hidden' }} className="ib-main">
         {/* Column 1: Conversation List */}
         <section style={{
           width: 340, flexShrink: 0, background: SURFACE,
@@ -323,16 +340,16 @@ export default function InboxPage() {
         }} className="ib-col1">
           {/* Header */}
           <div style={{ padding: '16px 16px 12px', borderBottom: `1px solid ${BORDER}` }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <h1 style={{ fontSize: 19, fontWeight: 900, margin: 0, color: TEXT, letterSpacing: '-0.3px' }}>💬 กล่องข้อความ</h1>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 8 }}>
+              <h1 style={{ fontSize: 18, fontWeight: 900, margin: 0, color: TEXT, letterSpacing: '-0.3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>💬 กล่องข้อความ</h1>
               <button
                 onClick={handleSync}
                 disabled={syncing}
                 title="ดึงข้อความล่าสุดจาก Facebook"
-                style={{ ...btnGhost, padding: '7px 9px', display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700 }}
+                style={{ ...btnGhost, padding: '7px 11px', display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, flexShrink: 0, minWidth: 78, justifyContent: 'center' }}
               >
                 <RefreshCw size={13} style={{ animation: syncing ? 'spin 1s linear infinite' : 'none' }} />
-                {syncing ? 'กำลังโหลด' : 'Sync'}
+                {syncing ? 'โหลด...' : 'Sync'}
               </button>
             </div>
 
@@ -367,8 +384,8 @@ export default function InboxPage() {
               </select>
             )}
 
-            {/* Status filter chips */}
-            <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+            {/* Status filter chips — horizontal scroll instead of wrap */}
+            <div style={{ display: 'flex', gap: 5, overflowX: 'auto', overflowY: 'hidden', paddingBottom: 4, scrollbarWidth: 'thin', WebkitOverflowScrolling: 'touch' }}>
               {([
                 ['all', 'ทั้งหมด'],
                 ['unread', `ยังไม่อ่าน${totalUnread > 0 ? ` (${totalUnread})` : ''}`],
@@ -384,7 +401,7 @@ export default function InboxPage() {
                     fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
                     background: statusFilter === key ? PRIMARY : SURFACE2,
                     color: statusFilter === key ? 'white' : MUTED,
-                    transition: 'all 0.15s',
+                    transition: 'all 0.15s', whiteSpace: 'nowrap', flexShrink: 0,
                   }}
                 >{label}</button>
               ))}
@@ -422,11 +439,11 @@ export default function InboxPage() {
         {/* Column 2: Chat Thread */}
         <section style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: SURFACE2 }} className="ib-col2">
           {!activeConv ? (
-            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: MUTED }}>
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: MUTED, padding: 20 }}>
               <div style={{ textAlign: 'center', maxWidth: 320 }}>
-                <div style={{ fontSize: 56, marginBottom: 12 }}>💬</div>
-                <div style={{ fontSize: 16, fontWeight: 800, color: TEXT, marginBottom: 6 }}>เลือกบทสนทนา</div>
-                <div style={{ fontSize: 12 }}>เลือกข้อความจากด้านซ้ายเพื่อเริ่มแชทกับลูกค้า</div>
+                <div style={{ fontSize: 48, marginBottom: 10, lineHeight: 1 }}>💬</div>
+                <div style={{ fontSize: 15, fontWeight: 800, color: TEXT, marginBottom: 5 }}>เลือกบทสนทนา</div>
+                <div style={{ fontSize: 12, lineHeight: 1.6 }}>เลือกข้อความจากด้านซ้ายเพื่อเริ่มแชทกับลูกค้า</div>
               </div>
             </div>
           ) : (
@@ -723,15 +740,32 @@ export default function InboxPage() {
       {/* Responsive CSS */}
       <style jsx global>{`
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        @media (max-width: 1080px) {
-          .ib-col3 { display: none; }
+        html, body { overflow-x: hidden; }
+
+        /* Tablet — hide right panel */
+        @media (max-width: 1280px) {
+          .ib-col3 { display: none !important; }
         }
+
+        /* Narrow tablet — narrower col1 */
+        @media (max-width: 980px) {
+          .ib-col1 { width: 290px !important; }
+        }
+
+        /* Mobile — hide sidebar (use top bar instead) */
         @media (max-width: 820px) {
           .ib-sidebar { transform: translateX(-100%); transition: transform 0.25s; }
-          .ib-main { margin-left: 0 !important; }
+          .ib-main { margin-left: 0 !important; padding-top: 52px; height: calc(100vh - 0px) !important; }
+          .ib-mobile-bar { display: flex !important; }
         }
-        @media (max-width: 640px) {
-          .ib-col1 { width: 100% !important; ${'display: ' + ('block') + ';'} }
+
+        /* Small mobile — single column (toggle list ↔ chat) */
+        @media (max-width: 680px) {
+          .ib-col1 { width: 100% !important; }
+          /* Hide col1 when chat is open */
+          .ib-main[data-active="1"] .ib-col1 { display: none !important; }
+          /* Hide col2 when no chat selected */
+          .ib-main[data-active="0"] .ib-col2 { display: none !important; }
           .ib-back { display: flex !important; }
         }
       `}</style>
