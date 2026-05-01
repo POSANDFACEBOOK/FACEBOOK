@@ -39,10 +39,32 @@ export const authOptions = {
       return session
     },
     async jwt({ token, account }: any) {
+      // Initial login → save short-lived first, then try upgrade to long-lived
       if (account?.access_token) {
         token.accessToken = account.access_token
+        token.tokenIssuedAt = Date.now()
         const longLived = await exchangeForLongLivedToken(account.access_token)
-        if (longLived) token.accessToken = longLived
+        if (longLived) {
+          token.accessToken = longLived
+          token.tokenIssuedAt = Date.now()
+        }
+        return token
+      }
+
+      // Subsequent requests → auto-refresh if token is older than 25 days
+      // (Facebook allows re-exchanging long-lived for another long-lived,
+      // resetting the 60-day clock. As long as user opens app once per 60d,
+      // session never effectively expires.)
+      const REFRESH_AFTER_MS = 25 * 24 * 60 * 60 * 1000
+      if (token?.accessToken && token?.tokenIssuedAt) {
+        const age = Date.now() - (token.tokenIssuedAt as number)
+        if (age > REFRESH_AFTER_MS) {
+          const refreshed = await exchangeForLongLivedToken(token.accessToken as string)
+          if (refreshed) {
+            token.accessToken = refreshed
+            token.tokenIssuedAt = Date.now()
+          }
+        }
       }
       return token
     },
