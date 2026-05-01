@@ -145,10 +145,29 @@ export default function InboxPage() {
     setQuickReplies(r.replies || [])
   }
 
+  // ── Background sync (silent — no spinner) ──
+  // Pulls fresh data + ensures every connected page is webhook-subscribed.
+  // The webhook then pushes new messages real-time to the DB; the 8s
+  // conversation poll surfaces them in the UI.
+  async function backgroundSync() {
+    try {
+      await fetch('/api/inbox/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      })
+    } catch {
+      // ignore — next interval will retry
+    }
+  }
+
   // ── Initial load + polling ──
   useEffect(() => {
     loadConversations()
     loadQuickReplies()
+    // Trigger one sync on mount so newly connected pages get subscribed
+    // to the FB webhook immediately (don't await — runs in background)
+    backgroundSync().then(() => loadConversations())
   }, [])
 
   useEffect(() => {
@@ -157,10 +176,13 @@ export default function InboxPage() {
 
   // Poll every 8s for new messages — re-arm when filters change so the poll
   // uses the latest pageFilter/statusFilter (avoid stale closure overwriting
-  // filtered results)
+  // filtered results). Every 8th tick (~64s) also runs a background sync so
+  // we catch anything the FB webhook might miss without nagging the user.
   useEffect(() => {
     if (pollRef.current) clearInterval(pollRef.current)
+    let tick = 0
     pollRef.current = setInterval(() => {
+      tick++
       loadConversations()
       if (activeConv) {
         fetch(`/api/inbox/conversations/${activeConv.id}`)
@@ -169,6 +191,9 @@ export default function InboxPage() {
             if (res.messages) setMessages(res.messages)
           })
           .catch(() => {})
+      }
+      if (tick % 8 === 0) {
+        backgroundSync().then(() => loadConversations())
       }
     }, 8000)
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
