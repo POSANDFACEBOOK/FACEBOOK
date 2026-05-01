@@ -394,14 +394,18 @@ export default function InboxPage() {
               </select>
             )}
 
-            {/* Status filter chips */}
-            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            {/* Status filter — tabs underline (no wrap, no clip) */}
+            <div style={{
+              display: 'flex', gap: 0, borderBottom: `1px solid ${BORDER}`,
+              overflowX: 'auto', overflowY: 'hidden', marginLeft: -2, marginRight: -2,
+              WebkitOverflowScrolling: 'touch',
+            }}>
               {([
                 ['all', 'ทั้งหมด', null],
                 ['unread', 'ยังไม่อ่าน', totalUnread > 0 ? totalUnread : null],
                 ['unresolved', 'ยังไม่จบ', null],
-                ['starred', '⭐ ติดดาว', null],
-                ['archived', '📦 จัดเก็บ', null],
+                ['starred', 'ติดดาว', null],
+                ['archived', 'จัดเก็บ', null],
               ] as const).map(([key, label, count]) => {
                 const active = statusFilter === key
                 return (
@@ -409,21 +413,21 @@ export default function InboxPage() {
                     key={key}
                     onClick={() => setStatusFilter(key as any)}
                     style={{
-                      padding: '5px 10px', borderRadius: 8,
-                      border: `1.5px solid ${active ? PRIMARY : BORDER}`,
-                      fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
-                      background: active ? PRIMARY_LIGHT : 'white',
-                      color: active ? PRIMARY : MUTED,
-                      transition: 'all 0.15s', whiteSpace: 'nowrap',
+                      padding: '8px 12px', border: 'none', background: 'transparent',
+                      fontSize: 11, fontWeight: active ? 800 : 700, cursor: 'pointer',
+                      fontFamily: 'inherit', color: active ? PRIMARY : MUTED,
+                      borderBottom: active ? `2px solid ${PRIMARY}` : '2px solid transparent',
+                      whiteSpace: 'nowrap', flexShrink: 0,
                       display: 'inline-flex', alignItems: 'center', gap: 5,
+                      transition: 'color 0.15s, border-color 0.15s',
                     }}
                   >
                     {label}
                     {count !== null && count !== undefined && (
                       <span style={{
-                        background: active ? PRIMARY : RED, color: 'white',
+                        background: RED, color: 'white',
                         fontSize: 9, fontWeight: 800, padding: '1px 6px', borderRadius: 999,
-                        minWidth: 16, textAlign: 'center',
+                        minWidth: 14, textAlign: 'center', lineHeight: 1.4,
                       }}>{count > 99 ? '99+' : count}</span>
                     )}
                   </button>
