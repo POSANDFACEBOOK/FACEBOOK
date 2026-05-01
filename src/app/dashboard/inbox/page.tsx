@@ -341,7 +341,17 @@ export default function InboxPage() {
           {/* Header */}
           <div style={{ padding: '16px 16px 12px', borderBottom: `1px solid ${BORDER}` }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 8 }}>
-              <h1 style={{ fontSize: 18, fontWeight: 900, margin: 0, color: TEXT, letterSpacing: '-0.3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>💬 กล่องข้อความ</h1>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
+                <div style={{
+                  width: 30, height: 30, borderRadius: 9, flexShrink: 0,
+                  background: 'linear-gradient(135deg, #4338ca, #818cf8)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  boxShadow: '0 2px 8px rgba(67,56,202,0.3)',
+                }}>
+                  <MessageSquare size={16} color="white" strokeWidth={2.5} />
+                </div>
+                <h1 style={{ fontSize: 17, fontWeight: 900, margin: 0, color: TEXT, letterSpacing: '-0.3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>กล่องข้อความ</h1>
+              </div>
               <button
                 onClick={handleSync}
                 disabled={syncing}
@@ -384,27 +394,41 @@ export default function InboxPage() {
               </select>
             )}
 
-            {/* Status filter chips — horizontal scroll instead of wrap */}
-            <div style={{ display: 'flex', gap: 5, overflowX: 'auto', overflowY: 'hidden', paddingBottom: 4, scrollbarWidth: 'thin', WebkitOverflowScrolling: 'touch' }}>
+            {/* Status filter chips */}
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
               {([
-                ['all', 'ทั้งหมด'],
-                ['unread', `ยังไม่อ่าน${totalUnread > 0 ? ` (${totalUnread})` : ''}`],
-                ['unresolved', 'ยังไม่จบ'],
-                ['starred', '⭐'],
-                ['archived', '📦'],
-              ] as const).map(([key, label]) => (
-                <button
-                  key={key}
-                  onClick={() => setStatusFilter(key)}
-                  style={{
-                    padding: '5px 10px', borderRadius: 999, border: 'none',
-                    fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
-                    background: statusFilter === key ? PRIMARY : SURFACE2,
-                    color: statusFilter === key ? 'white' : MUTED,
-                    transition: 'all 0.15s', whiteSpace: 'nowrap', flexShrink: 0,
-                  }}
-                >{label}</button>
-              ))}
+                ['all', 'ทั้งหมด', null],
+                ['unread', 'ยังไม่อ่าน', totalUnread > 0 ? totalUnread : null],
+                ['unresolved', 'ยังไม่จบ', null],
+                ['starred', '⭐ ติดดาว', null],
+                ['archived', '📦 จัดเก็บ', null],
+              ] as const).map(([key, label, count]) => {
+                const active = statusFilter === key
+                return (
+                  <button
+                    key={key}
+                    onClick={() => setStatusFilter(key as any)}
+                    style={{
+                      padding: '5px 10px', borderRadius: 8,
+                      border: `1.5px solid ${active ? PRIMARY : BORDER}`,
+                      fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
+                      background: active ? PRIMARY_LIGHT : 'white',
+                      color: active ? PRIMARY : MUTED,
+                      transition: 'all 0.15s', whiteSpace: 'nowrap',
+                      display: 'inline-flex', alignItems: 'center', gap: 5,
+                    }}
+                  >
+                    {label}
+                    {count !== null && count !== undefined && (
+                      <span style={{
+                        background: active ? PRIMARY : RED, color: 'white',
+                        fontSize: 9, fontWeight: 800, padding: '1px 6px', borderRadius: 999,
+                        minWidth: 16, textAlign: 'center',
+                      }}>{count > 99 ? '99+' : count}</span>
+                    )}
+                  </button>
+                )
+              })}
             </div>
           </div>
 
