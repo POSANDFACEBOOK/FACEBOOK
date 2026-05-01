@@ -53,39 +53,55 @@ export const authOptions = {
   ],
   session: { strategy: 'jwt' as const, maxAge: 60 * 24 * 60 * 60 },
   callbacks: {
+    async signIn({ user, account, profile }: any) {
+      console.log('[auth.callbacks.signIn]', {
+        provider: account?.provider,
+        type: account?.type,
+        userId: user?.id,
+        hasAccessToken: !!account?.access_token,
+      })
+      return true
+    },
     async session({ session, token }: any) {
-      session.accessToken = token.accessToken
-      return session
+      try {
+        session.accessToken = token?.accessToken
+        return session
+      } catch (e: any) {
+        console.error('[auth.callbacks.session] threw:', e?.message)
+        return session
+      }
     },
     async jwt({ token, account }: any) {
-      // Initial login → save short-lived first, then try upgrade to long-lived
-      if (account?.access_token) {
-        token.accessToken = account.access_token
-        token.tokenIssuedAt = Date.now()
-        const longLived = await exchangeForLongLivedToken(account.access_token)
-        if (longLived) {
-          token.accessToken = longLived
+      try {
+        // Initial login → save short-lived first, then try upgrade to long-lived
+        if (account?.access_token) {
+          token.accessToken = account.access_token
           token.tokenIssuedAt = Date.now()
-        }
-        return token
-      }
-
-      // Subsequent requests → auto-refresh if token is older than 25 days
-      // (Facebook allows re-exchanging long-lived for another long-lived,
-      // resetting the 60-day clock. As long as user opens app once per 60d,
-      // session never effectively expires.)
-      const REFRESH_AFTER_MS = 25 * 24 * 60 * 60 * 1000
-      if (token?.accessToken && token?.tokenIssuedAt) {
-        const age = Date.now() - (token.tokenIssuedAt as number)
-        if (age > REFRESH_AFTER_MS) {
-          const refreshed = await exchangeForLongLivedToken(token.accessToken as string)
-          if (refreshed) {
-            token.accessToken = refreshed
+          const longLived = await exchangeForLongLivedToken(account.access_token)
+          if (longLived) {
+            token.accessToken = longLived
             token.tokenIssuedAt = Date.now()
           }
+          return token
         }
+
+        // Subsequent requests → auto-refresh if token is older than 25 days
+        const REFRESH_AFTER_MS = 25 * 24 * 60 * 60 * 1000
+        if (token?.accessToken && token?.tokenIssuedAt) {
+          const age = Date.now() - (token.tokenIssuedAt as number)
+          if (age > REFRESH_AFTER_MS) {
+            const refreshed = await exchangeForLongLivedToken(token.accessToken as string)
+            if (refreshed) {
+              token.accessToken = refreshed
+              token.tokenIssuedAt = Date.now()
+            }
+          }
+        }
+        return token
+      } catch (e: any) {
+        console.error('[auth.callbacks.jwt] threw:', e?.message, e?.stack?.slice(0, 400))
+        return token  // ส่ง token เดิมกลับ ห้าม throw — ป้องกัน OAuth callback fail
       }
-      return token
     },
   },
   pages: {
