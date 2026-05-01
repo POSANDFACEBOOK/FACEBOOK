@@ -247,6 +247,7 @@ export default function Dashboard() {
       {/* ── Sidebar (Left Menu) ── */}
       <aside className="fb-sidebar" style={{
         position: 'fixed', top: 0, left: 0, bottom: 0, width: 244,
+        boxSizing: 'border-box',
         background: 'rgba(255,255,255,0.94)', backdropFilter: 'blur(28px)',
         borderRight: `1.5px solid ${BORDER}`, padding: '18px 14px 16px',
         display: 'flex', flexDirection: 'column', gap: 6, zIndex: 50,
