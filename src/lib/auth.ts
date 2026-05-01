@@ -3,7 +3,14 @@ import FacebookProvider from 'next-auth/providers/facebook'
 const FB_API = 'https://graph.facebook.com/v19.0'
 
 async function exchangeForLongLivedToken(shortLivedToken: string): Promise<string | null> {
-  if (!shortLivedToken) return null
+  if (!shortLivedToken) {
+    console.error('[auth] exchange skipped: empty short-lived token')
+    return null
+  }
+  if (!process.env.FACEBOOK_CLIENT_ID || !process.env.FACEBOOK_CLIENT_SECRET) {
+    console.error('[auth] exchange aborted: FACEBOOK_CLIENT_ID/SECRET env not set on this deployment')
+    return null
+  }
   try {
     const url = `${FB_API}/oauth/access_token?grant_type=fb_exchange_token&client_id=${process.env.FACEBOOK_CLIENT_ID}&client_secret=${process.env.FACEBOOK_CLIENT_SECRET}&fb_exchange_token=${shortLivedToken}`
     const ctrl = new AbortController()
@@ -11,9 +18,18 @@ async function exchangeForLongLivedToken(shortLivedToken: string): Promise<strin
     const res = await fetch(url, { signal: ctrl.signal })
     clearTimeout(timer)
     const data = await res.json()
-    if (data.error || !data.access_token) return null
+    if (data.error) {
+      console.error('[auth] FB exchange returned error:', JSON.stringify(data.error))
+      return null
+    }
+    if (!data.access_token) {
+      console.error('[auth] FB exchange: no access_token in response:', JSON.stringify(data).slice(0, 300))
+      return null
+    }
+    console.log(`[auth] exchange success — long-lived token received (expires_in=${data.expires_in})`)
     return data.access_token as string
-  } catch {
+  } catch (e: any) {
+    console.error('[auth] exchange threw:', e?.name, e?.message)
     return null
   }
 }
