@@ -5,7 +5,7 @@ import Link from 'next/link'
 import {
   ArrowLeft, Send, Sparkles, RefreshCw, Search, Star, Archive, CheckCircle2,
   MessageSquare, Inbox, Settings, Zap, X, ChevronLeft, MoreVertical, Bot,
-  AlertCircle, BarChart3, Bell, Plus, LogOut,
+  AlertCircle, BarChart3, Bell, Plus, LogOut, ListFilter, MailOpen, MailQuestion,
 } from 'lucide-react'
 
 // ─── Design Tokens (sync กับ dashboard) ───────────────────────
@@ -394,39 +394,39 @@ export default function InboxPage() {
               </select>
             )}
 
-            {/* Status filter — tabs underline (no wrap, no clip) */}
+            {/* Status filter — compact tabs (text + icon mix to fit narrow column) */}
             <div style={{
               display: 'flex', gap: 0, borderBottom: `1px solid ${BORDER}`,
-              overflowX: 'auto', overflowY: 'hidden', marginLeft: -2, marginRight: -2,
-              WebkitOverflowScrolling: 'touch',
+              justifyContent: 'space-between',
             }}>
               {([
-                ['all', 'ทั้งหมด', null],
-                ['unread', 'ยังไม่อ่าน', totalUnread > 0 ? totalUnread : null],
-                ['unresolved', 'ยังไม่จบ', null],
-                ['starred', 'ติดดาว', null],
-                ['archived', 'จัดเก็บ', null],
-              ] as const).map(([key, label, count]) => {
+                ['all', 'ทั้งหมด', null, null],
+                ['unread', 'ใหม่', null, totalUnread > 0 ? totalUnread : null],
+                ['unresolved', 'ค้าง', null, null],
+                ['starred', null, Star, null],
+                ['archived', null, Archive, null],
+              ] as const).map(([key, label, Icon, count]) => {
                 const active = statusFilter === key
                 return (
                   <button
                     key={key}
                     onClick={() => setStatusFilter(key as any)}
+                    title={key === 'starred' ? 'ติดดาว' : key === 'archived' ? 'จัดเก็บ' : undefined}
                     style={{
-                      padding: '8px 12px', border: 'none', background: 'transparent',
+                      flex: 1, padding: '8px 4px', border: 'none', background: 'transparent',
                       fontSize: 11, fontWeight: active ? 800 : 700, cursor: 'pointer',
                       fontFamily: 'inherit', color: active ? PRIMARY : MUTED,
                       borderBottom: active ? `2px solid ${PRIMARY}` : '2px solid transparent',
-                      whiteSpace: 'nowrap', flexShrink: 0,
-                      display: 'inline-flex', alignItems: 'center', gap: 5,
+                      whiteSpace: 'nowrap',
+                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4,
                       transition: 'color 0.15s, border-color 0.15s',
                     }}
                   >
-                    {label}
+                    {Icon ? <Icon size={14} /> : label}
                     {count !== null && count !== undefined && (
                       <span style={{
                         background: RED, color: 'white',
-                        fontSize: 9, fontWeight: 800, padding: '1px 6px', borderRadius: 999,
+                        fontSize: 9, fontWeight: 800, padding: '1px 5px', borderRadius: 999,
                         minWidth: 14, textAlign: 'center', lineHeight: 1.4,
                       }}>{count > 99 ? '99+' : count}</span>
                     )}
