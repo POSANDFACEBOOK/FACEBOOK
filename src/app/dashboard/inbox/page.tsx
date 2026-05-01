@@ -394,11 +394,11 @@ export default function InboxPage() {
               </select>
             )}
 
-            {/* Status filter — compact pill tabs (clearly separated from list) */}
+            {/* Status filter — high-contrast segmented control (active = filled purple) */}
             <div style={{
-              display: 'flex', gap: 3, padding: 3,
-              background: SURFACE2, borderRadius: 10,
-              border: `1px solid ${BORDER}`,
+              display: 'flex', gap: 3, padding: 4,
+              background: '#e0e7ff', borderRadius: 11,
+              border: `1.5px solid ${BORDER2}`,
             }}>
               {([
                 ['all', 'ทั้งหมด', null, null],
@@ -414,21 +414,29 @@ export default function InboxPage() {
                     onClick={() => setStatusFilter(key as any)}
                     title={key === 'starred' ? 'ติดดาว' : key === 'archived' ? 'จัดเก็บ' : undefined}
                     style={{
-                      flex: 1, padding: '6px 4px', border: 'none',
-                      borderRadius: 7,
-                      background: active ? 'white' : 'transparent',
-                      boxShadow: active ? '0 1px 3px rgba(67,56,202,0.15)' : 'none',
-                      fontSize: 11, fontWeight: active ? 800 : 700, cursor: 'pointer',
-                      fontFamily: 'inherit', color: active ? PRIMARY : MUTED,
+                      flex: 1, padding: '7px 4px', border: 'none',
+                      borderRadius: 8,
+                      // ACTIVE = filled gradient purple → ชัดเจนเด่นมาก
+                      background: active
+                        ? 'linear-gradient(135deg, #4338ca, #6366f1)'
+                        : 'transparent',
+                      boxShadow: active
+                        ? '0 3px 10px rgba(67,56,202,0.35), inset 0 1px 0 rgba(255,255,255,0.2)'
+                        : 'none',
+                      fontSize: 11, fontWeight: 800, cursor: 'pointer',
+                      fontFamily: 'inherit',
+                      // ACTIVE = white text, INACTIVE = muted
+                      color: active ? 'white' : MUTED,
                       whiteSpace: 'nowrap',
                       display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4,
-                      transition: 'all 0.15s',
+                      transition: 'all 0.18s',
                     }}
                   >
                     {Icon ? <Icon size={13} /> : label}
                     {count !== null && count !== undefined && (
                       <span style={{
-                        background: RED, color: 'white',
+                        background: active ? 'rgba(255,255,255,0.25)' : RED,
+                        color: 'white',
                         fontSize: 9, fontWeight: 800, padding: '1px 5px', borderRadius: 999,
                         minWidth: 14, textAlign: 'center', lineHeight: 1.4,
                       }}>{count > 99 ? '99+' : count}</span>
