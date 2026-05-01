@@ -73,21 +73,31 @@ export const authOptions = {
     },
     async jwt({ token, account }: any) {
       try {
-        // Initial login → save short-lived first, then try upgrade to long-lived
+        // Initial login → save short-lived ONLY (no exchange ที่นี่)
+        // เหตุผล: OAuth callback มี time budget จำกัด (~10s บน Vercel Hobby)
+        // ถ้า await exchange แล้ว FB API ช้า/ล่ม → callback fail → error=OAuthCallback
+        // จะ exchange ใน jwt call ถัดไปแทน (ตอน user เปิด dashboard)
         if (account?.access_token) {
           token.accessToken = account.access_token
           token.tokenIssuedAt = Date.now()
-          const longLived = await exchangeForLongLivedToken(account.access_token)
-          if (longLived) {
-            token.accessToken = longLived
-            token.tokenIssuedAt = Date.now()
-          }
+          token.needsExchange = true
           return token
         }
 
-        // Subsequent requests → auto-refresh if token is older than 25 days
+        // ครั้งถัดๆ ไป — ถ้าเป็น short-lived อยู่ ลอง exchange เป็น long-lived
+        if (token?.needsExchange && token?.accessToken) {
+          const longLived = await exchangeForLongLivedToken(token.accessToken as string)
+          if (longLived) {
+            token.accessToken = longLived
+            token.tokenIssuedAt = Date.now()
+            token.needsExchange = false
+          }
+          // ถ้า fail → ปล่อยไว้ ลองใหม่ครั้งหน้า (token เดิมยังใช้ได้ 1-2 ชม.)
+        }
+
+        // Auto-refresh ถ้า token เก่ากว่า 25 วัน (rolling window)
         const REFRESH_AFTER_MS = 25 * 24 * 60 * 60 * 1000
-        if (token?.accessToken && token?.tokenIssuedAt) {
+        if (!token?.needsExchange && token?.accessToken && token?.tokenIssuedAt) {
           const age = Date.now() - (token.tokenIssuedAt as number)
           if (age > REFRESH_AFTER_MS) {
             const refreshed = await exchangeForLongLivedToken(token.accessToken as string)
