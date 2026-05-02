@@ -1,52 +1,90 @@
 import FacebookProvider from 'next-auth/providers/facebook'
 
+const FB_API = 'https://graph.facebook.com/v19.0'
+
+async function exchangeForLongLivedToken(shortLivedToken: string): Promise<string | null> {
+  if (!shortLivedToken || !process.env.FACEBOOK_CLIENT_ID || !process.env.FACEBOOK_CLIENT_SECRET) {
+    return null
+  }
+  try {
+    const url = `${FB_API}/oauth/access_token?grant_type=fb_exchange_token&client_id=${process.env.FACEBOOK_CLIENT_ID}&client_secret=${process.env.FACEBOOK_CLIENT_SECRET}&fb_exchange_token=${shortLivedToken}`
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), 5000)
+    const res = await fetch(url, { signal: ctrl.signal })
+    clearTimeout(timer)
+    const data = await res.json()
+    if (data.error || !data.access_token) {
+      console.error('[auth] FB long-lived exchange failed:', JSON.stringify(data.error || data).slice(0, 300))
+      return null
+    }
+    return data.access_token as string
+  } catch (e: any) {
+    console.error('[auth] exchange threw:', e?.message)
+    return null
+  }
+}
+
 export const authOptions = {
-  // ตั้ง secret + URL อย่างชัดเจน — ห้ามพึ่ง auto-detect ของ NextAuth
   secret: process.env.NEXTAUTH_SECRET,
-  // บังคับ secure cookies เพราะ deploy บน Vercel = HTTPS เสมอ
-  useSecureCookies: true,
   providers: [
     FacebookProvider({
       clientId: process.env.FACEBOOK_CLIENT_ID!,
       clientSecret: process.env.FACEBOOK_CLIENT_SECRET!,
-      // ใช้ Graph API v19 แทน v11 (default ของ next-auth v4) ที่ FB เริ่ม
-      // คืน 400 บาง endpoint ในปลายปี 2024+
-      token: 'https://graph.facebook.com/v19.0/oauth/access_token',
-      userinfo: 'https://graph.facebook.com/v19.0/me?fields=id,name,email,picture',
+      // ใช้ default provider config (token URL + userinfo URL) ของ next-auth
+      // อย่า override ที่นี่ — ทำให้ openid-client ส่ง request format ที่ FB
+      // ไม่ตอบกลับ → OAuthCallback error
       authorization: {
-        url: 'https://www.facebook.com/v19.0/dialog/oauth',
         params: {
           scope: 'business_management,ads_management,ads_read,pages_show_list,pages_read_engagement,pages_read_user_content,pages_manage_metadata,pages_manage_posts,pages_messaging',
-          // ตั้งใจไม่ใส่ redirect_uri + auth_type='rerequest':
-          // - redirect_uri: ปล่อยให้ NextAuth derive จาก request เอง
-          //   (ถ้า hardcode แล้ว NEXTAUTH_URL มี whitespace/scheme ไม่ตรง 100%
-          //   → byte-mismatch ระหว่าง /authorize กับ /access_token → OAuthCallback)
-          // - rerequest: ถ้า user ไม่เคย decline permissions มาก่อน FB อาจ
-          //   reject request → OAuthCallback
+          // ไม่ใส่ redirect_uri / auth_type - ปล่อยให้ NextAuth + FB จัดการเอง
         },
       },
     }),
   ],
   session: { strategy: 'jwt' as const, maxAge: 60 * 24 * 60 * 60 },
   callbacks: {
-    async signIn({ user, account, profile }: any) {
-      console.log('[auth.signIn]', {
-        provider: account?.provider,
-        userId: user?.id || profile?.id,
-        hasAccessToken: !!account?.access_token,
-      })
-      return true
-    },
     async session({ session, token }: any) {
       session.accessToken = token?.accessToken
       return session
     },
     async jwt({ token, account }: any) {
-      if (account?.access_token) {
-        token.accessToken = account.access_token
-        token.tokenIssuedAt = Date.now()
+      try {
+        // Initial login → save short-lived ทันที + mark needsExchange
+        // ห้าม await exchange ที่นี่ → เพิ่ม latency ใน OAuth callback
+        if (account?.access_token) {
+          token.accessToken = account.access_token
+          token.tokenIssuedAt = Date.now()
+          token.needsExchange = true
+          return token
+        }
+
+        // ครั้งถัดมา (user เปิด dashboard) → exchange เป็น long-lived
+        if (token?.needsExchange && token?.accessToken) {
+          const longLived = await exchangeForLongLivedToken(token.accessToken as string)
+          if (longLived) {
+            token.accessToken = longLived
+            token.tokenIssuedAt = Date.now()
+            token.needsExchange = false
+          }
+        }
+
+        // Auto-refresh ทุก 25 วัน เพื่อ extend long-lived token
+        const REFRESH_AFTER_MS = 25 * 24 * 60 * 60 * 1000
+        if (!token?.needsExchange && token?.accessToken && token?.tokenIssuedAt) {
+          const age = Date.now() - (token.tokenIssuedAt as number)
+          if (age > REFRESH_AFTER_MS) {
+            const refreshed = await exchangeForLongLivedToken(token.accessToken as string)
+            if (refreshed) {
+              token.accessToken = refreshed
+              token.tokenIssuedAt = Date.now()
+            }
+          }
+        }
+        return token
+      } catch (e: any) {
+        console.error('[auth.jwt] threw:', e?.message)
+        return token
       }
-      return token
     },
   },
   pages: {
@@ -55,20 +93,13 @@ export const authOptions = {
   debug: true,
   logger: {
     error(code: string, metadata: any) {
-      // ดึงรายละเอียดแบบเต็ม — JSON.stringify Error object จะตกหล่น
       const err = metadata?.error || metadata
-      const out = {
+      console.error('[NextAuth.error]', JSON.stringify({
         code,
         name: err?.name,
         message: err?.message,
         stack: err?.stack?.toString().slice(0, 600),
-        providerId: metadata?.providerId,
-        meta: typeof metadata === 'object' ? Object.keys(metadata) : null,
-      }
-      console.error('[NextAuth.error]', JSON.stringify(out))
-    },
-    warn(code: string) {
-      console.warn('[NextAuth.warn]', code)
+      }))
     },
   },
 }
