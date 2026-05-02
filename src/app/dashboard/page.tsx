@@ -281,16 +281,11 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Primary CTA: Create Ad */}
-        <button onClick={() => setShowModal(true)} style={{ ...btnPrimary, padding: '12px 14px', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%', marginBottom: 10 }}>
-          <Plus size={16} /> ยิงแอดใหม่
-        </button>
-
         {/* Section label */}
         <div style={{ fontSize: 10, color: MUTED, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.8, padding: '6px 10px 4px' }}>เมนูหลัก</div>
 
         {/* Nav items */}
-        <NavItem icon={<BarChart3 size={15} />} label="แดชบอร์ด" active />
+        <NavItem icon={<BarChart3 size={15} />} label="ยิงแอดเพจ" active />
         <Link href="/dashboard/inbox" style={{ textDecoration: 'none' }}>
           <NavItem icon={<MessageSquare size={15} />} label="กล่องข้อความ" badge={inboxUnread > 0 ? inboxUnread : undefined} />
         </Link>
@@ -360,15 +355,23 @@ export default function Dashboard() {
       </div>
 
       <div className="fb-main" style={{ position: 'relative', zIndex: 1, marginLeft: 244, maxWidth: 1080, padding: '22px 24px 36px', boxSizing: 'border-box' }}>
-        {/* Page title */}
-        <div style={{ marginBottom: 22, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
-          <div>
-            <h1 style={{ fontSize: 24, fontWeight: 900, margin: 0, color: TEXT, letterSpacing: '-0.5px' }}>📊 แดชบอร์ด</h1>
+        {/* Page title + Primary CTA */}
+        <div style={{ marginBottom: 22, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <h1 style={{ fontSize: 26, fontWeight: 900, margin: 0, color: TEXT, letterSpacing: '-0.5px' }}>🚀 ยิงแอดเพจ</h1>
             <p style={{ fontSize: 12, color: MUTED, margin: '4px 0 0', fontWeight: 600 }}>ภาพรวมและจัดการแอด Facebook ของคุณ</p>
           </div>
-          <div style={{ fontSize: 11, color: MUTED, fontWeight: 600, background: SURFACE, padding: '6px 12px', borderRadius: 999, border: `1px solid ${BORDER}`, boxShadow: SHADOW_SM }}>
-            🕒 {new Date().toLocaleDateString('th-TH', { weekday: 'short', day: 'numeric', month: 'short', year: '2-digit' })}
-          </div>
+          <button
+            onClick={() => setShowModal(true)}
+            style={{
+              ...btnPrimary,
+              padding: '14px 26px', fontSize: 15, fontWeight: 800,
+              display: 'flex', alignItems: 'center', gap: 9,
+              flexShrink: 0, letterSpacing: '0.02em',
+            }}
+          >
+            <Plus size={18} strokeWidth={2.5} /> ยิงแอดใหม่
+          </button>
         </div>
 
 

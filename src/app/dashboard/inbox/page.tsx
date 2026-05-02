@@ -343,7 +343,7 @@ export default function InboxPage() {
         <div style={{ fontSize: 10, color: MUTED, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.8, padding: '6px 10px 4px' }}>เมนูหลัก</div>
 
         <Link href="/dashboard" style={{ textDecoration: 'none' }}>
-          <NavItem icon={<BarChart3 size={15} />} label="แดชบอร์ด" />
+          <NavItem icon={<BarChart3 size={15} />} label="ยิงแอดเพจ" />
         </Link>
         <NavItem icon={<MessageSquare size={15} />} label="กล่องข้อความ" active badge={totalUnread} />
         <button onClick={() => setShowSettings(true)} style={{ all: 'unset', display: 'block', cursor: 'pointer' }}>
@@ -373,7 +373,7 @@ export default function InboxPage() {
         </Link>
         <div style={{ flex: 1 }} />
         <Link href="/dashboard" style={{ ...btnGhost, padding: '7px 11px', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5, textDecoration: 'none', color: MUTED } as any}>
-          <BarChart3 size={13} /> แดชบอร์ด
+          <BarChart3 size={13} /> ยิงแอดเพจ
         </Link>
       </div>
 
