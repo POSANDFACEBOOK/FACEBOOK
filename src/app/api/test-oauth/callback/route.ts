@@ -66,8 +66,10 @@ export async function GET(req: Request) {
   }
 
   // Exchange code for token
+  // ใช้ host จาก request โดยตรง (ไม่อ่านจาก cookie ที่อาจ URL-encoded
+  // → ถ้า encoded แล้วส่งเข้า searchParams.set จะ double-encode → FB error 191)
   const origin = `https://${req.headers.get('host')}`
-  const redirectUri = expectedRedirect || `${origin}/api/test-oauth/callback`
+  const redirectUri = `${origin}/api/test-oauth/callback`
 
   steps.push({ step: '3_exchange_code', redirectUri })
 
