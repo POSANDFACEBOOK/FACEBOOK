@@ -90,16 +90,4 @@ export const authOptions = {
   pages: {
     signIn: '/login',
   },
-  debug: true,
-  logger: {
-    error(code: string, metadata: any) {
-      const err = metadata?.error || metadata
-      console.error('[NextAuth.error]', JSON.stringify({
-        code,
-        name: err?.name,
-        message: err?.message,
-        stack: err?.stack?.toString().slice(0, 600),
-      }))
-    },
-  },
 }
