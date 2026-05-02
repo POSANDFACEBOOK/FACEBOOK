@@ -103,4 +103,24 @@ export const authOptions = {
   pages: {
     signIn: '/login',
   },
+  debug: true,
+  events: {
+    async signIn(msg: any) {
+      console.log('[auth.events.signIn]', { provider: msg?.account?.provider, userId: msg?.user?.id || msg?.profile?.id })
+    },
+  },
+  logger: {
+    error(code: string, metadata: any) {
+      const err = metadata?.error || metadata
+      console.error('[NextAuth.error]', JSON.stringify({
+        code,
+        name: err?.name,
+        message: err?.message,
+        stack: err?.stack?.toString().slice(0, 600),
+      }))
+    },
+    warn(code: string) {
+      console.warn('[NextAuth.warn]', code)
+    },
+  },
 }
