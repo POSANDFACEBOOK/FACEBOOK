@@ -97,6 +97,7 @@ export default function InboxPage() {
 
   // UI state
   const [loadingList, setLoadingList] = useState(true)
+  const [pageSyncing, setPageSyncing] = useState(false)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [sending, setSending] = useState(false)
@@ -149,12 +150,13 @@ export default function InboxPage() {
   // Pulls fresh data + ensures every connected page is webhook-subscribed.
   // The webhook then pushes new messages real-time to the DB; the 8s
   // conversation poll surfaces them in the UI.
-  async function backgroundSync() {
+  // ถ้าส่ง pageId เข้ามา → sync เฉพาะเพจนั้น (เร็วกว่า sync ทุกเพจ)
+  async function backgroundSync(pageId?: string) {
     try {
       await fetch('/api/inbox/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: '{}',
+        body: JSON.stringify(pageId ? { pageId } : {}),
       })
     } catch {
       // ignore — next interval will retry
@@ -170,8 +172,16 @@ export default function InboxPage() {
     backgroundSync().then(() => loadConversations())
   }, [])
 
+  // เมื่อ user เปลี่ยนเพจหรือ filter → load จาก DB ก่อน + sync เพจนั้น
+  // ในพื้นหลัง ให้ข้อความขึ้นทันที แม้เพจนั้นยังไม่เคย sync
   useEffect(() => {
     loadConversations()
+    if (pageFilter) {
+      setPageSyncing(true)
+      backgroundSync(pageFilter)
+        .then(() => loadConversations())
+        .finally(() => setPageSyncing(false))
+    }
   }, [pageFilter, statusFilter])
 
   // Poll every 8s for new messages — re-arm when filters change so the poll
@@ -495,18 +505,18 @@ export default function InboxPage() {
 
           {/* List */}
           <div style={{ flex: 1, overflowY: 'auto' }}>
-            {loadingList && conversations.length === 0 ? (
+            {(loadingList || pageSyncing) && conversations.length === 0 ? (
               <div style={{ padding: 40, textAlign: 'center', color: MUTED, fontSize: 12 }}>
                 <RefreshCw size={18} style={{ animation: 'spin 1s linear infinite', marginBottom: 8 }} />
-                <div>กำลังโหลด...</div>
+                <div>{pageSyncing ? 'กำลังดึงแชทจากเพจ...' : 'กำลังโหลด...'}</div>
               </div>
             ) : filteredConvs.length === 0 ? (
               <EmptyState
                 icon={<Inbox size={36} />}
                 title={pages.length === 0 ? 'ยังไม่มีเพจที่เชื่อมต่อ' : 'ยังไม่มีข้อความ'}
                 hint={pages.length === 0
-                  ? 'กลับไปหน้าแดชบอร์ดเพื่อเชื่อมต่อเพจก่อน'
-                  : 'กด "Sync" เพื่อดึงบทสนทนาจาก Facebook'}
+                  ? 'กลับไปหน้ายิงแอดเพจเพื่อเชื่อมต่อเพจก่อน'
+                  : 'เพจนี้ยังไม่มีบทสนทนา หรือลูกค้ายังไม่ได้ทักเข้ามา'}
               />
             ) : (
               filteredConvs.map(c => (
