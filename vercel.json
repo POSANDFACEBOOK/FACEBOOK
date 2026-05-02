@@ -4,5 +4,10 @@
       "path": "/api/cron/sync-performance",
       "schedule": "0 2 * * *"
     }
-  ]
+  ],
+  "functions": {
+    "src/app/api/auth/[...nextauth]/route.ts": {
+      "maxDuration": 30
+    }
+  }
 }
