@@ -26,19 +26,19 @@ const FB_API = 'https://graph.facebook.com/v19.0'
 async function fetchFreshPageTokens(userToken: string): Promise<Map<string, string>> {
   const map = new Map<string, string>()
   try {
-    let url: string | undefined =
+    let nextUrl: string | undefined =
       `${FB_API}/me/accounts?fields=id,access_token&limit=100&access_token=${userToken}`
-    while (url) {
-      const r = await fetch(url)
-      const d = await r.json()
-      if (d.error) {
-        console.error('[sync] /me/accounts failed:', d.error.message)
+    while (nextUrl) {
+      const res: Response = await fetch(nextUrl)
+      const data: any = await res.json()
+      if (data.error) {
+        console.error('[sync] /me/accounts failed:', data.error.message)
         break
       }
-      for (const p of (d.data || [])) {
+      for (const p of (data.data || []) as any[]) {
         if (p.id && p.access_token) map.set(p.id, p.access_token)
       }
-      url = d.paging?.next
+      nextUrl = data.paging?.next
     }
   } catch (e: any) {
     console.error('[sync] fetchFreshPageTokens threw:', e.message)
