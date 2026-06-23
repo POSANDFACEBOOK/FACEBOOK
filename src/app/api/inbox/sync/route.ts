@@ -8,9 +8,8 @@ import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase'
 import { getCurrentUserContext, assertOwner } from '@/lib/team'
 import {
-  listConversations,
-  listMessages,
-  getUserProfile,
+  listConversationsWithMessages,
+  getUserProfilesBatch,
   subscribePageToWebhook,
 } from '@/lib/messenger'
 
@@ -86,218 +85,232 @@ export async function POST(req: Request) {
       return NextResponse.json({ synced: 0, message: 'No pages to sync' })
     }
 
-    // ── Pre-flight: ตรวจ page_access_token ของแต่ละเพจ ──
-    // ถ้าเจอ token หมดอายุ (code 190) → ดึง tokens ใหม่จาก /me/accounts
-    // โดยใช้ user_access_token แล้วอัพเดท DB ก่อน sync
-    let freshTokens: Map<string, string> | null = null
-    for (const page of pages) {
+    // ── Pre-flight: refresh page tokens ที่หมดอายุ (จำกัด 6 เพจพร้อมกัน) ──
+    const tokenChecks: { page: any; invalid: boolean }[] = []
+    await mapLimit(pages, 6, async (page) => {
       try {
-        const r = await fetch(
-          `${FB_API}/me?fields=id&access_token=${page.page_access_token}`
-        )
+        const r = await fetch(`${FB_API}/me?fields=id&access_token=${page.page_access_token}`)
         const d = await r.json()
-        if (d.error?.code === 190) {
-          if (!freshTokens) {
-            console.log('[sync] page tokens invalid → fetching fresh from /me/accounts')
-            freshTokens = await fetchFreshPageTokens(session.accessToken as string)
-          }
-          const newToken = freshTokens.get(page.page_id)
-          if (newToken && newToken !== page.page_access_token) {
-            await sb
-              .from('connected_pages')
-              .update({ page_access_token: newToken })
-              .eq('id', page.id)
-            page.page_access_token = newToken
-            console.log(`[sync] refreshed page_access_token for ${page.page_name}`)
-          }
+        tokenChecks.push({ page, invalid: d?.error?.code === 190 })
+      } catch {
+        tokenChecks.push({ page, invalid: false })
+      }
+    })
+    if (tokenChecks.some(t => t.invalid)) {
+      const fresh = await fetchFreshPageTokens(session.accessToken as string)
+      for (const { page, invalid } of tokenChecks) {
+        if (!invalid) continue
+        const nt = fresh.get(page.page_id)
+        if (nt && nt !== page.page_access_token) {
+          await sb.from('connected_pages').update({ page_access_token: nt }).eq('id', page.id)
+          page.page_access_token = nt
         }
-      } catch {}
+      }
     }
 
-    // ── Subscribe ALL pages to webhook ก่อน (เร็ว ~1 call/เพจ) ──
-    // สำคัญ: ทำทุกเพจก่อน backfill — กันเพจท้ายๆ ไม่ได้ subscribe เพราะ timeout
-    // เพจที่ subscribe แล้วจะได้ข้อความใหม่ผ่าน webhook แบบ real-time แม้ backfill จะข้าม
+    // ── Subscribe webhook ทุกเพจ (จำกัด 6 พร้อมกัน) ──
     const subResults: Record<string, boolean> = {}
-    for (const page of pages) {
+    await mapLimit(pages, 6, async (page) => {
       try {
         const sub = await subscribePageToWebhook(page.page_id, page.page_access_token)
         subResults[page.page_id] = sub.success
         if (!sub.success) console.warn(`[sync] subscribe failed ${page.page_name}: ${sub.error}`)
-      } catch (e: any) {
+      } catch {
         subResults[page.page_id] = false
-        console.warn(`[sync] subscribe threw ${page.page_name}: ${e.message}`)
       }
-    }
+    })
 
-    // ── หมุนลำดับ backfill ไม่ให้เพจเดิมโดนข้ามทุกรอบ ──
-    // ใช้ minute ปัจจุบันเป็น offset → แต่ละรอบเพจนำต่างกัน
-    if (pages.length > 1) {
-      const offset = new Date().getMinutes() % pages.length
-      pages.push(...pages.splice(0, offset))
-    }
-
+    // ── Sync เพจแบบจำกัด concurrency (4 เพจพร้อมกัน) ──
+    // กัน burst ชน FB app-level rate limit / DB pool / maxDuration เมื่อเพจเยอะ
     const summary: any[] = []
-    const startTime = Date.now()
-    const MAX_DURATION_MS = 50 * 1000  // เผื่อ 10s ก่อน Vercel timeout 60s
-
-    for (const page of pages) {
-      const pageResult: any = {
-        page_id: page.page_id,
-        page_name: page.page_name,
-        conversations: 0,
-        messages: 0,
-        webhook_subscribed: subResults[page.page_id] ?? false,
-        errors: [] as string[],
-      }
-
-      // กัน timeout — เพจที่เหลือยัง subscribe webhook แล้ว จะได้ข้อความใหม่อยู่ดี
-      // backfill ข้อความเก่าจะตามมาในรอบ sync ถัดไป (ลำดับหมุนแล้ว)
-      if (Date.now() - startTime > MAX_DURATION_MS) {
-        pageResult.skipped = 'timeout — backfill รอบหน้า (webhook ทำงานแล้ว)'
-        summary.push(pageResult)
-        continue
-      }
-
-      // Fetch conversations (ดึงล่าสุดพอประมาณ — ที่เหลือมาทาง webhook)
-      try {
-        const fbConvs = await listConversations(page.page_id, page.page_access_token, 40, 2)
-        console.log(`[sync] ${page.page_name}: fetched ${fbConvs.length} conversations from FB`)
-
-        for (const fbConv of fbConvs) {
-          // กัน timeout ใน loop
-          if (Date.now() - startTime > MAX_DURATION_MS) {
-            pageResult.errors.push('partial: timeout protection')
-            break
-          }
-          // หา PSID ลูกค้า (participant ที่ไม่ใช่ page)
-          const customer = (fbConv.participants?.data || []).find(p => p.id !== page.page_id)
-          if (!customer) continue
-
-          const customerPsid = customer.id
-
-          // Upsert conversation
-          let { data: localConv } = await sb
-            .from('conversations')
-            .select('id, customer_picture')
-            .eq('fb_page_id', page.page_id)
-            .eq('fb_psid', customerPsid)
-            .single()
-
-          let convId: string
-
-          if (!localConv) {
-            const profile = await getUserProfile(customerPsid, page.page_access_token)
-            const { data: newConv } = await sb
-              .from('conversations')
-              .insert({
-                user_id: userId,
-                page_id: page.id,
-                fb_page_id: page.page_id,
-                fb_conversation_id: fbConv.id,
-                fb_psid: customerPsid,
-                customer_name: customer.name || profile?.name || 'ลูกค้า',
-                customer_picture: profile?.profile_pic,
-                last_message: fbConv.snippet || '',
-                last_message_at: fbConv.updated_time,
-                last_sender: 'customer',
-                unread_count: fbConv.unread_count || 0,
-              })
-              .select('id')
-              .single()
-            if (!newConv) continue
-            convId = newConv.id
-            pageResult.conversations++
-          } else {
-            convId = localConv.id
-            await sb
-              .from('conversations')
-              .update({
-                fb_conversation_id: fbConv.id,
-                last_message: fbConv.snippet || '',
-                last_message_at: fbConv.updated_time,
-                unread_count: fbConv.unread_count || 0,
-              })
-              .eq('id', convId)
-          }
-
-          // Fetch messages — แค่ 10 ล่าสุด (ลด workload)
-          // ข้อความเก่าจะมาเองผ่าน webhook real-time แล้ว
-          try {
-            const fbMsgs = await listMessages(fbConv.id, page.page_access_token, 10, 1)
-            for (const m of fbMsgs) {
-              const isFromPage = m.from?.id === page.page_id
-              const messageText = m.message || null
-              const attachments = (() => {
-                const list: any[] = []
-                // 1) Sticker — FB เก็บ URL ใน field "sticker" แยกจาก attachments
-                if ((m as any).sticker) {
-                  list.push({ type: 'image', url: (m as any).sticker, name: 'sticker' })
-                }
-                // 2) Shares (link ที่ลูกค้าส่งมา)
-                for (const s of ((m as any).shares?.data || []) as any[]) {
-                  if (s.link) list.push({ type: 'file', url: s.link, name: s.description || 'ลิงก์' })
-                }
-                // 3) attachments — รองรับทุก field
-                for (const a of ((m as any).attachments?.data || []) as any[]) {
-                  const url = a.image_data?.url
-                    || a.file_url
-                    || a.video_data?.url
-                    || a.audio_data?.url
-                    || a.payload?.url
-                  const isImage = a.mime_type?.startsWith('image/')
-                    || !!a.image_data
-                    || a.type === 'image'
-                  list.push({
-                    type: isImage ? 'image' : 'file',
-                    url,
-                    name: a.name || (isImage ? 'รูปภาพ' : 'ไฟล์แนบ'),
-                  })
-                }
-                return list
-              })()
-
-              // Insert ใหม่ (skip ถ้ามี — กัน duplicate)
-              await sb
-                .from('inbox_messages')
-                .upsert(
-                  {
-                    conversation_id: convId,
-                    fb_message_id: m.id,
-                    fb_sender_id: m.from?.id || 'unknown',
-                    direction: isFromPage ? 'outbound' : 'inbound',
-                    message_text: messageText,
-                    attachments,
-                    sent_by: isFromPage ? 'page_user' : 'customer',
-                    delivery_status: 'delivered',
-                    created_at: m.created_time,
-                  },
-                  { onConflict: 'fb_message_id', ignoreDuplicates: true }
-                )
-
-              // Update FB-sourced fields เสมอ (กรณี record อยู่แล้วแต่
-              // attachments/text ยังว่าง เพราะ sync ก่อนหน้านี้ยังไม่มี
-              // logic ดึง sticker / shares — จะเติมข้อมูลให้ครบ)
-              if (messageText || attachments.length > 0) {
-                await sb
-                  .from('inbox_messages')
-                  .update({ message_text: messageText, attachments })
-                  .eq('fb_message_id', m.id)
-              }
-              pageResult.messages++
-            }
-          } catch (e: any) {
-            pageResult.errors.push(`Messages for ${customerPsid}: ${e.message}`)
-          }
-        }
-      } catch (e: any) {
-        pageResult.errors.push(`Conversations: ${e.message}`)
-      }
-
-      summary.push(pageResult)
-    }
+    await mapLimit(pages, 4, async (page) => {
+      const r = await syncOnePage(sb, userId, page, subResults[page.page_id] ?? false)
+      summary.push(r)
+    })
 
     return NextResponse.json({ success: true, summary })
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 })
   }
+}
+
+// ── จำกัด concurrency ของงาน async ──
+async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let idx = 0
+  const n = Math.min(limit, items.length)
+  await Promise.all(Array.from({ length: n }, async () => {
+    while (idx < items.length) {
+      const cur = idx++
+      await fn(items[cur])
+    }
+  }))
+}
+
+// ── parse attachments จาก FB message → รูปแบบที่เก็บใน DB (ข้าม entry ที่ไม่มี url) ──
+function parseMsgAttachments(m: any): any[] {
+  const list: any[] = []
+  if (m.sticker) list.push({ type: 'image', url: m.sticker, name: 'sticker' })
+  for (const s of (m.shares?.data || []) as any[]) {
+    if (s.link) list.push({ type: 'file', url: s.link, name: s.description || 'ลิงก์' })
+  }
+  for (const a of (m.attachments?.data || []) as any[]) {
+    const url = a.image_data?.url || a.file_url || a.video_data?.url || a.audio_data?.url || a.payload?.url
+    if (!url) continue  // ไม่มี url → ข้าม เพื่อให้ row เหลือ [] แล้ว repair จับได้
+    const isImage = a.mime_type?.startsWith('image/') || !!a.image_data || a.type === 'image'
+    list.push({ type: isImage ? 'image' : 'file', url, name: a.name || (isImage ? 'รูปภาพ' : 'ไฟล์แนบ') })
+  }
+  return list
+}
+
+// หาข้อความใหม่สุดใน conversation → ใช้ตัดสิน last_sender
+function newestMessage(conv: any): any | null {
+  const msgs = (conv.messages?.data || []) as any[]
+  let newest: any = null
+  for (const m of msgs) {
+    if (!newest || new Date(m.created_time).getTime() > new Date(newest.created_time).getTime()) newest = m
+  }
+  return newest
+}
+
+// ── Sync เพจเดียว: ดึง conversations+messages inline (1 call) + bulk upsert ──
+async function syncOnePage(sb: any, userId: string, page: any, subscribed: boolean) {
+  const pageResult: any = {
+    page_id: page.page_id,
+    page_name: page.page_name,
+    conversations: 0,
+    messages: 0,
+    webhook_subscribed: subscribed,
+    errors: [] as string[],
+  }
+  try {
+    const fbConvs = await listConversationsWithMessages(page.page_id, page.page_access_token, 40, 15, 2)
+
+    // จับคู่ conv กับลูกค้า + dedupe ตาม psid (เก็บอันที่ใหม่สุด) กัน insert ชนกันเองในรอบเดียว
+    const byPsid = new Map<string, { conv: any; customer: any }>()
+    for (const c of fbConvs) {
+      const customer = (c.participants?.data || []).find((p: any) => p.id !== page.page_id)
+      if (!customer) continue
+      const prev = byPsid.get(customer.id)
+      if (!prev || new Date(c.updated_time).getTime() > new Date(prev.conv.updated_time).getTime()) {
+        byPsid.set(customer.id, { conv: c, customer })
+      }
+    }
+    const convCustomers = Array.from(byPsid.values())
+    const psids = convCustomers.map(x => x.customer.id)
+
+    // หา conv ที่มีอยู่แล้ว (id + last_message_at) ในครั้งเดียว
+    const existing = new Map<string, { id: string; lastAt: string | null }>()
+    if (psids.length > 0) {
+      const { data: rows } = await sb
+        .from('conversations')
+        .select('id, fb_psid, last_message_at')
+        .eq('fb_page_id', page.page_id)
+        .in('fb_psid', psids)
+      for (const r of (rows || []) as any[]) existing.set(r.fb_psid, { id: r.id, lastAt: r.last_message_at })
+    }
+
+    // ดึงโปรไฟล์เฉพาะ conv ใหม่ แบบ batch (1 call/เพจ แทน N)
+    const newPsids = psids.filter(p => !existing.has(p))
+    const profiles = newPsids.length > 0
+      ? await getUserProfilesBatch(newPsids, page.page_access_token)
+      : new Map<string, { name?: string; profile_pic?: string }>()
+
+    const msgRows: any[] = []
+
+    await mapLimit(convCustomers, 8, async ({ conv, customer }) => {
+      const psid = customer.id
+      const newest = newestMessage(conv)
+      const lastSender: 'page' | 'customer' = newest
+        ? (newest.from?.id === page.page_id ? 'page' : 'customer')
+        : 'customer'
+      const lastMsg = conv.snippet || newest?.message || ''
+
+      const known = existing.get(psid)
+      let convId = known?.id
+      if (!convId) {
+        // upsert (กัน race กับ webhook ที่อาจ insert แทรก) — คืน id เสมอ
+        const profile = profiles.get(psid)
+        const { data: up, error: upErr } = await sb
+          .from('conversations')
+          .upsert(
+            {
+              user_id: userId,
+              page_id: page.id,
+              fb_page_id: page.page_id,
+              fb_conversation_id: conv.id,
+              fb_psid: psid,
+              customer_name: customer.name || profile?.name || 'ลูกค้า',
+              customer_picture: profile?.profile_pic,
+              last_message: lastMsg,
+              last_message_at: conv.updated_time,
+              last_sender: lastSender,
+              unread_count: conv.unread_count || 0,
+            },
+            { onConflict: 'fb_page_id,fb_psid' },
+          )
+          .select('id')
+          .single()
+        if (upErr || !up) {
+          // เผื่อ upsert คืน null (เช่น RLS) → ลอง select กลับ
+          const { data: re } = await sb
+            .from('conversations')
+            .select('id')
+            .eq('fb_page_id', page.page_id)
+            .eq('fb_psid', psid)
+            .single()
+          if (!re) { pageResult.errors.push(`conv ${psid}: ${upErr?.message || 'no id'}`); return }
+          convId = re.id as string
+        } else {
+          convId = up.id as string
+          pageResult.conversations++
+        }
+        existing.set(psid, { id: convId, lastAt: conv.updated_time })
+      } else {
+        // อัปเดตเฉพาะเมื่อ FB มีข้อมูลใหม่กว่า — กันเขียนทับ webhook/สถานะอ่านแล้ว
+        const fbNewer = !known?.lastAt || new Date(conv.updated_time).getTime() > new Date(known.lastAt).getTime()
+        if (fbNewer) {
+          await sb
+            .from('conversations')
+            .update({
+              fb_conversation_id: conv.id,
+              last_message: lastMsg,
+              last_message_at: conv.updated_time,
+              last_sender: lastSender,
+              unread_count: conv.unread_count || 0,
+            })
+            .eq('id', convId)
+        }
+      }
+
+      for (const m of (conv.messages?.data || []) as any[]) {
+        if (!m.from?.id) continue  // system message ไม่มี from → ข้าม
+        const isFromPage = m.from.id === page.page_id
+        msgRows.push({
+          conversation_id: convId,
+          fb_message_id: m.id,
+          fb_sender_id: m.from.id,
+          direction: isFromPage ? 'outbound' : 'inbound',
+          message_text: m.message || null,
+          attachments: parseMsgAttachments(m),
+          sent_by: isFromPage ? 'page_user' : 'customer',
+          delivery_status: 'delivered',
+          created_at: m.created_time,
+        })
+      }
+    })
+
+    // Bulk upsert ข้อความทั้งเพจ (insert ใหม่เท่านั้น; ของเก่าให้ repair เติม)
+    let inserted = 0
+    for (let i = 0; i < msgRows.length; i += 500) {
+      const { error } = await sb
+        .from('inbox_messages')
+        .upsert(msgRows.slice(i, i + 500), { onConflict: 'fb_message_id', ignoreDuplicates: true })
+      if (error) pageResult.errors.push(`upsert batch ${i}: ${error.message}`)
+      else inserted += Math.min(500, msgRows.length - i)
+    }
+    pageResult.messages = inserted
+  } catch (e: any) {
+    pageResult.errors.push(`Sync: ${e?.message || e}`)
+  }
+  return pageResult
 }
