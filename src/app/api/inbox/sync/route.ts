@@ -114,32 +114,53 @@ export async function POST(req: Request) {
       } catch {}
     }
 
+    // ── Subscribe ALL pages to webhook ก่อน (เร็ว ~1 call/เพจ) ──
+    // สำคัญ: ทำทุกเพจก่อน backfill — กันเพจท้ายๆ ไม่ได้ subscribe เพราะ timeout
+    // เพจที่ subscribe แล้วจะได้ข้อความใหม่ผ่าน webhook แบบ real-time แม้ backfill จะข้าม
+    const subResults: Record<string, boolean> = {}
+    for (const page of pages) {
+      try {
+        const sub = await subscribePageToWebhook(page.page_id, page.page_access_token)
+        subResults[page.page_id] = sub.success
+        if (!sub.success) console.warn(`[sync] subscribe failed ${page.page_name}: ${sub.error}`)
+      } catch (e: any) {
+        subResults[page.page_id] = false
+        console.warn(`[sync] subscribe threw ${page.page_name}: ${e.message}`)
+      }
+    }
+
+    // ── หมุนลำดับ backfill ไม่ให้เพจเดิมโดนข้ามทุกรอบ ──
+    // ใช้ minute ปัจจุบันเป็น offset → แต่ละรอบเพจนำต่างกัน
+    if (pages.length > 1) {
+      const offset = new Date().getMinutes() % pages.length
+      pages.push(...pages.splice(0, offset))
+    }
+
     const summary: any[] = []
     const startTime = Date.now()
     const MAX_DURATION_MS = 50 * 1000  // เผื่อ 10s ก่อน Vercel timeout 60s
 
     for (const page of pages) {
-      // กัน timeout — ถ้าใช้เวลามากแล้ว break ออก ที่เหลือทำใน sync รอบหน้า
-      if (Date.now() - startTime > MAX_DURATION_MS) {
-        summary.push({ page_name: page.page_name, skipped: 'timeout protection' })
-        continue
-      }
       const pageResult: any = {
         page_id: page.page_id,
         page_name: page.page_name,
         conversations: 0,
         messages: 0,
+        webhook_subscribed: subResults[page.page_id] ?? false,
         errors: [] as string[],
       }
 
-      // Subscribe to webhook (idempotent)
-      const sub = await subscribePageToWebhook(page.page_id, page.page_access_token)
-      pageResult.webhook_subscribed = sub.success
-      if (!sub.success && sub.error) pageResult.errors.push(`Subscribe: ${sub.error}`)
+      // กัน timeout — เพจที่เหลือยัง subscribe webhook แล้ว จะได้ข้อความใหม่อยู่ดี
+      // backfill ข้อความเก่าจะตามมาในรอบ sync ถัดไป (ลำดับหมุนแล้ว)
+      if (Date.now() - startTime > MAX_DURATION_MS) {
+        pageResult.skipped = 'timeout — backfill รอบหน้า (webhook ทำงานแล้ว)'
+        summary.push(pageResult)
+        continue
+      }
 
-      // Fetch conversations (with pagination — รองรับเพจที่มีลูกค้าเยอะ)
+      // Fetch conversations (ดึงล่าสุดพอประมาณ — ที่เหลือมาทาง webhook)
       try {
-        const fbConvs = await listConversations(page.page_id, page.page_access_token, 50, 5)
+        const fbConvs = await listConversations(page.page_id, page.page_access_token, 40, 2)
         console.log(`[sync] ${page.page_name}: fetched ${fbConvs.length} conversations from FB`)
 
         for (const fbConv of fbConvs) {
