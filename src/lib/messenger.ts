@@ -198,6 +198,75 @@ export async function listMessages(
   return all
 }
 
+export interface FBConversationWithMessages extends FBConversation {
+  messages?: { data: FBMessage[] }
+}
+
+/**
+ * ดึง conversations พร้อมข้อความล่าสุด inline ในครั้งเดียว (เลี่ยง N+1)
+ * ใช้ field expansion ของ Graph API — 1 call/เพจ แทน 1 + N calls
+ */
+export async function listConversationsWithMessages(
+  pageId: string,
+  pageToken: string,
+  convLimit = 40,
+  msgLimit = 15,
+  maxPages = 2,
+): Promise<FBConversationWithMessages[]> {
+  const msgFields =
+    'id,created_time,from,to,message,sticker,shares,attachments{id,mime_type,name,type,image_data,file_url,video_data,audio_data,payload}'
+  const fields = `id,updated_time,unread_count,snippet,participants,messages.limit(${msgLimit}){${msgFields}}`
+  // encode field expansion ({} () ,) อย่างถูกต้องข้าม environment
+  const qs = new URLSearchParams({ fields, limit: String(convLimit), access_token: pageToken })
+  const all: FBConversationWithMessages[] = []
+  let url: string | undefined = `${FB_API}/${pageId}/conversations?${qs.toString()}`
+  let pages = 0
+  while (url && pages < maxPages) {
+    const res: Response = await fetch(url)
+    const data: any = await res.json()
+    if (data.error) throw new Error(data.error.message)
+    all.push(...((data.data || []) as FBConversationWithMessages[]))
+    url = data.paging?.next
+    pages++
+  }
+  return all
+}
+
+/**
+ * ดึงโปรไฟล์ลูกค้าหลายคนในครั้งเดียว (Graph batch by ?ids=) — เลี่ยง N+1
+ * คืน Map<psid, {name, profile_pic}> (เฉพาะที่ดึงได้)
+ */
+export async function getUserProfilesBatch(
+  psids: string[],
+  pageToken: string,
+): Promise<Map<string, { name?: string; profile_pic?: string }>> {
+  const out = new Map<string, { name?: string; profile_pic?: string }>()
+  const unique = Array.from(new Set(psids.filter(Boolean)))
+  for (let i = 0; i < unique.length; i += 50) {
+    const chunk = unique.slice(i, i + 50)
+    try {
+      const qs = new URLSearchParams({
+        ids: chunk.join(','),
+        fields: 'name,first_name,last_name,profile_pic',
+        access_token: pageToken,
+      })
+      const res = await fetch(`${FB_API}/?${qs.toString()}`)
+      const data: any = await res.json()
+      if (data.error) continue
+      for (const psid of chunk) {
+        const d = data[psid]
+        if (d && !d.error) {
+          out.set(psid, {
+            name: d.name || `${d.first_name || ''} ${d.last_name || ''}`.trim() || undefined,
+            profile_pic: d.profile_pic,
+          })
+        }
+      }
+    } catch {}
+  }
+  return out
+}
+
 /** ดึงข้อมูล user (ลูกค้า) จาก PSID — ได้ name + profile pic */
 export async function getUserProfile(
   psid: string,
