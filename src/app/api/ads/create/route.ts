@@ -12,7 +12,7 @@ export async function POST(req: Request) {
   try {
     // ── 1. Auth ───────────────────────────────────────────────
     const session = await getServerSession(authOptions)
-    if (!session?.accessToken) {
+    if (!session) {
       return NextResponse.json({ error: 'กรุณา Login ก่อน' }, { status: 401 })
     }
     const userToken = session.accessToken as string

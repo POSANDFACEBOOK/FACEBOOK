@@ -1,11 +1,15 @@
 // Team / Roles helper
 // ─────────────────────────────────────────────────────────────
-// ทุก API route ใช้ getCurrentUserContext() ครั้งเดียวต้นทาง
+// ทุก API route ใช้ getCurrentUserContext(session) ครั้งเดียวต้นทาง
 // แทนการใช้ getUserIdFromFbToken + .eq('user_id', userId) แบบเดี่ยวๆ
 //
 // page_members.role: 'owner' | 'agent'
 // - owner = เจ้าของ workspace (เชื่อมเพจ, ยิงแอด, จัดการทีม, ตอบแชท)
 // - agent = ลูกทีม (เฉพาะตอบแชท + ใช้ AI/quick replies ของ owner)
+//
+// Auth methods รองรับ 2 แบบ:
+// - facebook: session.accessToken + session.fbUserId → users.facebook_id
+// - credentials: session.userId → users.id (สำหรับ agent ที่ใช้ email+password)
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { supabaseAdmin, getUserIdFromFbToken } from './supabase'
@@ -23,6 +27,8 @@ export interface UserContext {
   userId: string
   /** Facebook ID ของผู้ใช้ที่ login (ถ้ารู้) */
   fbUserId: string | null
+  /** Auth method ที่ใช้ login */
+  authMethod: 'facebook' | 'credentials'
   memberships: Membership[]
   /** Set page_id ที่ user เป็น owner */
   ownedPageIds: Set<string>
@@ -35,15 +41,28 @@ export interface UserContext {
 }
 
 /**
- * โหลด context หลักจาก FB access token + fbUserId hint
+ * โหลด context หลักจาก NextAuth session
  * - returns null ถ้าหา user ไม่เจอ
- * - เรียกครั้งเดียวต้นทางใน route handler แล้วส่งต่อให้ logic
+ * - รองรับทั้ง facebook session (session.accessToken) และ credentials session (session.userId)
  */
-export async function getCurrentUserContext(
-  accessToken: string,
-  fbIdHint?: string | null,
-): Promise<UserContext | null> {
-  const userId = await getUserIdFromFbToken(accessToken, fbIdHint)
+export async function getCurrentUserContext(session: any): Promise<UserContext | null> {
+  if (!session) return null
+
+  let userId: string | null = null
+  let authMethod: 'facebook' | 'credentials' = 'facebook'
+  let fbUserId: string | null = null
+
+  if (session.userId) {
+    // Credentials path — userId เก็บใน JWT ตอน sign in
+    userId = String(session.userId)
+    authMethod = 'credentials'
+  } else if (session.accessToken) {
+    // Facebook OAuth path
+    authMethod = 'facebook'
+    fbUserId = (session.fbUserId as string | undefined) || null
+    userId = await getUserIdFromFbToken(session.accessToken as string, fbUserId)
+  }
+
   if (!userId) return null
 
   const sb = supabaseAdmin()
@@ -63,7 +82,8 @@ export async function getCurrentUserContext(
 
   return {
     userId,
-    fbUserId: fbIdHint || null,
+    fbUserId,
+    authMethod,
     memberships,
     ownedPageIds,
     accessiblePageIds,

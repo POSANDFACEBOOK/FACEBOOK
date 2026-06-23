@@ -19,10 +19,10 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions)
-  if (!session?.accessToken) {
+  if (!session) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
-  const ctx = await getCurrentUserContext(session.accessToken as string, (session as any).fbUserId)
+  const ctx = await getCurrentUserContext(session)
   if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const og = assertOwner(ctx)

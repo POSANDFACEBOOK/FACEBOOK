@@ -11,7 +11,7 @@ const FB = 'https://graph.facebook.com/v19.0'
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions)
-    if (!session?.accessToken) {
+    if (!session) {
       return NextResponse.json({ error: 'กรุณา Login ก่อน' }, { status: 401 })
     }
     const userToken = session.accessToken as string

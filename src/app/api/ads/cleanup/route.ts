@@ -10,7 +10,7 @@ const FB = 'https://graph.facebook.com/v19.0'
 export async function POST() {
   try {
     const session = await getServerSession(authOptions)
-    if (!session?.accessToken) {
+    if (!session) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
     const userToken = session.accessToken as string
@@ -146,7 +146,7 @@ export async function POST() {
 export async function GET() {
   try {
     const session = await getServerSession(authOptions)
-    if (!session?.accessToken) {
+    if (!session) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
     const userToken = session.accessToken as string

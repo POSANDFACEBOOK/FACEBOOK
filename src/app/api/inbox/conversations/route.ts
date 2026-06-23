@@ -11,11 +11,11 @@ export const dynamic = 'force-dynamic'
 export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions)
-    if (!session?.accessToken) {
+    if (!session) {
       return NextResponse.json({ conversations: [], pages: [] })
     }
 
-    const ctx = await getCurrentUserContext(session.accessToken as string, (session as any).fbUserId)
+    const ctx = await getCurrentUserContext(session)
     if (!ctx) return NextResponse.json({ conversations: [], pages: [] })
 
     const accessible = Array.from(ctx.accessiblePageIds)

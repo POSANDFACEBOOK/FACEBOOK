@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import Link from 'next/link'
-import { ArrowLeft, UserPlus, Trash2, Copy, Check, Users, X, ExternalLink, Link2, Clock } from 'lucide-react'
+import { ArrowLeft, UserPlus, Trash2, Copy, Check, Users, X, ExternalLink, Link2, Clock, Mail, Key, RefreshCw } from 'lucide-react'
 
 const BG = '#eef2ff', SURFACE = '#ffffff', SURFACE2 = '#f5f7ff'
 const BORDER = 'rgba(99,102,241,0.13)'
@@ -27,6 +27,9 @@ type Invitation = {
   pages: { page_name: string; page_picture: string | null }[]
   acceptedUser: { name: string; image: string | null } | null
   created_at: string
+  auth_method: 'facebook' | 'credentials'
+  invitee_email: string | null
+  invitee_name: string | null
 }
 
 export default function TeamPage() {
@@ -257,7 +260,8 @@ export default function TeamPage() {
 
 function InviteRow({ inv, origin, onRevoke }: { inv: Invitation; origin: string; onRevoke: () => void }) {
   const [copied, setCopied] = useState(false)
-  const url = `${origin}/invite/${inv.token}`
+  const isCredentials = inv.auth_method === 'credentials'
+  const copyTarget = isCredentials ? (inv.invitee_email || '') : `${origin}/invite/${inv.token}`
 
   const statusColor =
     inv.status === 'pending' ? YELLOW
@@ -276,9 +280,9 @@ function InviteRow({ inv, origin, onRevoke }: { inv: Invitation; origin: string;
     revoked: 'ยกเลิกแล้ว',
   }
 
-  async function copyLink() {
+  async function copyAction() {
     try {
-      await navigator.clipboard.writeText(url)
+      await navigator.clipboard.writeText(copyTarget)
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     } catch {
@@ -290,15 +294,30 @@ function InviteRow({ inv, origin, onRevoke }: { inv: Invitation; origin: string;
     <div style={{ background: SURFACE2, border: `1px solid ${BORDER}`, borderRadius: 14, padding: '12px 14px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 220 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
             <span style={{ padding: '3px 9px', background: statusBg, color: statusColor, fontWeight: 800, borderRadius: 7, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.5, display: 'flex', alignItems: 'center', gap: 4 }}>
               <Clock size={10} /> {statusText[inv.status]}
+            </span>
+            <span style={{
+              padding: '3px 9px',
+              background: isCredentials ? '#dbeafe' : '#fce7f3',
+              color: isCredentials ? '#1d4ed8' : '#be185d',
+              fontWeight: 800, borderRadius: 7, fontSize: 10,
+              textTransform: 'uppercase', letterSpacing: 0.5,
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+            }}>
+              {isCredentials ? <><Mail size={10} /> Email</> : <><Link2 size={10} /> FB Link</>}
             </span>
             <span style={{ fontSize: 11, color: MUTED, fontWeight: 600 }}>
               {inv.status === 'pending' ? `หมดอายุ ${new Date(inv.expires_at).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' })}` : ''}
               {inv.status === 'accepted' && inv.acceptedUser ? `รับโดย ${inv.acceptedUser.name}` : ''}
             </span>
           </div>
+          {isCredentials && (inv.invitee_name || inv.invitee_email) && (
+            <div style={{ fontSize: 12, color: TEXT, fontWeight: 700, marginBottom: 4 }}>
+              👤 {inv.invitee_name || '—'} <span style={{ color: MUTED, fontWeight: 500 }}>· {inv.invitee_email}</span>
+            </div>
+          )}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
             {inv.pages.map((p, i) => (
               <span key={i} style={{
@@ -321,18 +340,20 @@ function InviteRow({ inv, origin, onRevoke }: { inv: Invitation; origin: string;
         </div>
         {inv.status === 'pending' && (
           <div style={{ display: 'flex', gap: 6 }}>
-            <button
-              onClick={copyLink}
-              style={{
-                padding: '8px 12px', fontSize: 11, fontWeight: 800,
-                background: copied ? GREEN_L : PRIMARY_LIGHT,
-                color: copied ? GREEN : PRIMARY, border: `1px solid ${copied ? 'rgba(5,150,105,0.2)' : BORDER}`,
-                borderRadius: 9, cursor: 'pointer', fontFamily: 'inherit',
-                display: 'flex', alignItems: 'center', gap: 5,
-              }}
-            >
-              {copied ? (<><Check size={12} /> คัดลอกแล้ว</>) : (<><Copy size={12} /> คัดลอกลิงก์</>)}
-            </button>
+            {!isCredentials && (
+              <button
+                onClick={copyAction}
+                style={{
+                  padding: '8px 12px', fontSize: 11, fontWeight: 800,
+                  background: copied ? GREEN_L : PRIMARY_LIGHT,
+                  color: copied ? GREEN : PRIMARY, border: `1px solid ${copied ? 'rgba(5,150,105,0.2)' : BORDER}`,
+                  borderRadius: 9, cursor: 'pointer', fontFamily: 'inherit',
+                  display: 'flex', alignItems: 'center', gap: 5,
+                }}
+              >
+                {copied ? (<><Check size={12} /> คัดลอกแล้ว</>) : (<><Copy size={12} /> คัดลอกลิงก์</>)}
+              </button>
+            )}
             <button
               onClick={onRevoke}
               style={{
@@ -351,46 +372,93 @@ function InviteRow({ inv, origin, onRevoke }: { inv: Invitation; origin: string;
   )
 }
 
+type InviteResult =
+  | { authMethod: 'facebook'; url: string; expiresAt: string }
+  | { authMethod: 'credentials'; loginUrl: string; email: string; password: string; expiresAt: string }
+
 function InviteModal({ pages, origin, onClose }: { pages: Page[]; origin: string; onClose: () => void }) {
+  const [authMethod, setAuthMethod] = useState<'credentials' | 'facebook'>('credentials')
+  const [inviteeEmail, setInviteeEmail] = useState('')
+  const [inviteeName, setInviteeName] = useState('')
   const [selected, setSelected] = useState<string[]>([])
   const [note, setNote] = useState('')
   const [creating, setCreating] = useState(false)
-  const [result, setResult] = useState<{ url: string; expiresAt: string } | null>(null)
-  const [copied, setCopied] = useState(false)
+  const [result, setResult] = useState<InviteResult | null>(null)
+  const [copiedField, setCopiedField] = useState<string | null>(null)
 
   function toggle(id: string) {
     setSelected(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id])
   }
 
+  const canSubmit =
+    selected.length > 0 &&
+    !creating &&
+    (authMethod === 'facebook' ||
+      (authMethod === 'credentials' && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(inviteeEmail.trim()) && inviteeName.trim().length > 0))
+
   async function create() {
-    if (selected.length === 0 || creating) return
+    if (!canSubmit) return
     setCreating(true)
     try {
+      const body: any = {
+        pageIds: selected,
+        note: note.trim() || undefined,
+        authMethod,
+      }
+      if (authMethod === 'credentials') {
+        body.inviteeEmail = inviteeEmail.trim()
+        body.inviteeName = inviteeName.trim()
+      }
       const res = await fetch('/api/team/invite', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pageIds: selected, note: note.trim() || undefined }),
+        body: JSON.stringify(body),
       })
       const data = await res.json()
       if (!res.ok || !data.success) {
         alert('สร้างคำเชิญไม่สำเร็จ: ' + (data.error || 'unknown'))
         return
       }
-      setResult({
-        url: `${origin}${data.url}`,
-        expiresAt: data.invitation.expires_at,
-      })
+      if (data.credentials) {
+        setResult({
+          authMethod: 'credentials',
+          loginUrl: `${origin}${data.credentials.loginUrl}`,
+          email: data.credentials.email,
+          password: data.credentials.password,
+          expiresAt: data.invitation.expires_at,
+        })
+      } else {
+        setResult({
+          authMethod: 'facebook',
+          url: `${origin}${data.url}`,
+          expiresAt: data.invitation.expires_at,
+        })
+      }
     } finally {
       setCreating(false)
     }
   }
 
-  async function copyLink() {
-    if (!result) return
+  async function copyField(field: string, value: string) {
     try {
-      await navigator.clipboard.writeText(result.url)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
+      await navigator.clipboard.writeText(value)
+      setCopiedField(field)
+      setTimeout(() => setCopiedField(null), 1500)
+    } catch {}
+  }
+
+  async function copyAllCredentials() {
+    if (result?.authMethod !== 'credentials') return
+    const text = `🔑 บัญชีเข้าใช้งานระบบตอบแชท
+URL: ${result.loginUrl}
+Email: ${result.email}
+รหัสผ่าน: ${result.password}
+
+(คำเชิญหมดอายุ ${new Date(result.expiresAt).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' })})`
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedField('all')
+      setTimeout(() => setCopiedField(null), 1500)
     } catch {}
   }
 
@@ -401,7 +469,7 @@ function InviteModal({ pages, origin, onClose }: { pages: Page[]; origin: string
       backdropFilter: 'blur(6px)',
     }}>
       <div onClick={e => e.stopPropagation()} style={{
-        background: SURFACE, borderRadius: 22, padding: 28, width: '100%', maxWidth: 480,
+        background: SURFACE, borderRadius: 22, padding: 28, width: '100%', maxWidth: 500,
         maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 24px 80px rgba(15,23,42,0.3)',
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
@@ -415,7 +483,89 @@ function InviteModal({ pages, origin, onClose }: { pages: Page[]; origin: string
 
         {!result ? (
           <>
+            {/* Method toggle */}
             <div style={{ marginBottom: 16 }}>
+              <label style={{ fontSize: 12, fontWeight: 800, color: TEXT, display: 'block', marginBottom: 8 }}>
+                วิธีให้แอดมิน login
+              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                <button
+                  onClick={() => setAuthMethod('credentials')}
+                  style={{
+                    padding: '12px 10px', fontSize: 12, fontWeight: 800,
+                    background: authMethod === 'credentials' ? PRIMARY_LIGHT : SURFACE2,
+                    color: authMethod === 'credentials' ? PRIMARY : MUTED,
+                    border: `1.5px solid ${authMethod === 'credentials' ? 'rgba(99,102,241,0.4)' : BORDER}`,
+                    borderRadius: 10, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                    <Mail size={13} /> Email + รหัสผ่าน
+                  </div>
+                  <div style={{ fontSize: 10, color: MUTED, fontWeight: 600 }}>
+                    แอดมินไม่ต้องมี FB account
+                  </div>
+                </button>
+                <button
+                  onClick={() => setAuthMethod('facebook')}
+                  style={{
+                    padding: '12px 10px', fontSize: 12, fontWeight: 800,
+                    background: authMethod === 'facebook' ? PRIMARY_LIGHT : SURFACE2,
+                    color: authMethod === 'facebook' ? PRIMARY : MUTED,
+                    border: `1.5px solid ${authMethod === 'facebook' ? 'rgba(99,102,241,0.4)' : BORDER}`,
+                    borderRadius: 10, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                    <Link2 size={13} /> Facebook Link
+                  </div>
+                  <div style={{ fontSize: 10, color: MUTED, fontWeight: 600 }}>
+                    ต้อง pass FB App Review
+                  </div>
+                </button>
+              </div>
+            </div>
+
+            {/* Credentials-specific fields */}
+            {authMethod === 'credentials' && (
+              <>
+                <div style={{ marginBottom: 12 }}>
+                  <label style={{ fontSize: 12, fontWeight: 800, color: TEXT, display: 'block', marginBottom: 6 }}>
+                    ชื่อแอดมิน <span style={{ color: RED }}>*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={inviteeName}
+                    onChange={e => setInviteeName(e.target.value)}
+                    placeholder="เช่น พี่หน่อย"
+                    maxLength={60}
+                    style={{
+                      width: '100%', padding: '10px 12px', fontSize: 13,
+                      border: `1.5px solid ${BORDER}`, borderRadius: 10, fontFamily: 'inherit',
+                      background: SURFACE2, boxSizing: 'border-box',
+                    }}
+                  />
+                </div>
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ fontSize: 12, fontWeight: 800, color: TEXT, display: 'block', marginBottom: 6 }}>
+                    Email <span style={{ color: RED }}>*</span>
+                  </label>
+                  <input
+                    type="email"
+                    value={inviteeEmail}
+                    onChange={e => setInviteeEmail(e.target.value)}
+                    placeholder="agent@example.com"
+                    style={{
+                      width: '100%', padding: '10px 12px', fontSize: 13,
+                      border: `1.5px solid ${BORDER}`, borderRadius: 10, fontFamily: 'inherit',
+                      background: SURFACE2, boxSizing: 'border-box',
+                    }}
+                  />
+                </div>
+              </>
+            )}
+
+            <div style={{ marginBottom: 14 }}>
               <label style={{ fontSize: 12, fontWeight: 800, color: TEXT, display: 'block', marginBottom: 8 }}>
                 เลือกเพจที่ให้แอดมินดูแล <span style={{ color: RED }}>*</span>
               </label>
@@ -424,7 +574,7 @@ function InviteModal({ pages, origin, onClose }: { pages: Page[]; origin: string
                   ยังไม่มีเพจที่คุณเป็นเจ้าของ
                 </div>
               ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 240, overflowY: 'auto', paddingRight: 4 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 200, overflowY: 'auto', paddingRight: 4 }}>
                   {pages.map(p => (
                     <label key={p.id} style={{
                       display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
@@ -448,7 +598,7 @@ function InviteModal({ pages, origin, onClose }: { pages: Page[]; origin: string
               )}
             </div>
 
-            <div style={{ marginBottom: 18 }}>
+            <div style={{ marginBottom: 16 }}>
               <label style={{ fontSize: 12, fontWeight: 800, color: TEXT, display: 'block', marginBottom: 6 }}>
                 หมายเหตุ (ไม่บังคับ)
               </label>
@@ -471,23 +621,90 @@ function InviteModal({ pages, origin, onClose }: { pages: Page[]; origin: string
               borderRadius: 10, padding: '10px 12px', marginBottom: 16,
               fontSize: 11, color: '#065f46', lineHeight: 1.7,
             }}>
-              <strong>📩 ระบบจะสร้างลิงก์เชิญ</strong> — คุณส่งลิงก์ให้แอดมินผ่าน LINE/Messenger เอง<br />
-              ลิงก์หมดอายุใน 7 วัน · ใช้ได้ครั้งเดียว
+              {authMethod === 'credentials' ? (
+                <>
+                  <strong>📧 ระบบจะสร้าง Email + รหัสผ่าน</strong> — copy ส่งให้แอดมินผ่าน LINE<br />
+                  แอดมินไป /login กรอก Email + รหัสผ่าน → ใช้งานได้ทันที (ไม่ต้องมี FB account)
+                </>
+              ) : (
+                <>
+                  <strong>📩 ระบบจะสร้างลิงก์เชิญ</strong> — แอดมินคลิกลิงก์ + login FB เพื่อยอมรับ<br />
+                  ⚠️ ต้องใช้ FB account ที่ pass FB App Review แล้ว — ลิงก์หมดอายุใน 7 วัน
+                </>
+              )}
             </div>
 
             <button
               onClick={create}
-              disabled={selected.length === 0 || creating}
+              disabled={!canSubmit}
               style={{
                 width: '100%', padding: '12px 20px', fontSize: 14, fontWeight: 800,
-                background: (selected.length === 0 || creating) ? '#94a3b8' : 'linear-gradient(135deg, #4338ca 0%, #6366f1 55%, #818cf8 100%)',
+                background: !canSubmit ? '#94a3b8' : 'linear-gradient(135deg, #4338ca 0%, #6366f1 55%, #818cf8 100%)',
                 color: 'white', border: 'none', borderRadius: 12,
-                cursor: (selected.length === 0 || creating) ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
-                boxShadow: (selected.length === 0 || creating) ? 'none' : '0 6px 22px rgba(67,56,202,0.42)',
+                cursor: !canSubmit ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
+                boxShadow: !canSubmit ? 'none' : '0 6px 22px rgba(67,56,202,0.42)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
               }}
             >
-              <Link2 size={15} /> {creating ? 'กำลังสร้างลิงก์...' : 'สร้างลิงก์เชิญ'}
+              {authMethod === 'credentials' ? <Mail size={15} /> : <Link2 size={15} />}
+              {creating ? 'กำลังสร้าง...' : authMethod === 'credentials' ? 'สร้าง Email + รหัสผ่าน' : 'สร้างลิงก์เชิญ'}
+            </button>
+          </>
+        ) : result.authMethod === 'credentials' ? (
+          <>
+            <div style={{
+              background: '#f0fdf4', border: '1.5px solid rgba(5,150,105,0.25)',
+              borderRadius: 14, padding: 16, marginBottom: 14, textAlign: 'center',
+            }}>
+              <div style={{ fontSize: 30, marginBottom: 4 }}>✅</div>
+              <div style={{ fontSize: 14, fontWeight: 900, color: '#065f46', marginBottom: 2 }}>
+                สร้างบัญชีสำเร็จ
+              </div>
+              <div style={{ fontSize: 11, color: '#047857', fontWeight: 600 }}>
+                ส่งให้แอดมิน · หมดอายุ {new Date(result.expiresAt).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' })}
+              </div>
+            </div>
+
+            <div style={{
+              background: '#fef3c7', border: '1px solid rgba(217,119,6,0.3)',
+              borderRadius: 10, padding: '10px 12px', marginBottom: 14,
+              fontSize: 11, color: '#92400e', lineHeight: 1.7,
+            }}>
+              ⚠️ <strong>รหัสผ่านจะแสดงครั้งนี้ครั้งเดียว</strong> — ปิดหน้านี้แล้วจะดูซ้ำไม่ได้
+            </div>
+
+            <CredentialField label="URL" value={result.loginUrl} icon={<ExternalLink size={13} />}
+              copied={copiedField === 'url'} onCopy={() => copyField('url', result.loginUrl)} />
+            <CredentialField label="Email" value={result.email} icon={<Mail size={13} />}
+              copied={copiedField === 'email'} onCopy={() => copyField('email', result.email)} />
+            <CredentialField label="รหัสผ่าน" value={result.password} icon={<Key size={13} />} mono
+              copied={copiedField === 'password'} onCopy={() => copyField('password', result.password)} />
+
+            <button
+              onClick={copyAllCredentials}
+              style={{
+                width: '100%', padding: '11px 20px', fontSize: 13, fontWeight: 800,
+                background: copiedField === 'all' ? GREEN_L : PRIMARY_LIGHT,
+                color: copiedField === 'all' ? GREEN : PRIMARY,
+                border: `1.5px solid ${copiedField === 'all' ? 'rgba(5,150,105,0.25)' : BORDER}`,
+                borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+                marginBottom: 8, marginTop: 4,
+              }}
+            >
+              {copiedField === 'all' ? <Check size={14} /> : <Copy size={14} />}
+              {copiedField === 'all' ? 'คัดลอกทั้งหมดแล้ว' : 'คัดลอกข้อความพร้อมส่ง'}
+            </button>
+
+            <button
+              onClick={onClose}
+              style={{
+                width: '100%', padding: '11px 20px', fontSize: 13, fontWeight: 800,
+                background: SURFACE2, color: TEXT, border: `1.5px solid ${BORDER}`,
+                borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit',
+              }}
+            >
+              เสร็จสิ้น
             </button>
           </>
         ) : (
@@ -505,50 +722,63 @@ function InviteModal({ pages, origin, onClose }: { pages: Page[]; origin: string
               </div>
             </div>
 
-            <div style={{ marginBottom: 14 }}>
-              <label style={{ fontSize: 12, fontWeight: 800, color: TEXT, display: 'block', marginBottom: 6 }}>
-                ลิงก์เชิญ (ส่งให้แอดมิน)
-              </label>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <input
-                  type="text"
-                  value={result.url}
-                  readOnly
-                  onFocus={e => e.target.select()}
-                  style={{
-                    flex: 1, padding: '10px 12px', fontSize: 12,
-                    border: `1.5px solid ${BORDER}`, borderRadius: 10, fontFamily: 'monospace',
-                    background: SURFACE2, boxSizing: 'border-box',
-                  }}
-                />
-                <button
-                  onClick={copyLink}
-                  style={{
-                    padding: '10px 14px', fontSize: 12, fontWeight: 800,
-                    background: copied ? GREEN_L : PRIMARY_LIGHT,
-                    color: copied ? GREEN : PRIMARY,
-                    border: `1.5px solid ${copied ? 'rgba(5,150,105,0.25)' : BORDER}`,
-                    borderRadius: 10, cursor: 'pointer', fontFamily: 'inherit',
-                    display: 'flex', alignItems: 'center', gap: 5,
-                  }}
-                >
-                  {copied ? <Check size={13} /> : <Copy size={13} />}
-                </button>
-              </div>
-            </div>
+            <CredentialField label="ลิงก์เชิญ" value={result.url} icon={<Link2 size={13} />} mono
+              copied={copiedField === 'url'} onCopy={() => copyField('url', result.url)} />
 
             <button
               onClick={onClose}
               style={{
                 width: '100%', padding: '11px 20px', fontSize: 13, fontWeight: 800,
                 background: SURFACE2, color: TEXT, border: `1.5px solid ${BORDER}`,
-                borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit',
+                borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit', marginTop: 4,
               }}
             >
               เสร็จสิ้น
             </button>
           </>
         )}
+      </div>
+    </div>
+  )
+}
+
+function CredentialField({
+  label, value, icon, copied, onCopy, mono,
+}: {
+  label: string; value: string; icon: React.ReactNode
+  copied: boolean; onCopy: () => void; mono?: boolean
+}) {
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <label style={{ fontSize: 11, fontWeight: 800, color: MUTED, display: 'flex', alignItems: 'center', gap: 5, marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+        {icon} {label}
+      </label>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <input
+          type="text"
+          value={value}
+          readOnly
+          onFocus={e => e.target.select()}
+          style={{
+            flex: 1, padding: '10px 12px', fontSize: mono ? 13 : 13,
+            border: `1.5px solid ${BORDER}`, borderRadius: 10,
+            fontFamily: mono ? 'monospace' : 'inherit',
+            background: SURFACE2, boxSizing: 'border-box', color: TEXT, fontWeight: mono ? 700 : 500,
+          }}
+        />
+        <button
+          onClick={onCopy}
+          style={{
+            padding: '10px 14px', fontSize: 12, fontWeight: 800,
+            background: copied ? GREEN_L : PRIMARY_LIGHT,
+            color: copied ? GREEN : PRIMARY,
+            border: `1.5px solid ${copied ? 'rgba(5,150,105,0.25)' : BORDER}`,
+            borderRadius: 10, cursor: 'pointer', fontFamily: 'inherit',
+            display: 'flex', alignItems: 'center', gap: 5, minWidth: 44, justifyContent: 'center',
+          }}
+        >
+          {copied ? <Check size={13} /> : <Copy size={13} />}
+        </button>
       </div>
     </div>
   )

@@ -12,7 +12,7 @@ const FB_API = 'https://graph.facebook.com/v19.0'
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions)
-  if (!session?.accessToken) return NextResponse.json({ error: 'no session' }, { status: 401 })
+  if (!session) return NextResponse.json({ error: 'no session' }, { status: 401 })
 
   const userId = await getUserIdFromFbToken(session.accessToken as string, (session as any).fbUserId)
   if (!userId) return NextResponse.json({ error: 'no user' }, { status: 401 })

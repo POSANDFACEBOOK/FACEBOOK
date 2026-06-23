@@ -11,9 +11,9 @@ export const dynamic = 'force-dynamic'
 export async function GET() {
   try {
     const session = await getServerSession(authOptions)
-    if (!session?.accessToken) return NextResponse.json({ invitations: [] })
+    if (!session) return NextResponse.json({ invitations: [] })
 
-    const ctx = await getCurrentUserContext(session.accessToken as string, (session as any).fbUserId)
+    const ctx = await getCurrentUserContext(session)
     if (!ctx) return NextResponse.json({ invitations: [] })
 
     const g = assertOwner(ctx)
@@ -22,7 +22,7 @@ export async function GET() {
     const sb = supabaseAdmin()
     const { data: invitations } = await sb
       .from('team_invitations')
-      .select('id, token, role, page_ids, note, expires_at, accepted_by, accepted_at, revoked_at, created_at')
+      .select('id, token, role, page_ids, note, expires_at, accepted_by, accepted_at, revoked_at, created_at, auth_method, invitee_email, invitee_name')
       .eq('owner_user_id', ctx.userId)
       .order('created_at', { ascending: false })
       .limit(100)
@@ -63,8 +63,8 @@ export async function GET() {
 export async function DELETE(req: Request) {
   try {
     const session = await getServerSession(authOptions)
-    if (!session?.accessToken) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    const ctx = await getCurrentUserContext(session.accessToken as string, (session as any).fbUserId)
+    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const ctx = await getCurrentUserContext(session)
     if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { searchParams } = new URL(req.url)
