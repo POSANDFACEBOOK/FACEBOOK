@@ -5,30 +5,32 @@ import Link from 'next/link'
 import { Bell, Plus, ChevronRight, TrendingUp, Activity, Target, LogOut, X, ArrowLeft, Zap, DollarSign, Eye, MousePointer, Users, BarChart3, Percent, Power, Trash2, RefreshCw, Trophy, Pause, CheckCircle, Sparkles, Download, MessageSquare, UserPlus } from 'lucide-react'
 
 // ─── Design Tokens ─────────────────────────────────────────────
-const BG = '#eef2ff', SURFACE = '#ffffff', SURFACE2 = '#f5f7ff'
-const BORDER = 'rgba(99,102,241,0.13)', BORDER2 = 'rgba(99,102,241,0.22)'
+const BG = '#eaf2fd', SURFACE = '#ffffff', SURFACE2 = '#f0f6ff'
+const BORDER = 'rgba(24,119,242,0.13)', BORDER2 = 'rgba(24,119,242,0.22)'
 const TEXT = '#1a1f3c', MUTED = '#6b7280'
-const PRIMARY = '#4338ca', PRIMARY_LIGHT = '#eef2ff'
+const PRIMARY = '#1877f2', PRIMARY_LIGHT = '#eaf2fd'
 const GREEN = '#059669', GREEN_L = '#d1fae5'
 const RED = '#dc2626', RED_L = '#fee2e2'
 const YELLOW = '#d97706', YELLOW_L = '#fef3c7'
 const CYAN = '#0891b2', CYAN_L = '#cffafe'
-const SHADOW_SM = '0 2px 8px rgba(99,102,241,0.08), 0 1px 3px rgba(0,0,0,0.04)'
-const SHADOW_MD = '0 4px 20px rgba(99,102,241,0.12), 0 2px 6px rgba(0,0,0,0.05)'
-const SHADOW_LG = '0 8px 36px rgba(99,102,241,0.16), 0 3px 10px rgba(0,0,0,0.07)'
-const SHADOW_RAISED = '4px 4px 14px rgba(99,102,241,0.13), -3px -3px 10px rgba(255,255,255,0.95)'
+const SHADOW_SM = '0 2px 8px rgba(24,119,242,0.08), 0 1px 3px rgba(0,0,0,0.04)'
+const SHADOW_MD = '0 4px 20px rgba(24,119,242,0.12), 0 2px 6px rgba(0,0,0,0.05)'
+const SHADOW_LG = '0 8px 36px rgba(24,119,242,0.16), 0 3px 10px rgba(0,0,0,0.07)'
+const SHADOW_RAISED = '4px 4px 14px rgba(24,119,242,0.13), -3px -3px 10px rgba(255,255,255,0.95)'
+// Stable color per page tile (เพื่อแยกแต่ละเพจด้วยสายตา)
+const TILE_COLORS = ['#1877f2', '#16a34a', '#d97706', '#db2777', '#7c3aed', '#0891b2', '#dc2626', '#0d9488']
 
 const btnPrimary: React.CSSProperties = {
-  background: 'linear-gradient(135deg, #4338ca 0%, #6366f1 55%, #818cf8 100%)',
+  background: 'linear-gradient(135deg, #1877f2 0%, #2e89ff 55%, #5fa3ff 100%)',
   color: 'white', border: 'none', borderRadius: 12, cursor: 'pointer',
-  boxShadow: '0 6px 22px rgba(67,56,202,0.42), 0 2px 6px rgba(67,56,202,0.25), inset 0 1px 0 rgba(255,255,255,0.28), inset 0 -2px 0 rgba(0,0,0,0.14)',
+  boxShadow: '0 6px 22px rgba(11,95,204,0.42), 0 2px 6px rgba(11,95,204,0.25), inset 0 1px 0 rgba(255,255,255,0.28), inset 0 -2px 0 rgba(0,0,0,0.14)',
   fontFamily: 'inherit', fontWeight: 700, transition: 'all 0.18s',
 }
 const btnGhost: React.CSSProperties = {
   background: 'linear-gradient(145deg, #ffffff 0%, #f0f4ff 100%)',
   color: MUTED, borderRadius: 10, cursor: 'pointer',
   border: `1.5px solid ${BORDER}`,
-  boxShadow: '3px 3px 10px rgba(99,102,241,0.1), -2px -2px 8px rgba(255,255,255,0.9)',
+  boxShadow: '3px 3px 10px rgba(24,119,242,0.1), -2px -2px 8px rgba(255,255,255,0.9)',
   fontFamily: 'inherit', transition: 'all 0.18s', display: 'flex', alignItems: 'center',
 }
 
@@ -244,8 +246,8 @@ export default function Dashboard() {
         }
       `}</style>
       {/* Grid BG */}
-      <div style={{ position: 'fixed', inset: 0, zIndex: 0, pointerEvents: 'none', backgroundImage: `linear-gradient(rgba(99,102,241,0.045) 1px, transparent 1px), linear-gradient(90deg, rgba(99,102,241,0.045) 1px, transparent 1px)`, backgroundSize: '48px 48px' }} />
-      <div style={{ position: 'fixed', top: '-8%', right: '-4%', width: 480, height: 480, borderRadius: '50%', background: 'radial-gradient(circle, rgba(99,102,241,0.1) 0%, transparent 65%)', zIndex: 0, pointerEvents: 'none' }} />
+      <div style={{ position: 'fixed', inset: 0, zIndex: 0, pointerEvents: 'none', backgroundImage: `linear-gradient(rgba(24,119,242,0.045) 1px, transparent 1px), linear-gradient(90deg, rgba(24,119,242,0.045) 1px, transparent 1px)`, backgroundSize: '48px 48px' }} />
+      <div style={{ position: 'fixed', top: '-8%', right: '-4%', width: 480, height: 480, borderRadius: '50%', background: 'radial-gradient(circle, rgba(24,119,242,0.1) 0%, transparent 65%)', zIndex: 0, pointerEvents: 'none' }} />
 
       {/* ── Sidebar (Left Menu) ── */}
       <aside className="fb-sidebar" style={{
@@ -254,11 +256,11 @@ export default function Dashboard() {
         background: 'rgba(255,255,255,0.94)', backdropFilter: 'blur(28px)',
         borderRight: `1.5px solid ${BORDER}`, padding: '18px 14px 16px',
         display: 'flex', flexDirection: 'column', gap: 6, zIndex: 50,
-        boxShadow: '4px 0 28px rgba(99,102,241,0.08)', overflowY: 'auto',
+        boxShadow: '4px 0 28px rgba(24,119,242,0.08)', overflowY: 'auto',
       }}>
         {/* Logo */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '2px 8px 16px', borderBottom: `1px solid ${BORDER}`, marginBottom: 10 }}>
-          <div style={{ width: 40, height: 40, background: 'linear-gradient(135deg, #4338ca 0%, #6366f1 60%, #818cf8 100%)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, boxShadow: '0 4px 14px rgba(67,56,202,0.4)' }}>⚡</div>
+          <div style={{ width: 40, height: 40, background: 'linear-gradient(135deg, #1877f2 0%, #2e89ff 60%, #5fa3ff 100%)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, boxShadow: '0 4px 14px rgba(11,95,204,0.4)' }}>⚡</div>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontWeight: 900, fontSize: 15, color: TEXT, lineHeight: 1.2 }}>FB Ads AI</div>
             <div style={{ fontSize: 10, color: MUTED, fontWeight: 700, marginTop: 1 }}>Smart Manager</div>
@@ -267,7 +269,7 @@ export default function Dashboard() {
 
         {/* User info */}
         {session?.user && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', background: 'linear-gradient(135deg, #eef2ff, #e0e7ff)', borderRadius: 12, marginBottom: 12, border: `1px solid ${BORDER}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', background: 'linear-gradient(135deg, #eaf2fd, #dcebff)', borderRadius: 12, marginBottom: 12, border: `1px solid ${BORDER}` }}>
             {session.user.image ? (
               <img src={session.user.image} alt="" style={{ width: 34, height: 34, borderRadius: '50%', objectFit: 'cover', flexShrink: 0, border: '1.5px solid white' }} />
             ) : (
@@ -284,19 +286,21 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Section label */}
-        <div style={{ fontSize: 10, color: MUTED, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.8, padding: '6px 10px 4px' }}>เมนูหลัก</div>
+        {/* Section: เมนูหลัก */}
+        <div style={{ fontSize: 10, color: MUTED, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 1, padding: '6px 10px 6px' }}>เมนูหลัก</div>
 
-        {/* Nav items */}
-        <NavItem icon={<BarChart3 size={15} />} label="ยิงแอดเพจ" active />
+        <NavItem icon={<BarChart3 size={16} />} label="ยิงแอดเพจ" active />
         <Link href="/dashboard/inbox" style={{ textDecoration: 'none' }}>
-          <NavItem icon={<MessageSquare size={15} />} label="กล่องข้อความ" badge={inboxUnread > 0 ? inboxUnread : undefined} />
+          <NavItem icon={<MessageSquare size={16} />} label="กล่องข้อความ" badge={inboxUnread > 0 ? inboxUnread : undefined} />
         </Link>
         {isOwner && (
           <Link href="/dashboard/team" style={{ textDecoration: 'none' }}>
-            <NavItem icon={<UserPlus size={15} />} label="จัดการทีม" />
+            <NavItem icon={<UserPlus size={16} />} label="จัดการทีม" />
           </Link>
         )}
+
+        {/* Section: เครื่องมือ */}
+        <div style={{ fontSize: 10, color: MUTED, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 1, padding: '16px 10px 6px' }}>เครื่องมือ</div>
         <div style={{ position: 'relative' }} ref={notifRef}>
           <NavItem
             icon={<Bell size={15} />}
@@ -322,19 +326,36 @@ export default function Dashboard() {
             </div>
           )}
         </div>
-        <NavItem icon={<Trash2 size={15} />} label="ล้างแอดเก่า" onClick={handlePreviewCleanup} danger />
+        {isOwner && <NavItem icon={<Trash2 size={16} />} label="ล้างแอดเก่า" onClick={handlePreviewCleanup} danger />}
 
-        {/* Pages section */}
+        {/* Section: เพจของฉัน — prominent tiles */}
         {pages.length > 0 && (
           <>
-            <div style={{ fontSize: 10, color: MUTED, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.8, padding: '14px 10px 4px' }}>เพจของคุณ ({pages.length})</div>
-            <div style={{ padding: '4px 8px', display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 180, overflowY: 'auto' }}>
-              {pages.map((p: any) => (
-                <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', background: SURFACE2, borderRadius: 9, border: `1px solid ${BORDER}` }}>
-                  <span style={{ fontSize: 13 }}>📄</span>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
-                </div>
-              ))}
+            <div style={{ fontSize: 10, color: MUTED, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 1, padding: '16px 10px 8px', display: 'flex', alignItems: 'center', gap: 6 }}>
+              เพจของฉัน
+              <span style={{ background: PRIMARY_LIGHT, color: PRIMARY, fontSize: 10, fontWeight: 900, padding: '1px 7px', borderRadius: 999 }}>{pages.length}</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 7, maxHeight: 250, overflowY: 'auto', paddingRight: 2 }}>
+              {pages.map((p: any, i: number) => {
+                const c = TILE_COLORS[i % TILE_COLORS.length]
+                return (
+                  <div key={p.id} className="fbtile" style={{
+                    display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px',
+                    background: SURFACE, borderRadius: 13, border: `1.5px solid ${BORDER}`,
+                    boxShadow: '0 2px 8px rgba(24,119,242,0.07)', cursor: 'default',
+                  }}>
+                    {p.picture?.data?.url || p.picture ? (
+                      <img src={p.picture?.data?.url || p.picture} alt="" style={{ width: 30, height: 30, borderRadius: '50%', objectFit: 'cover', flexShrink: 0, border: `2px solid ${c}` }} />
+                    ) : (
+                      <div style={{ width: 30, height: 30, borderRadius: '50%', background: c, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 14, fontWeight: 900, flexShrink: 0, boxShadow: `0 3px 8px ${c}55` }}>
+                        {(p.name || 'P')[0].toUpperCase()}
+                      </div>
+                    )}
+                    <span style={{ fontSize: 12.5, fontWeight: 800, color: TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{p.name}</span>
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: GREEN, flexShrink: 0, boxShadow: `0 0 0 3px ${GREEN}22` }} title="เชื่อมต่อแล้ว" />
+                  </div>
+                )
+              })}
             </div>
           </>
         )}
@@ -344,22 +365,25 @@ export default function Dashboard() {
 
         {/* Logout */}
         <button
+          className="fbtap"
           onClick={() => signOut({ callbackUrl: '/login' })}
-          style={{ ...btnGhost, padding: '10px 12px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 10, width: '100%', justifyContent: 'flex-start', color: RED, border: `1.5px solid rgba(220,38,38,0.18)`, fontWeight: 800 }}
+          style={{ ...btnGhost, padding: '11px 13px', fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 10, width: '100%', justifyContent: 'flex-start', color: RED, border: `1.5px solid rgba(220,38,38,0.18)`, fontWeight: 800 }}
         >
-          <LogOut size={14} /> ออกจากระบบ
+          <LogOut size={15} /> ออกจากระบบ
         </button>
       </aside>
 
       {/* Mobile top bar (shown when sidebar hidden via CSS) */}
       <div className="fb-mobile-bar" style={{ display: 'none', position: 'sticky', top: 0, zIndex: 45, background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(20px)', borderBottom: `1.5px solid ${BORDER}`, padding: '10px 16px', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-          <div style={{ width: 32, height: 32, background: 'linear-gradient(135deg, #4338ca, #818cf8)', borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15 }}>⚡</div>
+          <div style={{ width: 32, height: 32, background: 'linear-gradient(135deg, #1877f2, #5fa3ff)', borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15 }}>⚡</div>
           <div style={{ fontWeight: 900, fontSize: 13 }}>FB Ads AI</div>
         </div>
-        <button onClick={() => setShowModal(true)} style={{ ...btnPrimary, padding: '7px 14px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 5 }}>
-          <Plus size={13} /> ยิงแอด
-        </button>
+        {isOwner && (
+          <button className="fbtap" onClick={() => setShowModal(true)} style={{ ...btnPrimary, padding: '8px 16px', fontSize: 12, fontWeight: 900, display: 'flex', alignItems: 'center', gap: 5 }}>
+            <Plus size={14} strokeWidth={2.8} /> ยิงแอด
+          </button>
+        )}
       </div>
 
       <div className="fb-main" style={{ position: 'relative', zIndex: 1, marginLeft: 244, maxWidth: 1080, padding: '22px 24px 36px', boxSizing: 'border-box' }}>
@@ -369,17 +393,20 @@ export default function Dashboard() {
             <h1 style={{ fontSize: 26, fontWeight: 900, margin: 0, color: TEXT, letterSpacing: '-0.5px' }}>🚀 ยิงแอดเพจ</h1>
             <p style={{ fontSize: 12, color: MUTED, margin: '4px 0 0', fontWeight: 600 }}>ภาพรวมและจัดการแอด Facebook ของคุณ</p>
           </div>
-          <button
-            onClick={() => setShowModal(true)}
-            style={{
-              ...btnPrimary,
-              padding: '14px 26px', fontSize: 15, fontWeight: 800,
-              display: 'flex', alignItems: 'center', gap: 9,
-              flexShrink: 0, letterSpacing: '0.02em',
-            }}
-          >
-            <Plus size={18} strokeWidth={2.5} /> ยิงแอดใหม่
-          </button>
+          {isOwner && (
+            <button
+              className="fbtap"
+              onClick={() => setShowModal(true)}
+              style={{
+                ...btnPrimary,
+                padding: '14px 28px', fontSize: 15, fontWeight: 900,
+                display: 'flex', alignItems: 'center', gap: 9,
+                flexShrink: 0, letterSpacing: '0.02em',
+              }}
+            >
+              <Plus size={18} strokeWidth={2.8} /> ยิงแอดใหม่
+            </button>
+          )}
         </div>
 
 
@@ -389,7 +416,7 @@ export default function Dashboard() {
             {/* Row 1: Money overview */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginBottom: 14 }}>
               <MiniCard icon={<DollarSign size={17} />} label="ใช้จ่ายทั้งหมด" value={`฿${fmt(summary.totalSpend, 2)}`} color={RED} bg={RED_L} accent="#fca5a5" />
-              <MiniCard icon={<BarChart3 size={17} />} label="งบประมาณรวม" value={`฿${fmt(summary.totalBudget, 0)}`} color={PRIMARY} bg="#ede9fe" accent="#c4b5fd" />
+              <MiniCard icon={<BarChart3 size={17} />} label="งบประมาณรวม" value={`฿${fmt(summary.totalBudget, 0)}`} color={PRIMARY} bg="#e3effe" accent="#c4b5fd" />
               <MiniCard icon={<DollarSign size={17} />} label="งบคงเหลือ" value={`฿${fmt(summary.budgetRemaining, 0)}`} color={GREEN} bg={GREEN_L} accent="#6ee7b7" />
             </div>
 
@@ -403,7 +430,7 @@ export default function Dashboard() {
 
             {/* Row 3: Campaign counts */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginBottom: 22 }}>
-              <MiniCard icon={<Activity size={17} />} label="แอดทั้งหมด" value={String(summary.totalCampaigns)} color={PRIMARY} bg="#ede9fe" accent="#c4b5fd" small />
+              <MiniCard icon={<Activity size={17} />} label="แอดทั้งหมด" value={String(summary.totalCampaigns)} color={PRIMARY} bg="#e3effe" accent="#c4b5fd" small />
               <MiniCard icon={<TrendingUp size={17} />} label="กำลังวิ่ง" value={String(summary.activeCampaigns)} color={GREEN} bg={GREEN_L} accent="#6ee7b7" small />
               <MiniCard icon={<Target size={17} />} label="หยุดชั่วคราว" value={String(summary.pausedCampaigns)} color={YELLOW} bg={YELLOW_L} accent="#fcd34d" small />
             </div>
@@ -641,28 +668,39 @@ export default function Dashboard() {
 
 // ─── Sidebar Nav Item ──────────────────────────────────────────
 function NavItem({ icon, label, active, onClick, badge, danger }: { icon: ReactNode; label: string; active?: boolean; onClick?: () => void; badge?: number; danger?: boolean }) {
-  const baseColor = danger ? RED : active ? PRIMARY : '#374151'
-  const baseBg = active ? 'linear-gradient(135deg, #eef2ff, #e0e7ff)' : 'transparent'
+  const baseColor = active ? 'white' : danger ? RED : '#374151'
   return (
     <button
+      className="fbnav"
       onClick={onClick}
       style={{
-        display: 'flex', alignItems: 'center', gap: 11,
-        padding: '10px 12px', border: 'none', borderRadius: 11,
-        background: baseBg, color: baseColor, cursor: onClick || active ? 'pointer' : 'default',
-        fontSize: 13, fontWeight: active ? 800 : 700, fontFamily: 'inherit',
-        width: '100%', textAlign: 'left' as const, transition: 'all 0.15s',
-        boxShadow: active ? '0 3px 10px rgba(67,56,202,0.12)' : 'none',
-        borderWidth: 1, borderStyle: 'solid', borderColor: active ? BORDER2 : 'transparent',
-        position: 'relative',
+        display: 'flex', alignItems: 'center', gap: 12,
+        padding: '11px 13px', border: 'none', borderRadius: 13,
+        background: active ? 'linear-gradient(135deg, #1877f2 0%, #2e89ff 60%, #4293ff 100%)' : 'transparent',
+        color: baseColor, cursor: onClick || active ? 'pointer' : 'default',
+        fontSize: 13.5, fontWeight: active ? 900 : 700, fontFamily: 'inherit',
+        width: '100%', textAlign: 'left' as const,
+        boxShadow: active ? '0 6px 18px rgba(11,95,204,0.42), inset 0 1px 0 rgba(255,255,255,0.25)' : 'none',
+        borderWidth: 1.5, borderStyle: 'solid', borderColor: 'transparent',
+        position: 'relative', letterSpacing: '0.01em',
       }}
-      onMouseEnter={e => { if (!active) { e.currentTarget.style.background = '#f5f7ff'; e.currentTarget.style.border = `1px solid ${BORDER}` } }}
-      onMouseLeave={e => { if (!active) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.border = '1px solid transparent' } }}
+      onMouseEnter={e => { if (!active) { e.currentTarget.style.background = danger ? '#fff1f1' : '#eaf2fd'; e.currentTarget.style.borderColor = danger ? 'rgba(220,38,38,0.18)' : BORDER } }}
+      onMouseLeave={e => { if (!active) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'transparent' } }}
     >
-      <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, flexShrink: 0 }}>{icon}</span>
+      <span style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        width: 30, height: 30, flexShrink: 0, borderRadius: 9,
+        background: active ? 'rgba(255,255,255,0.2)' : danger ? RED_L : PRIMARY_LIGHT,
+        color: active ? 'white' : danger ? RED : PRIMARY,
+      }}>{icon}</span>
       <span style={{ flex: 1 }}>{label}</span>
       {badge !== undefined && badge > 0 && (
-        <span style={{ background: RED, color: 'white', fontSize: 10, fontWeight: 800, padding: '2px 7px', borderRadius: 999, minWidth: 18, textAlign: 'center' as const }}>{badge > 99 ? '99+' : badge}</span>
+        <span style={{
+          background: active ? 'white' : RED, color: active ? PRIMARY : 'white',
+          fontSize: 10, fontWeight: 900, padding: '2px 7px', borderRadius: 999,
+          minWidth: 18, textAlign: 'center' as const,
+          boxShadow: active ? 'none' : '0 2px 6px rgba(220,38,38,0.35)',
+        }}>{badge > 99 ? '99+' : badge}</span>
       )}
     </button>
   )
@@ -671,7 +709,7 @@ function NavItem({ icon, label, active, onClick, badge, danger }: { icon: ReactN
 // ─── Mini Stat Card ────────────────────────────────────────────
 function MiniCard({ icon, label, value, color, bg, accent, small }: { icon: ReactNode; label: string; value: string; color: string; bg: string; accent: string; small?: boolean }) {
   return (
-    <div style={{
+    <div className="fbpop" style={{
       background: SURFACE, border: `1.5px solid ${BORDER}`, borderRadius: small ? 14 : 18,
       padding: small ? '14px 16px' : '18px 20px',
       display: 'flex', alignItems: 'center', gap: small ? 12 : 16,
@@ -733,7 +771,7 @@ function CampaignCard({ campaign: c, onToggle, onDelete, deleting, onApply, appl
       background: SURFACE, border: `1.5px solid ${BORDER}`, borderRadius: 20,
       padding: '20px 24px', boxShadow: SHADOW_RAISED, transition: 'all 0.2s',
     }}
-      onMouseEnter={e => { e.currentTarget.style.boxShadow = '0 10px 36px rgba(67,56,202,0.18)'; e.currentTarget.style.transform = 'translateY(-3px)' }}
+      onMouseEnter={e => { e.currentTarget.style.boxShadow = '0 10px 36px rgba(11,95,204,0.18)'; e.currentTarget.style.transform = 'translateY(-3px)' }}
       onMouseLeave={e => { e.currentTarget.style.boxShadow = SHADOW_RAISED; e.currentTarget.style.transform = 'translateY(0)' }}>
 
       {/* Top row: post image + name + status + toggle */}
@@ -946,7 +984,7 @@ function GoalMetrics({ perf, goal }: { perf: any; goal: any }) {
 
 // ─── Goal config ───────────────────────────────────────────────
 const GOALS = [
-  { id: 'auto_engagement', icon: '🤖', label: 'อัตโนมัติ', desc: 'เพิ่มการมีส่วนร่วมอัตโนมัติ', color: '#4338ca', bg: '#eef2ff', metrics: ['engagement', 'likes', 'comments', 'shares', 'spend', 'cost_per_engage'], abMetrics: ['engagement', 'likes', 'comments', 'shares', 'spend', 'cost_per_engage', 'reach', 'ctr'] },
+  { id: 'auto_engagement', icon: '🤖', label: 'อัตโนมัติ', desc: 'เพิ่มการมีส่วนร่วมอัตโนมัติ', color: '#1877f2', bg: '#eaf2fd', metrics: ['engagement', 'likes', 'comments', 'shares', 'spend', 'cost_per_engage'], abMetrics: ['engagement', 'likes', 'comments', 'shares', 'spend', 'cost_per_engage', 'reach', 'ctr'] },
   { id: 'messages', icon: '💬', label: 'เพิ่มข้อความ', desc: 'ให้ลูกค้าทักมาใน Messenger', color: '#2563eb', bg: '#dbeafe', metrics: ['messages', 'cost_per_msg', 'clicks', 'reach', 'spend', 'ctr'], abMetrics: ['messages', 'cost_per_msg', 'clicks', 'reach', 'spend', 'ctr', 'impressions', 'cpc'] },
   { id: 'sales_messages', icon: '🛒', label: 'ยอดขายผ่านแชท', desc: 'เพิ่มยอดการซื้อผ่านข้อความ', color: '#dc2626', bg: '#fef2f2', metrics: ['messages', 'cost_per_msg', 'spend', 'clicks', 'reach', 'cpc'], abMetrics: ['messages', 'cost_per_msg', 'spend', 'clicks', 'reach', 'cpc', 'impressions', 'ctr'] },
   { id: 'leads_messages', icon: '📋', label: 'ข้อมูลลูกค้า', desc: 'เก็บข้อมูลลูกค้าผ่าน Messenger', color: '#ea580c', bg: '#fff7ed', metrics: ['messages', 'cost_per_msg', 'clicks', 'spend', 'ctr', 'cpc'], abMetrics: ['messages', 'cost_per_msg', 'clicks', 'spend', 'ctr', 'cpc', 'reach', 'impressions'] },
@@ -1023,13 +1061,13 @@ function CreateAdModal({ pages, onClose, onSuccess }: { pages: any[]; onClose: (
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: 16 }}>
-      <div style={{ background: SURFACE, border: `1.5px solid ${BORDER}`, borderRadius: 26, width: '100%', maxWidth: 540, maxHeight: '90vh', overflow: 'auto', boxShadow: '0 24px 64px rgba(67,56,202,0.22)' }}>
+      <div style={{ background: SURFACE, border: `1.5px solid ${BORDER}`, borderRadius: 26, width: '100%', maxWidth: 540, maxHeight: '90vh', overflow: 'auto', boxShadow: '0 24px 64px rgba(11,95,204,0.22)' }}>
         <div style={{ padding: '24px 26px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div style={{ flex: 1 }}>
             <h2 style={{ fontSize: 19, fontWeight: 900, margin: '0 0 14px' }}>🚀 ยิงแอดใหม่</h2>
             <div style={{ display: 'flex', gap: 5, marginBottom: 6 }}>
               {Array.from({ length: totalSteps }, (_, i) => i + 1).map(s => (
-                <div key={s} style={{ flex: 1, height: 5, borderRadius: 3, background: s <= step ? 'linear-gradient(90deg, #4338ca, #818cf8)' : '#e2e8f0', transition: 'all 0.3s' }} />
+                <div key={s} style={{ flex: 1, height: 5, borderRadius: 3, background: s <= step ? 'linear-gradient(90deg, #1877f2, #5fa3ff)' : '#e2e8f0', transition: 'all 0.3s' }} />
               ))}
             </div>
             <p style={{ fontSize: 12, color: MUTED, margin: 0, fontWeight: 600 }}>ขั้นที่ {step}/{totalSteps} — {stepNames[step - 1]}</p>
@@ -1049,9 +1087,9 @@ function CreateAdModal({ pages, onClose, onSuccess }: { pages: any[]; onClose: (
               </div>
               {pages.length === 0 ? <div style={{ textAlign: 'center', padding: '36px 0', color: MUTED, fontSize: 13, fontWeight: 600 }}>ไม่พบ Page</div> : pages.map((p: any) => (
                 <button key={p.id} onClick={() => { setSelectedPage(p); fetchPosts(p); setStep(2) }}
-                  style={{ width: '100%', padding: '15px 18px', marginBottom: 9, background: 'linear-gradient(145deg, #ffffff, #f5f7ff)', border: `1.5px solid ${BORDER}`, borderRadius: 14, color: TEXT, cursor: 'pointer', textAlign: 'left', fontSize: 14, fontWeight: 700, fontFamily: 'inherit', boxShadow: SHADOW_RAISED, display: 'flex', alignItems: 'center', justifyContent: 'space-between', transition: 'all 0.18s' }}
+                  style={{ width: '100%', padding: '15px 18px', marginBottom: 9, background: 'linear-gradient(145deg, #ffffff, #f0f6ff)', border: `1.5px solid ${BORDER}`, borderRadius: 14, color: TEXT, cursor: 'pointer', textAlign: 'left', fontSize: 14, fontWeight: 700, fontFamily: 'inherit', boxShadow: SHADOW_RAISED, display: 'flex', alignItems: 'center', justifyContent: 'space-between', transition: 'all 0.18s' }}
                   onMouseEnter={e => { e.currentTarget.style.borderColor = BORDER2; e.currentTarget.style.background = PRIMARY_LIGHT }}
-                  onMouseLeave={e => { e.currentTarget.style.borderColor = BORDER; e.currentTarget.style.background = 'linear-gradient(145deg, #ffffff, #f5f7ff)' }}>
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = BORDER; e.currentTarget.style.background = 'linear-gradient(145deg, #ffffff, #f0f6ff)' }}>
                   <span>📄 {p.name}</span><ChevronRight size={16} color={MUTED} />
                 </button>
               ))}
@@ -1067,9 +1105,9 @@ function CreateAdModal({ pages, onClose, onSuccess }: { pages: any[]; onClose: (
                 : posts.length === 0 ? <div style={{ textAlign: 'center', padding: 36, color: MUTED, fontSize: 13, fontWeight: 600 }}>ไม่พบโพสต์</div>
                   : posts.map((p: any) => (
                     <button key={p.id} onClick={() => { setSelectedPost(p); setStep(3) /* go to goal */ }}
-                      style={{ width: '100%', padding: '13px 15px', marginBottom: 8, background: 'linear-gradient(145deg, #ffffff, #f5f7ff)', border: `1.5px solid ${BORDER}`, borderRadius: 13, color: TEXT, cursor: 'pointer', textAlign: 'left', fontSize: 13, display: 'flex', gap: 11, alignItems: 'flex-start', fontFamily: 'inherit', boxShadow: SHADOW_SM, transition: 'all 0.18s' }}
+                      style={{ width: '100%', padding: '13px 15px', marginBottom: 8, background: 'linear-gradient(145deg, #ffffff, #f0f6ff)', border: `1.5px solid ${BORDER}`, borderRadius: 13, color: TEXT, cursor: 'pointer', textAlign: 'left', fontSize: 13, display: 'flex', gap: 11, alignItems: 'flex-start', fontFamily: 'inherit', boxShadow: SHADOW_SM, transition: 'all 0.18s' }}
                       onMouseEnter={e => { e.currentTarget.style.borderColor = BORDER2; e.currentTarget.style.background = PRIMARY_LIGHT }}
-                      onMouseLeave={e => { e.currentTarget.style.borderColor = BORDER; e.currentTarget.style.background = 'linear-gradient(145deg, #ffffff, #f5f7ff)' }}>
+                      onMouseLeave={e => { e.currentTarget.style.borderColor = BORDER; e.currentTarget.style.background = 'linear-gradient(145deg, #ffffff, #f0f6ff)' }}>
                       {p.full_picture && <img src={p.full_picture} alt="" style={{ width: 48, height: 48, borderRadius: 9, objectFit: 'cover', flexShrink: 0, border: `1px solid ${BORDER}` }} />}
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as const, lineHeight: 1.55, fontWeight: 600 }}>{p.message || p.story || 'ไม่มีข้อความ'}</div>
@@ -1092,11 +1130,11 @@ function CreateAdModal({ pages, onClose, onSuccess }: { pages: any[]; onClose: (
                     style={{
                       width: '100%', padding: '14px 16px', border: `1.5px solid ${selectedGoal === g.id ? g.color + '66' : BORDER}`,
                       borderRadius: 14, cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit',
-                      background: selectedGoal === g.id ? g.bg : 'linear-gradient(145deg, #ffffff, #f5f7ff)',
+                      background: selectedGoal === g.id ? g.bg : 'linear-gradient(145deg, #ffffff, #f0f6ff)',
                       boxShadow: SHADOW_SM, transition: 'all 0.18s', display: 'flex', alignItems: 'center', gap: 12,
                     }}
                     onMouseEnter={e => { e.currentTarget.style.borderColor = g.color + '66'; e.currentTarget.style.background = g.bg }}
-                    onMouseLeave={e => { if (selectedGoal !== g.id) { e.currentTarget.style.borderColor = BORDER; e.currentTarget.style.background = 'linear-gradient(145deg, #ffffff, #f5f7ff)' } }}>
+                    onMouseLeave={e => { if (selectedGoal !== g.id) { e.currentTarget.style.borderColor = BORDER; e.currentTarget.style.background = 'linear-gradient(145deg, #ffffff, #f0f6ff)' } }}>
                     <span style={{ fontSize: 24 }}>{g.icon}</span>
                     <div>
                       <div style={{ fontSize: 14, fontWeight: 800, color: g.color }}>{g.label}</div>
@@ -1114,7 +1152,7 @@ function CreateAdModal({ pages, onClose, onSuccess }: { pages: any[]; onClose: (
               <button onClick={() => setStep(3)} style={{ background: 'none', border: 'none', color: MUTED, cursor: 'pointer', marginBottom: 13, fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'inherit' }}><ArrowLeft size={13} /> กลับ</button>
 
               {/* Selected post */}
-              <div style={{ background: 'linear-gradient(135deg, #eef2ff, #e0e7ff)', border: `1.5px solid rgba(67,56,202,0.2)`, borderRadius: 13, padding: '11px 15px', marginBottom: 16, display: 'flex', gap: 11, alignItems: 'flex-start' }}>
+              <div style={{ background: 'linear-gradient(135deg, #eaf2fd, #dcebff)', border: `1.5px solid rgba(11,95,204,0.2)`, borderRadius: 13, padding: '11px 15px', marginBottom: 16, display: 'flex', gap: 11, alignItems: 'flex-start' }}>
                 {selectedPost?.full_picture && <img src={selectedPost.full_picture} alt="" style={{ width: 48, height: 48, borderRadius: 9, objectFit: 'cover', flexShrink: 0 }} />}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <p style={{ fontSize: 11, color: PRIMARY, fontWeight: 800, margin: '0 0 4px' }}>โพสต์ที่เลือก</p>
@@ -1201,13 +1239,13 @@ function CreateAdModal({ pages, onClose, onSuccess }: { pages: any[]; onClose: (
                 <label style={{ fontSize: 12, color: MUTED, fontWeight: 700, display: 'block', marginBottom: 10 }}>ระยะเวลา</label>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 9 }}>
                   {[3, 7, 14, 30].map(d => (
-                    <button key={d} onClick={() => setDays(d)} style={{ padding: '10px 0', border: days === d ? `1.5px solid rgba(67,56,202,0.4)` : `1.5px solid ${BORDER}`, borderRadius: 11, cursor: 'pointer', fontSize: 13, fontWeight: 800, fontFamily: 'inherit', background: days === d ? 'linear-gradient(135deg, #4338ca, #818cf8)' : 'linear-gradient(145deg, #ffffff, #f0f4ff)', color: days === d ? 'white' : MUTED, boxShadow: days === d ? '0 5px 18px rgba(67,56,202,0.4)' : SHADOW_SM, transition: 'all 0.18s' }}>{d} วัน</button>
+                    <button key={d} onClick={() => setDays(d)} style={{ padding: '10px 0', border: days === d ? `1.5px solid rgba(11,95,204,0.4)` : `1.5px solid ${BORDER}`, borderRadius: 11, cursor: 'pointer', fontSize: 13, fontWeight: 800, fontFamily: 'inherit', background: days === d ? 'linear-gradient(135deg, #1877f2, #5fa3ff)' : 'linear-gradient(145deg, #ffffff, #f0f4ff)', color: days === d ? 'white' : MUTED, boxShadow: days === d ? '0 5px 18px rgba(11,95,204,0.4)' : SHADOW_SM, transition: 'all 0.18s' }}>{d} วัน</button>
                   ))}
                 </div>
               </div>
 
               {/* Summary */}
-              <div style={{ background: 'linear-gradient(135deg, #eef2ff, #ede9fe)', border: `1.5px solid rgba(99,102,241,0.2)`, borderRadius: 16, padding: '16px 20px', marginBottom: 20 }}>
+              <div style={{ background: 'linear-gradient(135deg, #eaf2fd, #e3effe)', border: `1.5px solid rgba(24,119,242,0.2)`, borderRadius: 16, padding: '16px 20px', marginBottom: 20 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: MUTED, marginBottom: 5 }}>
                   <span style={{ fontWeight: 600 }}>งบรวมต่อวัน</span><span style={{ fontWeight: 700, color: TEXT }}>฿{budget.toLocaleString()}</span>
                 </div>
@@ -1220,7 +1258,7 @@ function CreateAdModal({ pages, onClose, onSuccess }: { pages: any[]; onClose: (
                 </div>
               </div>
 
-              <button onClick={handleSubmit} disabled={submitting} style={{ width: '100%', padding: '15px', background: submitting ? '#a5b4fc' : 'linear-gradient(135deg, #4338ca, #818cf8)', color: 'white', border: 'none', borderRadius: 15, cursor: submitting ? 'not-allowed' : 'pointer', fontSize: 16, fontWeight: 900, fontFamily: 'inherit', boxShadow: submitting ? 'none' : '0 7px 24px rgba(67,56,202,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, transition: 'all 0.2s' }}>
+              <button onClick={handleSubmit} disabled={submitting} style={{ width: '100%', padding: '15px', background: submitting ? '#a5b4fc' : 'linear-gradient(135deg, #1877f2, #5fa3ff)', color: 'white', border: 'none', borderRadius: 15, cursor: submitting ? 'not-allowed' : 'pointer', fontSize: 16, fontWeight: 900, fontFamily: 'inherit', boxShadow: submitting ? 'none' : '0 7px 24px rgba(11,95,204,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, transition: 'all 0.2s' }}>
                 {submitting ? (
                   <><RefreshCw size={18} style={{ animation: 'spin 1s linear infinite' }} /> AI กำลังวิเคราะห์ + สร้างแอด...</>
                 ) : (
@@ -1266,7 +1304,7 @@ function CreateAdModal({ pages, onClose, onSuccess }: { pages: any[]; onClose: (
                 </div>
               ))}
 
-              <div style={{ background: 'linear-gradient(135deg, #eef2ff, #ede9fe)', borderRadius: 12, padding: '10px 14px', marginBottom: 16 }}>
+              <div style={{ background: 'linear-gradient(135deg, #eaf2fd, #e3effe)', borderRadius: 12, padding: '10px 14px', marginBottom: 16 }}>
                 <p style={{ fontSize: 11, color: MUTED, margin: 0, lineHeight: 1.6, fontWeight: 500 }}>ระบบจะเปรียบเทียบผลอัตโนมัติ แจ้งเตือนว่าแบบไหนดีที่สุด แบบที่แย่จะถูกแนะนำให้หยุด</p>
               </div>
 
@@ -1367,7 +1405,7 @@ function ABTestView({ testId, onClose }: { testId: string; onClose: () => void }
               {error && <div style={{ background: RED_L, borderRadius: 10, padding: '8px 12px', marginBottom: 12, fontSize: 12, color: RED, fontWeight: 600 }}>{error}</div>}
 
               {data.testGroup.aiAnalysis && (
-                <div style={{ background: 'linear-gradient(135deg, #f5f3ff, #ede9fe)', border: `1.5px solid rgba(124,58,237,0.2)`, borderRadius: 12, padding: '12px 16px', marginBottom: 14 }}>
+                <div style={{ background: 'linear-gradient(135deg, #f5f3ff, #e3effe)', border: `1.5px solid rgba(124,58,237,0.2)`, borderRadius: 12, padding: '12px 16px', marginBottom: 14 }}>
                   <p style={{ fontSize: 11, color: '#7c3aed', fontWeight: 800, margin: '0 0 4px' }}>AI วิเคราะห์โพสต์:</p>
                   <p style={{ fontSize: 12, color: MUTED, margin: 0, lineHeight: 1.5, fontWeight: 500 }}>{data.testGroup.aiAnalysis.analysis}</p>
                 </div>
@@ -1476,7 +1514,7 @@ function ABTestView({ testId, onClose }: { testId: string; onClose: () => void }
 
               {/* Per-variant apply buttons */}
               {comparison && !comparison.shouldReallocate && comparison.variants?.some((cv: any) => cv.verdict !== 'keep_running') && !applied && (
-                <div style={{ background: 'linear-gradient(135deg, #eef2ff, #e0e7ff)', border: `1.5px solid rgba(67,56,202,0.2)`, borderRadius: 12, padding: '12px 16px' }}>
+                <div style={{ background: 'linear-gradient(135deg, #eaf2fd, #dcebff)', border: `1.5px solid rgba(11,95,204,0.2)`, borderRadius: 12, padding: '12px 16px' }}>
                   <p style={{ fontSize: 12, color: PRIMARY, fontWeight: 800, margin: '0 0 8px' }}>ดำเนินการตาม AI</p>
                   <button
                     onClick={applyReallocation}
@@ -1485,8 +1523,8 @@ function ABTestView({ testId, onClose }: { testId: string; onClose: () => void }
                       width: '100%', padding: '10px 16px', borderRadius: 10, border: 'none',
                       cursor: applyingAB ? 'not-allowed' : 'pointer',
                       fontFamily: 'inherit', fontSize: 13, fontWeight: 800,
-                      background: applyingAB ? '#a5b4fc' : 'linear-gradient(135deg, #4338ca, #818cf8)',
-                      color: 'white', boxShadow: '0 4px 14px rgba(67,56,202,0.35)',
+                      background: applyingAB ? '#a5b4fc' : 'linear-gradient(135deg, #1877f2, #5fa3ff)',
+                      color: 'white', boxShadow: '0 4px 14px rgba(11,95,204,0.35)',
                       display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
                     }}
                   >
