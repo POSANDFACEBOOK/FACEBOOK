@@ -85,27 +85,19 @@ export async function POST(req: Request) {
       return NextResponse.json({ synced: 0, message: 'No pages to sync' })
     }
 
-    // ── Pre-flight: refresh page tokens ที่หมดอายุ (จำกัด 6 เพจพร้อมกัน) ──
-    const tokenChecks: { page: any; invalid: boolean }[] = []
-    await mapLimit(pages, 6, async (page) => {
-      try {
-        const r = await fetch(`${FB_API}/me?fields=id&access_token=${page.page_access_token}`)
-        const d = await r.json()
-        tokenChecks.push({ page, invalid: d?.error?.code === 190 })
-      } catch {
-        tokenChecks.push({ page, invalid: false })
+    // ── Lazy token refresh: ดึง tokens ใหม่เฉพาะตอนเจอ error (memoized 1 ครั้ง) ──
+    // เร็วกว่าเดิม — ไม่ต้องยิง /me ทุกเพจก่อน sync (ตัด N calls ออกจาก hot path)
+    let freshTokensPromise: Promise<Map<string, string>> | null = null
+    const refreshToken = async (page: any): Promise<boolean> => {
+      if (!freshTokensPromise) freshTokensPromise = fetchFreshPageTokens(session.accessToken as string)
+      const fresh = await freshTokensPromise
+      const nt = fresh.get(page.page_id)
+      if (nt && nt !== page.page_access_token) {
+        await sb.from('connected_pages').update({ page_access_token: nt }).eq('id', page.id)
+        page.page_access_token = nt
+        return true
       }
-    })
-    if (tokenChecks.some(t => t.invalid)) {
-      const fresh = await fetchFreshPageTokens(session.accessToken as string)
-      for (const { page, invalid } of tokenChecks) {
-        if (!invalid) continue
-        const nt = fresh.get(page.page_id)
-        if (nt && nt !== page.page_access_token) {
-          await sb.from('connected_pages').update({ page_access_token: nt }).eq('id', page.id)
-          page.page_access_token = nt
-        }
-      }
+      return false
     }
 
     // ── Subscribe webhook ทุกเพจ (จำกัด 6 พร้อมกัน) ──
@@ -120,11 +112,10 @@ export async function POST(req: Request) {
       }
     })
 
-    // ── Sync เพจแบบจำกัด concurrency (4 เพจพร้อมกัน) ──
-    // กัน burst ชน FB app-level rate limit / DB pool / maxDuration เมื่อเพจเยอะ
+    // ── Sync เพจ (จำกัด 6 พร้อมกัน — เร็วขึ้นสำหรับ user ทั่วไป, ยัง bounded ตอนเพจเยอะ) ──
     const summary: any[] = []
-    await mapLimit(pages, 4, async (page) => {
-      const r = await syncOnePage(sb, userId, page, subResults[page.page_id] ?? false)
+    await mapLimit(pages, 6, async (page) => {
+      const r = await syncOnePage(sb, userId, page, subResults[page.page_id] ?? false, refreshToken)
       summary.push(r)
     })
 
@@ -173,7 +164,13 @@ function newestMessage(conv: any): any | null {
 }
 
 // ── Sync เพจเดียว: ดึง conversations+messages inline (1 call) + bulk upsert ──
-async function syncOnePage(sb: any, userId: string, page: any, subscribed: boolean) {
+async function syncOnePage(
+  sb: any,
+  userId: string,
+  page: any,
+  subscribed: boolean,
+  refreshToken: (page: any) => Promise<boolean>,
+) {
   const pageResult: any = {
     page_id: page.page_id,
     page_name: page.page_name,
@@ -183,7 +180,15 @@ async function syncOnePage(sb: any, userId: string, page: any, subscribed: boole
     errors: [] as string[],
   }
   try {
-    const fbConvs = await listConversationsWithMessages(page.page_id, page.page_access_token, 40, 15, 2)
+    // ดึง conversations+messages; ถ้า token หมดอายุ → refresh แล้ว retry 1 ครั้ง
+    let fbConvs: any[] = []
+    try {
+      fbConvs = await listConversationsWithMessages(page.page_id, page.page_access_token, 40, 10, 2)
+    } catch (e: any) {
+      const refreshed = await refreshToken(page)
+      if (!refreshed) throw e
+      fbConvs = await listConversationsWithMessages(page.page_id, page.page_access_token, 40, 10, 2)
+    }
 
     // จับคู่ conv กับลูกค้า + dedupe ตาม psid (เก็บอันที่ใหม่สุด) กัน insert ชนกันเองในรอบเดียว
     const byPsid = new Map<string, { conv: any; customer: any }>()
