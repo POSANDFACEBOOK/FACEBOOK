@@ -4,16 +4,16 @@ import { useParams, useRouter } from 'next/navigation'
 import { ArrowLeft, RefreshCw, Pause, Play, Zap, TrendingUp, Users, MousePointer, DollarSign, Activity } from 'lucide-react'
 
 // ─── Design Tokens (Light Hi-Tech) ─────────────────────────────
-const BG       = '#eef2ff'
+const BG       = '#eaf2fd'
 const SURFACE  = '#ffffff'
-const SURFACE2 = '#f5f7ff'
-const BORDER   = 'rgba(99,102,241,0.13)'
-const BORDER2  = 'rgba(99,102,241,0.25)'
+const SURFACE2 = '#f0f6ff'
+const BORDER   = 'rgba(24,119,242,0.13)'
+const BORDER2  = 'rgba(24,119,242,0.25)'
 const TEXT     = '#1a1f3c'
 const MUTED    = '#6b7280'
-const PRIMARY  = '#4338ca'
-const PRIMARY2 = '#6366f1'
-const PRIMARY_LIGHT = '#eef2ff'
+const PRIMARY  = '#1877f2'
+const PRIMARY2 = '#2e89ff'
+const PRIMARY_LIGHT = '#eaf2fd'
 const GREEN    = '#059669'
 const GREEN_L  = '#d1fae5'
 const RED      = '#dc2626'
@@ -25,16 +25,16 @@ const BLUE_L   = '#dbeafe'
 const CYAN     = '#0891b2'
 const CYAN_L   = '#cffafe'
 
-const SHADOW_SM     = '0 2px 8px rgba(99,102,241,0.08), 0 1px 3px rgba(0,0,0,0.04)'
-const SHADOW_MD     = '0 4px 20px rgba(99,102,241,0.12), 0 2px 6px rgba(0,0,0,0.05)'
-const SHADOW_LG     = '0 8px 36px rgba(99,102,241,0.16), 0 3px 10px rgba(0,0,0,0.07)'
-const SHADOW_RAISED = '4px 4px 14px rgba(99,102,241,0.12), -3px -3px 10px rgba(255,255,255,0.95)'
+const SHADOW_SM     = '0 2px 8px rgba(24,119,242,0.08), 0 1px 3px rgba(0,0,0,0.04)'
+const SHADOW_MD     = '0 4px 20px rgba(24,119,242,0.12), 0 2px 6px rgba(0,0,0,0.05)'
+const SHADOW_LG     = '0 8px 36px rgba(24,119,242,0.16), 0 3px 10px rgba(0,0,0,0.07)'
+const SHADOW_RAISED = '4px 4px 14px rgba(24,119,242,0.12), -3px -3px 10px rgba(255,255,255,0.95)'
 
 // Buttons
 const btnPrimary: React.CSSProperties = {
-  background: 'linear-gradient(135deg, #4338ca 0%, #6366f1 55%, #818cf8 100%)',
+  background: 'linear-gradient(135deg, #1877f2 0%, #2e89ff 55%, #5fa3ff 100%)',
   color: 'white', border: 'none', borderRadius: 12, cursor: 'pointer',
-  boxShadow: '0 6px 22px rgba(67,56,202,0.42), 0 2px 6px rgba(67,56,202,0.22), inset 0 1px 0 rgba(255,255,255,0.28), inset 0 -2px 0 rgba(0,0,0,0.14)',
+  boxShadow: '0 6px 22px rgba(11,95,204,0.42), 0 2px 6px rgba(11,95,204,0.22), inset 0 1px 0 rgba(255,255,255,0.28), inset 0 -2px 0 rgba(0,0,0,0.14)',
   fontFamily: 'inherit', fontWeight: 700, transition: 'all 0.18s', letterSpacing: '0.01em',
   display: 'flex', alignItems: 'center', gap: 7,
 }
@@ -42,7 +42,7 @@ const btnGhost: React.CSSProperties = {
   background: 'linear-gradient(145deg, #ffffff 0%, #f0f4ff 100%)',
   color: MUTED, borderRadius: 10, cursor: 'pointer',
   border: `1.5px solid ${BORDER}`,
-  boxShadow: '3px 3px 10px rgba(99,102,241,0.1), -2px -2px 8px rgba(255,255,255,0.9)',
+  boxShadow: '3px 3px 10px rgba(24,119,242,0.1), -2px -2px 8px rgba(255,255,255,0.9)',
   fontFamily: 'inherit', transition: 'all 0.18s',
   display: 'flex', alignItems: 'center', gap: 6,
 }
@@ -183,12 +183,12 @@ export default function CampaignDetail() {
       <div style={{
         position: 'fixed', inset: 0, zIndex: 0, pointerEvents: 'none',
         backgroundImage: `
-          linear-gradient(rgba(99,102,241,0.045) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(99,102,241,0.045) 1px, transparent 1px)
+          linear-gradient(rgba(24,119,242,0.045) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(24,119,242,0.045) 1px, transparent 1px)
         `,
         backgroundSize: '48px 48px',
       }} />
-      <div style={{ position: 'fixed', top: '-6%', right: '-4%', width: 420, height: 420, borderRadius: '50%', background: 'radial-gradient(circle, rgba(99,102,241,0.09) 0%, transparent 65%)', zIndex: 0, pointerEvents: 'none' }} />
+      <div style={{ position: 'fixed', top: '-6%', right: '-4%', width: 420, height: 420, borderRadius: '50%', background: 'radial-gradient(circle, rgba(24,119,242,0.09) 0%, transparent 65%)', zIndex: 0, pointerEvents: 'none' }} />
 
       {/* Toast */}
       {toast && (
@@ -213,7 +213,7 @@ export default function CampaignDetail() {
         backdropFilter: 'blur(24px)',
         WebkitBackdropFilter: 'blur(24px)',
         zIndex: 50,
-        boxShadow: '0 2px 16px rgba(99,102,241,0.08)',
+        boxShadow: '0 2px 16px rgba(24,119,242,0.08)',
       }}>
         <button onClick={() => router.push('/dashboard')} style={{
           ...btnGhost, padding: '7px 14px', fontSize: 13, fontWeight: 700,
@@ -255,7 +255,7 @@ export default function CampaignDetail() {
           boxShadow: SHADOW_RAISED,
         }}>
           {/* Accent top bar */}
-          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: `linear-gradient(90deg, ${PRIMARY}, #818cf8)`, borderRadius: '18px 18px 0 0', pointerEvents: 'none' }} />
+          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: `linear-gradient(90deg, ${PRIMARY}, #5fa3ff)`, borderRadius: '18px 18px 0 0', pointerEvents: 'none' }} />
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12, fontSize: 13, marginBottom: 16 }}>
             <InfoRow label="Page" value={c?.connected_pages?.page_name} />
@@ -265,7 +265,7 @@ export default function CampaignDetail() {
             {c?.fb_campaign_id && (
               <div style={{ gridColumn: '1/-1' }}>
                 <span style={{ color: MUTED, fontSize: 12, fontWeight: 600 }}>FB Campaign ID: </span>
-                <span style={{ fontSize: 11, color: '#6366f1', fontFamily: 'monospace', letterSpacing: '0.02em' }}>{c.fb_campaign_id}</span>
+                <span style={{ fontSize: 11, color: '#2e89ff', fontFamily: 'monospace', letterSpacing: '0.02em' }}>{c.fb_campaign_id}</span>
               </div>
             )}
           </div>
@@ -282,9 +282,9 @@ export default function CampaignDetail() {
 
             <button onClick={handleAnalyze} disabled={analyzing} style={{
               ...btnGhost, padding: '9px 16px', fontSize: 12, fontWeight: 700,
-              border: `1.5px solid rgba(99,102,241,0.25)`,
+              border: `1.5px solid rgba(24,119,242,0.25)`,
               color: PRIMARY,
-              background: analyzing ? SURFACE2 : 'linear-gradient(145deg, #f0eeff, #e0e7ff)',
+              background: analyzing ? SURFACE2 : 'linear-gradient(145deg, #f0eeff, #dcebff)',
               opacity: analyzing ? 0.7 : 1, cursor: analyzing ? 'not-allowed' : 'pointer',
             }}>
               <Zap size={13} color={PRIMARY} />
@@ -313,7 +313,7 @@ export default function CampaignDetail() {
         {perf ? (
           <>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 11, marginBottom: 11 }}>
-              <MetricCard label="Impressions" value={fmt(perf.impressions)} icon={<Activity size={14} />} color={PRIMARY} bg="#ede9fe" />
+              <MetricCard label="Impressions" value={fmt(perf.impressions)} icon={<Activity size={14} />} color={PRIMARY} bg="#e3effe" />
               <MetricCard label="Reach"       value={fmt(perf.reach)}       icon={<Users size={14} />}       color={BLUE}    bg={BLUE_L} />
               <MetricCard label="Clicks"      value={fmt(perf.clicks)}      icon={<MousePointer size={14} />} color={CYAN}   bg={CYAN_L} />
               <MetricCard label="CTR"         value={`${fmt(perf.ctr, 2)}%`} icon={<TrendingUp size={14} />}
@@ -349,7 +349,7 @@ export default function CampaignDetail() {
                   <div key={item.label} style={{
                     background: SURFACE2, borderRadius: 12, padding: '12px 8px',
                     border: `1px solid ${BORDER}`,
-                    boxShadow: '2px 2px 8px rgba(99,102,241,0.07), -1px -1px 5px rgba(255,255,255,0.9)',
+                    boxShadow: '2px 2px 8px rgba(24,119,242,0.07), -1px -1px 5px rgba(255,255,255,0.9)',
                   }}>
                     <div style={{ fontSize: 18, marginBottom: 4 }}>{item.emoji}</div>
                     <div style={{ fontSize: 20, fontWeight: 900, color: TEXT }}>{fmt(item.value)}</div>

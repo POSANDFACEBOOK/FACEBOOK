@@ -4,10 +4,10 @@ import { useSession } from 'next-auth/react'
 import Link from 'next/link'
 import { ArrowLeft, UserPlus, Trash2, Copy, Check, Users, X, ExternalLink, Link2, Clock, Mail, Key, RefreshCw } from 'lucide-react'
 
-const BG = '#eef2ff', SURFACE = '#ffffff', SURFACE2 = '#f5f7ff'
-const BORDER = 'rgba(99,102,241,0.13)'
+const BG = '#eaf2fd', SURFACE = '#ffffff', SURFACE2 = '#f0f6ff'
+const BORDER = 'rgba(24,119,242,0.13)'
 const TEXT = '#1a1f3c', MUTED = '#6b7280'
-const PRIMARY = '#4338ca', PRIMARY_LIGHT = '#eef2ff'
+const PRIMARY = '#1877f2', PRIMARY_LIGHT = '#eaf2fd'
 const GREEN = '#059669', GREEN_L = '#d1fae5'
 const RED = '#dc2626', RED_L = '#fee2e2'
 const YELLOW = '#d97706', YELLOW_L = '#fef3c7'
@@ -126,16 +126,17 @@ export default function TeamPage() {
             <ArrowLeft size={15} /> Dashboard
           </Link>
           <button
+            className="fbtap"
             onClick={() => setShowInvite(true)}
             style={{
-              padding: '11px 22px', fontSize: 13, fontWeight: 800,
-              background: 'linear-gradient(135deg, #4338ca 0%, #6366f1 55%, #818cf8 100%)',
-              color: 'white', border: 'none', borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit',
+              padding: '12px 24px', fontSize: 13.5, fontWeight: 900,
+              background: 'linear-gradient(135deg, #1877f2 0%, #2e89ff 55%, #5fa3ff 100%)',
+              color: 'white', border: 'none', borderRadius: 13, cursor: 'pointer', fontFamily: 'inherit',
               display: 'flex', alignItems: 'center', gap: 8,
-              boxShadow: '0 6px 22px rgba(67,56,202,0.42)',
+              boxShadow: '0 6px 22px rgba(11,95,204,0.42), inset 0 1px 0 rgba(255,255,255,0.25)',
             }}
           >
-            <UserPlus size={15} /> เชิญแอดมินใหม่
+            <UserPlus size={16} /> เชิญแอดมินใหม่
           </button>
         </div>
 
@@ -149,7 +150,7 @@ export default function TeamPage() {
         {/* Members */}
         <section style={{
           background: SURFACE, borderRadius: 18, padding: 22, border: `1.5px solid ${BORDER}`,
-          marginBottom: 18, boxShadow: '4px 4px 14px rgba(99,102,241,0.08), -3px -3px 10px rgba(255,255,255,0.95)',
+          marginBottom: 18, boxShadow: '4px 4px 14px rgba(24,119,242,0.08), -3px -3px 10px rgba(255,255,255,0.95)',
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
             <h2 style={{ fontSize: 15, fontWeight: 900, margin: 0 }}>สมาชิกในทีม ({members.length})</h2>
@@ -164,7 +165,7 @@ export default function TeamPage() {
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {members.map(m => (
-                <div key={m.userId} style={{
+                <div key={m.userId} className="fbpop" style={{
                   background: SURFACE2, border: `1px solid ${BORDER}`, borderRadius: 14, padding: '14px 16px',
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: m.pages.length > 0 ? 10 : 0 }}>
@@ -224,7 +225,7 @@ export default function TeamPage() {
         {/* Invitations */}
         <section style={{
           background: SURFACE, borderRadius: 18, padding: 22, border: `1.5px solid ${BORDER}`,
-          boxShadow: '4px 4px 14px rgba(99,102,241,0.08), -3px -3px 10px rgba(255,255,255,0.95)',
+          boxShadow: '4px 4px 14px rgba(24,119,242,0.08), -3px -3px 10px rgba(255,255,255,0.95)',
         }}>
           <h2 style={{ fontSize: 15, fontWeight: 900, margin: '0 0 14px' }}>คำเชิญทั้งหมด ({invitations.length})</h2>
 
@@ -495,7 +496,7 @@ Email: ${result.email}
                     padding: '12px 10px', fontSize: 12, fontWeight: 800,
                     background: authMethod === 'credentials' ? PRIMARY_LIGHT : SURFACE2,
                     color: authMethod === 'credentials' ? PRIMARY : MUTED,
-                    border: `1.5px solid ${authMethod === 'credentials' ? 'rgba(99,102,241,0.4)' : BORDER}`,
+                    border: `1.5px solid ${authMethod === 'credentials' ? 'rgba(24,119,242,0.4)' : BORDER}`,
                     borderRadius: 10, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
                   }}
                 >
@@ -512,7 +513,7 @@ Email: ${result.email}
                     padding: '12px 10px', fontSize: 12, fontWeight: 800,
                     background: authMethod === 'facebook' ? PRIMARY_LIGHT : SURFACE2,
                     color: authMethod === 'facebook' ? PRIMARY : MUTED,
-                    border: `1.5px solid ${authMethod === 'facebook' ? 'rgba(99,102,241,0.4)' : BORDER}`,
+                    border: `1.5px solid ${authMethod === 'facebook' ? 'rgba(24,119,242,0.4)' : BORDER}`,
                     borderRadius: 10, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
                   }}
                 >
@@ -579,7 +580,7 @@ Email: ${result.email}
                     <label key={p.id} style={{
                       display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
                       background: selected.includes(p.id) ? PRIMARY_LIGHT : SURFACE2,
-                      border: `1.5px solid ${selected.includes(p.id) ? 'rgba(99,102,241,0.4)' : BORDER}`,
+                      border: `1.5px solid ${selected.includes(p.id) ? 'rgba(24,119,242,0.4)' : BORDER}`,
                       borderRadius: 10, cursor: 'pointer',
                     }}>
                       <input
@@ -639,10 +640,10 @@ Email: ${result.email}
               disabled={!canSubmit}
               style={{
                 width: '100%', padding: '12px 20px', fontSize: 14, fontWeight: 800,
-                background: !canSubmit ? '#94a3b8' : 'linear-gradient(135deg, #4338ca 0%, #6366f1 55%, #818cf8 100%)',
+                background: !canSubmit ? '#94a3b8' : 'linear-gradient(135deg, #1877f2 0%, #2e89ff 55%, #5fa3ff 100%)',
                 color: 'white', border: 'none', borderRadius: 12,
                 cursor: !canSubmit ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
-                boxShadow: !canSubmit ? 'none' : '0 6px 22px rgba(67,56,202,0.42)',
+                boxShadow: !canSubmit ? 'none' : '0 6px 22px rgba(11,95,204,0.42)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
               }}
             >

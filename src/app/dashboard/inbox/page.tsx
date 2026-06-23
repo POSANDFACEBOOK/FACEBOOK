@@ -9,22 +9,22 @@ import {
 } from 'lucide-react'
 
 // ─── Design Tokens (sync กับ dashboard) ───────────────────────
-const BG = '#eef2ff', SURFACE = '#ffffff', SURFACE2 = '#f5f7ff'
-const BORDER = 'rgba(99,102,241,0.13)', BORDER2 = 'rgba(99,102,241,0.22)'
+const BG = '#eaf2fd', SURFACE = '#ffffff', SURFACE2 = '#f0f6ff'
+const BORDER = 'rgba(24,119,242,0.13)', BORDER2 = 'rgba(24,119,242,0.22)'
 const TEXT = '#1a1f3c', MUTED = '#6b7280'
-const PRIMARY = '#4338ca', PRIMARY_LIGHT = '#eef2ff'
+const PRIMARY = '#1877f2', PRIMARY_LIGHT = '#eaf2fd'
 const GREEN = '#059669', GREEN_L = '#d1fae5'
 const RED = '#dc2626', RED_L = '#fee2e2'
 const YELLOW = '#d97706', YELLOW_L = '#fef3c7'
 const CYAN = '#0891b2', CYAN_L = '#cffafe'
-const SHADOW_SM = '0 2px 8px rgba(99,102,241,0.08), 0 1px 3px rgba(0,0,0,0.04)'
-const SHADOW_MD = '0 4px 20px rgba(99,102,241,0.12), 0 2px 6px rgba(0,0,0,0.05)'
-const SHADOW_LG = '0 8px 36px rgba(99,102,241,0.16), 0 3px 10px rgba(0,0,0,0.07)'
+const SHADOW_SM = '0 2px 8px rgba(24,119,242,0.08), 0 1px 3px rgba(0,0,0,0.04)'
+const SHADOW_MD = '0 4px 20px rgba(24,119,242,0.12), 0 2px 6px rgba(0,0,0,0.05)'
+const SHADOW_LG = '0 8px 36px rgba(24,119,242,0.16), 0 3px 10px rgba(0,0,0,0.07)'
 
 const btnPrimary: React.CSSProperties = {
-  background: 'linear-gradient(135deg, #4338ca 0%, #6366f1 55%, #818cf8 100%)',
+  background: 'linear-gradient(135deg, #1877f2 0%, #2e89ff 55%, #5fa3ff 100%)',
   color: 'white', border: 'none', borderRadius: 12, cursor: 'pointer',
-  boxShadow: '0 6px 22px rgba(67,56,202,0.42), inset 0 1px 0 rgba(255,255,255,0.28)',
+  boxShadow: '0 6px 22px rgba(11,95,204,0.42), inset 0 1px 0 rgba(255,255,255,0.28)',
   fontFamily: 'inherit', fontWeight: 700, transition: 'all 0.18s',
 }
 const btnGhost: React.CSSProperties = {
@@ -55,10 +55,10 @@ const PAGE_PALETTE = [
   { bg: '#dcfce7', border: '#16a34a', text: '#15803d', avatar: 'linear-gradient(135deg, #4ade80, #16a34a)' }, // green
   { bg: '#fef3c7', border: '#d97706', text: '#b45309', avatar: 'linear-gradient(135deg, #fbbf24, #d97706)' }, // amber
   { bg: '#fce7f3', border: '#db2777', text: '#be185d', avatar: 'linear-gradient(135deg, #f472b6, #db2777)' }, // pink
-  { bg: '#ede9fe', border: '#7c3aed', text: '#6d28d9', avatar: 'linear-gradient(135deg, #a78bfa, #7c3aed)' }, // violet
+  { bg: '#e3effe', border: '#7c3aed', text: '#6d28d9', avatar: 'linear-gradient(135deg, #a78bfa, #7c3aed)' }, // violet
   { bg: '#cffafe', border: '#0891b2', text: '#0e7490', avatar: 'linear-gradient(135deg, #22d3ee, #0891b2)' }, // cyan
   { bg: '#fee2e2', border: '#dc2626', text: '#b91c1c', avatar: 'linear-gradient(135deg, #f87171, #dc2626)' }, // red
-  { bg: '#e0e7ff', border: '#4f46e5', text: '#4338ca', avatar: 'linear-gradient(135deg, #818cf8, #4f46e5)' }, // indigo
+  { bg: '#dcebff', border: '#1877f2', text: '#1877f2', avatar: 'linear-gradient(135deg, #5fa3ff, #1877f2)' }, // indigo
 ]
 function pageColor(pageId?: string) {
   if (!pageId) return PAGE_PALETTE[7]
@@ -350,7 +350,7 @@ export default function InboxPage() {
   return (
     <div style={{ minHeight: '100vh', background: BG, color: TEXT, fontFamily: 'Inter, "Sarabun", system-ui, sans-serif', position: 'relative', overflow: 'hidden' }}>
       {/* Background pattern */}
-      <div style={{ position: 'fixed', inset: 0, zIndex: 0, pointerEvents: 'none', backgroundImage: `linear-gradient(rgba(99,102,241,0.045) 1px, transparent 1px), linear-gradient(90deg, rgba(99,102,241,0.045) 1px, transparent 1px)`, backgroundSize: '48px 48px' }} />
+      <div style={{ position: 'fixed', inset: 0, zIndex: 0, pointerEvents: 'none', backgroundImage: `linear-gradient(rgba(24,119,242,0.045) 1px, transparent 1px), linear-gradient(90deg, rgba(24,119,242,0.045) 1px, transparent 1px)`, backgroundSize: '48px 48px' }} />
 
       {/* Sidebar (compact mini-rail) */}
       <aside style={{
@@ -359,11 +359,11 @@ export default function InboxPage() {
         background: 'rgba(255,255,255,0.94)', backdropFilter: 'blur(28px)',
         borderRight: `1.5px solid ${BORDER}`, padding: '18px 14px 16px',
         display: 'flex', flexDirection: 'column', gap: 6, zIndex: 50,
-        boxShadow: '4px 0 28px rgba(99,102,241,0.08)', overflowY: 'auto',
+        boxShadow: '4px 0 28px rgba(24,119,242,0.08)', overflowY: 'auto',
       }} className="ib-sidebar">
         {/* Logo */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '2px 8px 16px', borderBottom: `1px solid ${BORDER}`, marginBottom: 10 }}>
-          <div style={{ width: 40, height: 40, background: 'linear-gradient(135deg, #4338ca 0%, #6366f1 60%, #818cf8 100%)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, boxShadow: '0 4px 14px rgba(67,56,202,0.4)' }}>⚡</div>
+          <div style={{ width: 40, height: 40, background: 'linear-gradient(135deg, #1877f2 0%, #2e89ff 60%, #5fa3ff 100%)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, boxShadow: '0 4px 14px rgba(11,95,204,0.4)' }}>⚡</div>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontWeight: 900, fontSize: 15, color: TEXT, lineHeight: 1.2 }}>FB Ads AI</div>
             <div style={{ fontSize: 10, color: MUTED, fontWeight: 700, marginTop: 1 }}>Smart Manager</div>
@@ -371,7 +371,7 @@ export default function InboxPage() {
         </div>
 
         {session?.user && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', background: 'linear-gradient(135deg, #eef2ff, #e0e7ff)', borderRadius: 12, marginBottom: 12, border: `1px solid ${BORDER}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', background: 'linear-gradient(135deg, #eaf2fd, #dcebff)', borderRadius: 12, marginBottom: 12, border: `1px solid ${BORDER}` }}>
             {session.user.image ? (
               <img src={session.user.image} alt="" style={{ width: 34, height: 34, borderRadius: '50%', objectFit: 'cover', flexShrink: 0, border: '1.5px solid white' }} />
             ) : (
@@ -416,7 +416,7 @@ export default function InboxPage() {
         alignItems: 'center', gap: 10, height: 52, boxSizing: 'border-box',
       }}>
         <Link href="/dashboard" style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ width: 32, height: 32, background: 'linear-gradient(135deg, #4338ca, #818cf8)', borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15 }}>⚡</div>
+          <div style={{ width: 32, height: 32, background: 'linear-gradient(135deg, #1877f2, #5fa3ff)', borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15 }}>⚡</div>
           <div style={{ fontWeight: 900, fontSize: 13, color: TEXT }}>FB Ads AI</div>
         </Link>
         <div style={{ flex: 1 }} />
@@ -440,16 +440,16 @@ export default function InboxPage() {
             }}>
               {/* "ทุกเพจ" tile */}
               <button
+                className="fbtap"
                 onClick={() => setPageFilter('')}
                 style={{
-                  position: 'relative', padding: '10px 12px', borderRadius: 11,
-                  border: `1.5px solid ${pageFilter === '' ? PRIMARY : BORDER}`,
-                  background: pageFilter === '' ? 'linear-gradient(135deg, #4338ca, #6366f1)' : 'white',
+                  position: 'relative', padding: '10px 14px', borderRadius: 12,
+                  border: `2px solid ${pageFilter === '' ? PRIMARY : BORDER}`,
+                  background: pageFilter === '' ? 'linear-gradient(135deg, #1877f2, #2e89ff)' : 'white',
                   color: pageFilter === '' ? 'white' : TEXT,
-                  fontSize: 12, fontWeight: 800, fontFamily: 'inherit', cursor: 'pointer',
+                  fontSize: 12.5, fontWeight: 900, fontFamily: 'inherit', cursor: 'pointer',
                   display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left',
-                  transition: 'all 0.15s',
-                  boxShadow: pageFilter === '' ? '0 4px 14px rgba(67,56,202,0.3)' : SHADOW_SM,
+                  boxShadow: pageFilter === '' ? '0 5px 16px rgba(11,95,204,0.32)' : SHADOW_SM,
                 }}
               >
                 <span style={{ fontSize: 14 }}>📂</span>
@@ -474,17 +474,17 @@ export default function InboxPage() {
                 return (
                   <button
                     key={p.id}
+                    className="fbtap"
                     onClick={() => setPageFilter(p.id)}
                     title={p.page_name}
                     style={{
-                      position: 'relative', padding: '10px 12px', borderRadius: 11,
-                      border: `1.5px solid ${active ? pc.border : BORDER}`,
+                      position: 'relative', padding: '10px 14px', borderRadius: 12,
+                      border: `2px solid ${active ? pc.border : BORDER}`,
                       background: active ? pc.avatar : 'white',
                       color: active ? 'white' : TEXT,
-                      fontSize: 12, fontWeight: 800, fontFamily: 'inherit', cursor: 'pointer',
+                      fontSize: 12.5, fontWeight: 900, fontFamily: 'inherit', cursor: 'pointer',
                       display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left',
-                      transition: 'all 0.15s',
-                      boxShadow: active ? `0 4px 14px ${pc.border}55` : SHADOW_SM,
+                      boxShadow: active ? `0 5px 16px ${pc.border}66` : SHADOW_SM,
                     }}
                   >
                     <span style={{
@@ -522,9 +522,9 @@ export default function InboxPage() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
                 <div style={{
                   width: 30, height: 30, borderRadius: 9, flexShrink: 0,
-                  background: 'linear-gradient(135deg, #4338ca, #818cf8)',
+                  background: 'linear-gradient(135deg, #1877f2, #5fa3ff)',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  boxShadow: '0 2px 8px rgba(67,56,202,0.3)',
+                  boxShadow: '0 2px 8px rgba(11,95,204,0.3)',
                 }}>
                   <MessageSquare size={16} color="white" strokeWidth={2.5} />
                 </div>
@@ -559,7 +559,7 @@ export default function InboxPage() {
             {/* Status filter — high-contrast segmented control (active = filled purple) */}
             <div style={{
               display: 'flex', gap: 3, padding: 4,
-              background: '#e0e7ff', borderRadius: 11,
+              background: '#dcebff', borderRadius: 11,
               border: `1.5px solid ${BORDER2}`,
             }}>
               {([
@@ -580,10 +580,10 @@ export default function InboxPage() {
                       borderRadius: 8,
                       // ACTIVE = filled gradient purple → ชัดเจนเด่นมาก
                       background: active
-                        ? 'linear-gradient(135deg, #4338ca, #6366f1)'
+                        ? 'linear-gradient(135deg, #1877f2, #2e89ff)'
                         : 'transparent',
                       boxShadow: active
-                        ? '0 3px 10px rgba(67,56,202,0.35), inset 0 1px 0 rgba(255,255,255,0.2)'
+                        ? '0 3px 10px rgba(11,95,204,0.35), inset 0 1px 0 rgba(255,255,255,0.2)'
                         : 'none',
                       fontSize: 11, fontWeight: 800, cursor: 'pointer',
                       fontFamily: 'inherit',
@@ -752,7 +752,7 @@ export default function InboxPage() {
               {/* AI Suggestions */}
               {aiSuggestions.length > 0 && (
                 <div style={{
-                  padding: '12px 18px', background: 'linear-gradient(135deg, #eef2ff, #e0e7ff)',
+                  padding: '12px 18px', background: 'linear-gradient(135deg, #eaf2fd, #dcebff)',
                   borderTop: `1px solid ${BORDER2}`,
                 }}>
                   <div style={{ fontSize: 11, fontWeight: 800, color: PRIMARY, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -806,7 +806,7 @@ export default function InboxPage() {
                     title="ให้ AI ช่วยร่างคำตอบ"
                     style={{
                       padding: '11px 14px', borderRadius: 12, border: 'none',
-                      background: aiLoading ? '#e0e7ff' : 'linear-gradient(135deg, #8b5cf6, #6366f1)',
+                      background: aiLoading ? '#dcebff' : 'linear-gradient(135deg, #8b5cf6, #2e89ff)',
                       color: 'white', cursor: aiLoading ? 'wait' : 'pointer',
                       display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 800,
                       fontFamily: 'inherit', boxShadow: '0 4px 14px rgba(139,92,246,0.35)',
@@ -1042,11 +1042,11 @@ function NavItem({ icon, label, active, badge }: { icon: ReactNode; label: strin
       style={{
         display: 'flex', alignItems: 'center', gap: 11,
         padding: '10px 12px', borderRadius: 11,
-        background: active ? 'linear-gradient(135deg, #eef2ff, #e0e7ff)' : 'transparent',
+        background: active ? 'linear-gradient(135deg, #eaf2fd, #dcebff)' : 'transparent',
         color: baseColor, cursor: 'pointer',
         fontSize: 13, fontWeight: active ? 800 : 700,
         border: `1px solid ${active ? BORDER2 : 'transparent'}`,
-        boxShadow: active ? '0 3px 10px rgba(67,56,202,0.12)' : 'none',
+        boxShadow: active ? '0 3px 10px rgba(11,95,204,0.12)' : 'none',
         position: 'relative', transition: 'all 0.15s',
       }}
     >
@@ -1067,7 +1067,7 @@ function Avatar({ name, src, size = 40, ringColor }: { name?: string; src?: stri
   return (
     <div style={{
       width: size, height: size, borderRadius: '50%', flexShrink: 0,
-      background: 'linear-gradient(135deg, #818cf8, #6366f1)', color: 'white',
+      background: 'linear-gradient(135deg, #5fa3ff, #2e89ff)', color: 'white',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       fontSize: size * 0.4, fontWeight: 800, boxShadow: SHADOW_SM,
       border: ring,
@@ -1175,7 +1175,7 @@ function MessageBubble({ message: m, customerName, customerPic }: { message: any
         <div style={{
           padding: '9px 13px', borderRadius: 16,
           background: out
-            ? (failed ? RED_L : 'linear-gradient(135deg, #4338ca 0%, #6366f1 100%)')
+            ? (failed ? RED_L : 'linear-gradient(135deg, #1877f2 0%, #2e89ff 100%)')
             : 'white',
           color: out ? (failed ? RED : 'white') : TEXT,
           border: out ? 'none' : `1px solid ${BORDER}`,

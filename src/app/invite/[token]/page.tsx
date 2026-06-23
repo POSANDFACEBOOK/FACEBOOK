@@ -3,10 +3,10 @@ import { useEffect, useState } from 'react'
 import { useSession, signIn } from 'next-auth/react'
 import { useParams, useRouter } from 'next/navigation'
 
-const BG = '#eef2ff', SURFACE = '#ffffff'
-const BORDER = 'rgba(99,102,241,0.13)'
+const BG = '#eaf2fd', SURFACE = '#ffffff'
+const BORDER = 'rgba(24,119,242,0.13)'
 const TEXT = '#1a1f3c', MUTED = '#6b7280'
-const PRIMARY = '#4338ca', GREEN = '#059669', RED = '#dc2626'
+const PRIMARY = '#1877f2', GREEN = '#059669', RED = '#dc2626'
 
 type InvitePreview = {
   status: 'pending' | 'accepted' | 'revoked' | 'expired'
@@ -81,7 +81,7 @@ export default function InviteAcceptPage() {
         <div style={{
           maxWidth: 420, background: SURFACE, borderRadius: 22, padding: '30px 28px',
           border: `1.5px solid ${BORDER}`, textAlign: 'center',
-          boxShadow: '8px 8px 28px rgba(99,102,241,0.14), -6px -6px 20px rgba(255,255,255,0.95)',
+          boxShadow: '8px 8px 28px rgba(24,119,242,0.14), -6px -6px 20px rgba(255,255,255,0.95)',
         }}>
           <div style={{ fontSize: 48, marginBottom: 12 }}>⚠️</div>
           <h1 style={{ fontSize: 20, color: TEXT, fontWeight: 900, margin: '0 0 10px' }}>
@@ -92,10 +92,10 @@ export default function InviteAcceptPage() {
           </p>
           <a href="/" style={{
             display: 'inline-block', marginTop: 20, padding: '11px 26px',
-            background: 'linear-gradient(135deg, #4338ca 0%, #6366f1 55%, #818cf8 100%)',
+            background: 'linear-gradient(135deg, #1877f2 0%, #2e89ff 55%, #5fa3ff 100%)',
             color: 'white', borderRadius: 12, fontSize: 13, fontWeight: 800,
             textDecoration: 'none',
-            boxShadow: '0 6px 22px rgba(67,56,202,0.42), 0 2px 6px rgba(67,56,202,0.25)',
+            boxShadow: '0 6px 22px rgba(11,95,204,0.42), 0 2px 6px rgba(11,95,204,0.25)',
           }}>
             กลับหน้าแรก
           </a>
@@ -109,24 +109,24 @@ export default function InviteAcceptPage() {
       {/* Tech grid */}
       <div style={{
         position: 'fixed', inset: 0, zIndex: 0, pointerEvents: 'none',
-        backgroundImage: `linear-gradient(rgba(99,102,241,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(99,102,241,0.05) 1px, transparent 1px)`,
+        backgroundImage: `linear-gradient(rgba(24,119,242,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(24,119,242,0.05) 1px, transparent 1px)`,
         backgroundSize: '48px 48px',
       }} />
-      <div style={{ position: 'fixed', top: '-8%', right: '-5%', width: 460, height: 460, borderRadius: '50%', background: 'radial-gradient(circle, rgba(99,102,241,0.12) 0%, transparent 65%)', zIndex: 0, pointerEvents: 'none' }} />
+      <div style={{ position: 'fixed', top: '-8%', right: '-5%', width: 460, height: 460, borderRadius: '50%', background: 'radial-gradient(circle, rgba(24,119,242,0.12) 0%, transparent 65%)', zIndex: 0, pointerEvents: 'none' }} />
 
       <div style={{ position: 'relative', zIndex: 1, width: '100%', maxWidth: 460 }}>
         <div style={{
           background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(24px)',
           border: `1.5px solid ${BORDER}`, borderRadius: 26, padding: '30px 28px',
-          boxShadow: '8px 8px 28px rgba(99,102,241,0.14), -6px -6px 20px rgba(255,255,255,0.95)',
+          boxShadow: '8px 8px 28px rgba(24,119,242,0.14), -6px -6px 20px rgba(255,255,255,0.95)',
         }}>
           {/* Header */}
           <div style={{ textAlign: 'center', marginBottom: 20 }}>
             <div style={{
               width: 64, height: 64, margin: '0 auto 14px',
-              background: 'linear-gradient(135deg, #4338ca 0%, #6366f1 55%, #818cf8 100%)',
+              background: 'linear-gradient(135deg, #1877f2 0%, #2e89ff 55%, #5fa3ff 100%)',
               borderRadius: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28,
-              boxShadow: '0 6px 22px rgba(67,56,202,0.42)',
+              boxShadow: '0 6px 22px rgba(11,95,204,0.42)',
             }}>👋</div>
             <h1 style={{ fontSize: 22, fontWeight: 900, color: TEXT, margin: '0 0 4px' }}>
               คุณได้รับคำเชิญ
@@ -139,7 +139,7 @@ export default function InviteAcceptPage() {
           {/* Owner */}
           <div style={{
             display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px',
-            background: 'linear-gradient(135deg, #eef2ff, #e0e7ff)',
+            background: 'linear-gradient(135deg, #eaf2fd, #dcebff)',
             borderRadius: 14, marginBottom: 14, border: `1px solid ${BORDER}`,
           }}>
             {preview.ownerImage ? (
@@ -164,7 +164,7 @@ export default function InviteAcceptPage() {
               {preview.pages.map((p, i) => (
                 <div key={i} style={{
                   display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
-                  background: '#f5f7ff', border: `1px solid ${BORDER}`, borderRadius: 10,
+                  background: '#f0f6ff', border: `1px solid ${BORDER}`, borderRadius: 10,
                 }}>
                   {p.page_picture ? (
                     <img src={p.page_picture} alt="" style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover' }} />
@@ -227,10 +227,10 @@ export default function InviteAcceptPage() {
                 disabled={accepting}
                 style={{
                   width: '100%', padding: '14px 24px',
-                  background: accepting ? '#94a3b8' : 'linear-gradient(135deg, #4338ca 0%, #6366f1 55%, #818cf8 100%)',
+                  background: accepting ? '#94a3b8' : 'linear-gradient(135deg, #1877f2 0%, #2e89ff 55%, #5fa3ff 100%)',
                   color: 'white', border: 'none', borderRadius: 14,
                   fontSize: 14, fontWeight: 800, cursor: accepting ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
-                  boxShadow: accepting ? 'none' : '0 6px 22px rgba(67,56,202,0.42)',
+                  boxShadow: accepting ? 'none' : '0 6px 22px rgba(11,95,204,0.42)',
                 }}
               >
                 {accepting ? 'กำลังยอมรับ...' : '✓ ยอมรับคำเชิญและเข้าใช้งาน'}
