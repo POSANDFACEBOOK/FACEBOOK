@@ -11,9 +11,9 @@ export const dynamic = 'force-dynamic'
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   try {
     const session = await getServerSession(authOptions)
-    if (!session?.accessToken) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const ctx = await getCurrentUserContext(session.accessToken as string, (session as any).fbUserId)
+    const ctx = await getCurrentUserContext(session)
     if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const sb = supabaseAdmin()
@@ -56,8 +56,8 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
   try {
     const session = await getServerSession(authOptions)
-    if (!session?.accessToken) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    const ctx = await getCurrentUserContext(session.accessToken as string, (session as any).fbUserId)
+    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const ctx = await getCurrentUserContext(session)
     if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const sb = supabaseAdmin()

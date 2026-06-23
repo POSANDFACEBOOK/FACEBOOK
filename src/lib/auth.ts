@@ -1,6 +1,125 @@
 import FacebookProvider from 'next-auth/providers/facebook'
+import CredentialsProvider from 'next-auth/providers/credentials'
+import bcrypt from 'bcryptjs'
+import { supabaseAdmin } from './supabase'
 
 const FB_API = 'https://graph.facebook.com/v19.0'
+
+/**
+ * Credentials authorize: ใช้กับ agent ที่ owner ตั้ง email + password ให้
+ *
+ * Flow:
+ * 1. ลอง match กับ users ที่ email_lower + password_hash ตรง → login
+ * 2. ถ้าไม่เจอ user แต่มี pending invitation (invitee_email_lower + initial_password_hash ตรง)
+ *    → activate: create/update user, mark invitation accepted, add page_members → login
+ * 3. ไม่ match → return null (login fail)
+ */
+async function authorizeCredentials(creds: any): Promise<{ id: string; name: string; email: string } | null> {
+  if (!creds?.email || !creds?.password) return null
+  const email = String(creds.email).trim().toLowerCase()
+  const password = String(creds.password)
+  if (!email || !password) return null
+
+  try {
+    const sb = supabaseAdmin()
+
+    // 1) Existing user lookup
+    const { data: user } = await sb
+      .from('users')
+      .select('id, name, email, facebook_id, password_hash')
+      .eq('email_lower', email)
+      .maybeSingle()
+
+    if (user?.password_hash) {
+      const ok = await bcrypt.compare(password, user.password_hash)
+      if (ok) {
+        return { id: user.id, name: user.name || user.email || email, email: user.email || email }
+      }
+      // Wrong password — ห้าม fall through ไปทาง invitation (กัน brute-force ขโมยบัญชี)
+      return null
+    }
+
+    // Security: ถ้า email ตรงกับ FB user ที่มีอยู่ → refuse credentials activation
+    // (ป้องกัน account takeover ผ่านการ invite email ของคนอื่น)
+    if (user?.facebook_id) {
+      console.warn('[authorizeCredentials] refused — email belongs to FB user:', email)
+      return null
+    }
+
+    // 2) Pending invitation lookup
+    const { data: inv } = await sb
+      .from('team_invitations')
+      .select('id, owner_user_id, role, page_ids, invitee_email, invitee_name, initial_password_hash, expires_at')
+      .eq('invitee_email_lower', email)
+      .eq('auth_method', 'credentials')
+      .is('accepted_at', null)
+      .is('revoked_at', null)
+      .gt('expires_at', new Date().toISOString())
+      .maybeSingle()
+
+    if (!inv?.initial_password_hash) return null
+
+    const okInv = await bcrypt.compare(password, inv.initial_password_hash)
+    if (!okInv) return null
+
+    // 3) Activate invitation
+    let userId: string
+    if (user) {
+      userId = user.id
+      await sb
+        .from('users')
+        .update({
+          password_hash: inv.initial_password_hash,
+          email_lower: email,
+          email: user.email || inv.invitee_email,
+          name: user.name || inv.invitee_name || email,
+        })
+        .eq('id', userId)
+    } else {
+      const { data: created, error: createErr } = await sb
+        .from('users')
+        .insert({
+          name: inv.invitee_name || email,
+          email: inv.invitee_email || email,
+          email_lower: email,
+          password_hash: inv.initial_password_hash,
+        })
+        .select('id, name, email')
+        .single()
+      if (createErr || !created) {
+        console.error('[authorizeCredentials] create user failed:', createErr?.message)
+        return null
+      }
+      userId = created.id
+    }
+
+    // 4) Add page_members
+    const rows = (inv.page_ids || []).map((pid: string) => ({
+      user_id: userId,
+      page_id: pid,
+      role: inv.role,
+      invited_by: inv.owner_user_id,
+    }))
+    if (rows.length > 0) {
+      const { error: memErr } = await sb
+        .from('page_members')
+        .upsert(rows, { onConflict: 'user_id,page_id', ignoreDuplicates: true })
+      if (memErr) console.error('[authorizeCredentials] page_members upsert failed:', memErr.message)
+    }
+
+    // 5) Mark invitation accepted (atomic flip)
+    await sb
+      .from('team_invitations')
+      .update({ accepted_by: userId, accepted_at: new Date().toISOString() })
+      .eq('id', inv.id)
+      .is('accepted_at', null)
+
+    return { id: userId, name: inv.invitee_name || email, email: inv.invitee_email || email }
+  } catch (e: any) {
+    console.error('[authorizeCredentials] threw:', e?.message)
+    return null
+  }
+}
 
 async function exchangeForLongLivedToken(
   shortLivedToken: string,
@@ -119,26 +238,55 @@ export const authOptions = {
         },
       },
     }),
+    CredentialsProvider({
+      id: 'credentials',
+      name: 'Email + Password',
+      credentials: {
+        email: { label: 'Email', type: 'email' },
+        password: { label: 'Password', type: 'password' },
+      },
+      authorize: authorizeCredentials,
+    }),
   ],
   session: { strategy: 'jwt' as const, maxAge: 60 * 24 * 60 * 60 },
   callbacks: {
     async session({ session, token }: any) {
       session.accessToken = token?.accessToken
-      // เก็บ FB user_id ใน session → routes ไม่ต้อง call /me ทุก request
-      // (ป้องกัน rate limit + เร็วขึ้น)
       session.fbUserId = token?.fbUserId
+      // userId เก็บไว้สำหรับ credentials user (และ owner FB ก็ใส่ได้ถ้ามี)
+      session.userId = token?.userId
+      session.provider = token?.provider
+      if (session.user) {
+        session.user.id = token?.userId || token?.fbUserId
+      }
       return session
     },
-    async jwt({ token, account, profile }: any) {
+    async jwt({ token, account, profile, user }: any) {
       try {
-        // Initial login → save short-lived ทันที + mark needsExchange
+        // Initial login: detect provider
+        if (account?.provider === 'credentials' && user) {
+          // user object มาจาก authorizeCredentials → { id, name, email }
+          token.provider = 'credentials'
+          token.userId = user.id
+          token.name = user.name
+          token.email = user.email
+          return token
+        }
+
+        // Initial Facebook login → save short-lived ทันที + mark needsExchange
         // ห้าม await exchange ที่นี่ — เคย break OAuth callback ใน timeout
         if (account?.access_token) {
+          token.provider = 'facebook'
           token.accessToken = account.access_token
           token.tokenIssuedAt = Date.now()
           token.needsExchange = true
           // FB user_id มาจาก OAuth → เก็บไว้ ไม่ต้อง call /me ทุก request
           token.fbUserId = account.providerAccountId || (profile as any)?.id
+          return token
+        }
+
+        // Credentials session refresh → ไม่ต้องทำอะไร แค่ pass through
+        if (token?.provider === 'credentials') {
           return token
         }
 

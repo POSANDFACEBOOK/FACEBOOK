@@ -10,9 +10,9 @@ export const dynamic = 'force-dynamic'
 export async function GET() {
   try {
     const session = await getServerSession(authOptions)
-    if (!session?.accessToken) return NextResponse.json({ pages: [] })
+    if (!session) return NextResponse.json({ pages: [] })
 
-    const ctx = await getCurrentUserContext(session.accessToken as string, (session as any).fbUserId)
+    const ctx = await getCurrentUserContext(session)
     if (!ctx) return NextResponse.json({ pages: [] })
 
     const g = assertOwner(ctx)

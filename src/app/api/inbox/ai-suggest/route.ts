@@ -16,9 +16,9 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions)
-    if (!session?.accessToken) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const ctx = await getCurrentUserContext(session.accessToken as string, (session as any).fbUserId)
+    const ctx = await getCurrentUserContext(session)
     if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { conversationId, instruction } = await req.json()

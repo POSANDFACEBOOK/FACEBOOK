@@ -21,7 +21,7 @@ export async function GET(req: Request) {
     nextauthUrl: process.env.NEXTAUTH_URL || null,
   }
 
-  if (!session?.accessToken) {
+  if (!session) {
     return NextResponse.json({
       ok: false,
       reason: 'no_session_token',

@@ -12,9 +12,9 @@ export const dynamic = 'force-dynamic'
 export async function GET() {
   try {
     const session = await getServerSession(authOptions)
-    if (!session?.accessToken) return NextResponse.json({ replies: [] })
+    if (!session) return NextResponse.json({ replies: [] })
 
-    const ctx = await getCurrentUserContext(session.accessToken as string, (session as any).fbUserId)
+    const ctx = await getCurrentUserContext(session)
     if (!ctx) return NextResponse.json({ replies: [] })
 
     if (ctx.memberships.length === 0) return NextResponse.json({ replies: [] })
@@ -46,9 +46,9 @@ export async function GET() {
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions)
-    if (!session?.accessToken) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const ctx = await getCurrentUserContext(session.accessToken as string, (session as any).fbUserId)
+    const ctx = await getCurrentUserContext(session)
     if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const og = assertOwner(ctx)
@@ -84,9 +84,9 @@ export async function POST(req: Request) {
 export async function DELETE(req: Request) {
   try {
     const session = await getServerSession(authOptions)
-    if (!session?.accessToken) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const ctx = await getCurrentUserContext(session.accessToken as string, (session as any).fbUserId)
+    const ctx = await getCurrentUserContext(session)
     if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const og = assertOwner(ctx)

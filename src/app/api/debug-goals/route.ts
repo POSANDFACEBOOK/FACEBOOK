@@ -27,7 +27,7 @@ const GOALS_TO_TEST = [
 export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions) as any
-    if (!session?.accessToken) {
+    if (!session) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
     }
     const userToken = session.accessToken

@@ -15,7 +15,7 @@ export async function POST(_req: Request, { params }: { params: { token: string 
     }
 
     const session = await getServerSession(authOptions)
-    if (!session?.accessToken) {
+    if (!session) {
       return NextResponse.json({ error: 'ต้อง login Facebook ก่อน' }, { status: 401 })
     }
 
