@@ -6,6 +6,7 @@ import {
   ArrowLeft, Send, Sparkles, RefreshCw, Search, Star, Archive, CheckCircle2,
   MessageSquare, Inbox, Settings, Zap, X, ChevronLeft, MoreVertical, Bot,
   AlertCircle, BarChart3, Bell, Plus, LogOut, ListFilter, MailOpen, MailQuestion,
+  Pencil, Check,
 } from 'lucide-react'
 
 // ─── Design Tokens (sync กับ dashboard) ───────────────────────
@@ -95,6 +96,11 @@ export default function InboxPage() {
   const [statusFilter, setStatusFilter] = useState<'all'|'unread'|'needs_reply'|'starred'|'unresolved'|'archived'>('all')
   const [search, setSearch] = useState('')
 
+  // Rename page nickname
+  const [renamePage, setRenamePage] = useState<any | null>(null)
+  const [nicknameDraft, setNicknameDraft] = useState('')
+  const [savingNickname, setSavingNickname] = useState(false)
+
   // UI state
   const [loadingList, setLoadingList] = useState(true)
   const [pageSyncing, setPageSyncing] = useState(false)
@@ -148,6 +154,32 @@ export default function InboxPage() {
   async function loadQuickReplies() {
     const r = await fetch('/api/inbox/quick-replies').then(r => r.json())
     setQuickReplies(r.replies || [])
+  }
+
+  function openRename(p: any) {
+    setRenamePage(p)
+    setNicknameDraft(p.nickname || '')
+  }
+
+  async function saveNickname() {
+    if (!renamePage || savingNickname) return
+    setSavingNickname(true)
+    try {
+      const res = await fetch('/api/inbox/pages', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pageId: renamePage.id, nickname: nicknameDraft.trim() || null }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.success) {
+        alert('บันทึกไม่สำเร็จ: ' + (data.error || 'unknown'))
+        return
+      }
+      setRenamePage(null)
+      await loadConversations()
+    } finally {
+      setSavingNickname(false)
+    }
   }
 
   // ── Background sync (silent — no spinner) ──
@@ -466,33 +498,35 @@ export default function InboxPage() {
                 )}
               </button>
 
-              {/* แต่ละเพจ — สีประจำเพจ + unread badge */}
+              {/* แต่ละเพจ — สีพื้นประจำเพจ (แยกชัด) + ชื่อเล่น + ปุ่มแก้ชื่อ + unread */}
               {pages.map(p => {
                 const pc = pageColor(p.id)
                 const active = pageFilter === p.id
                 const unread = unreadByPage[p.id] || 0
+                const display = p.nickname || p.page_name
                 return (
                   <button
                     key={p.id}
                     className="fbtap"
                     onClick={() => setPageFilter(p.id)}
-                    title={p.page_name}
+                    title={p.nickname ? `${p.nickname} · ${p.page_name}` : p.page_name}
                     style={{
-                      position: 'relative', padding: '10px 14px', borderRadius: 12,
-                      border: `2px solid ${active ? pc.border : BORDER}`,
-                      background: active ? pc.avatar : 'white',
-                      color: active ? 'white' : TEXT,
+                      position: 'relative', padding: '9px 9px 9px 12px', borderRadius: 12,
+                      border: `2px solid ${pc.border}`,
+                      background: active ? pc.avatar : pc.bg,
+                      color: active ? 'white' : pc.text,
                       fontSize: 12.5, fontWeight: 900, fontFamily: 'inherit', cursor: 'pointer',
                       display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left',
-                      boxShadow: active ? `0 5px 16px ${pc.border}66` : SHADOW_SM,
+                      boxShadow: active ? `0 5px 16px ${pc.border}66` : `0 2px 8px ${pc.border}22`,
                     }}
                   >
                     <span style={{
-                      width: 8, height: 8, borderRadius: '50%',
+                      width: 10, height: 10, borderRadius: '50%',
                       background: active ? 'white' : pc.border, flexShrink: 0,
+                      boxShadow: active ? 'none' : `0 0 0 3px ${pc.border}22`,
                     }} />
                     <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {p.page_name}
+                      {display}
                     </span>
                     {unread > 0 && (
                       <span style={{
@@ -502,6 +536,18 @@ export default function InboxPage() {
                         flexShrink: 0,
                       }}>{unread > 99 ? '99+' : unread}</span>
                     )}
+                    <span
+                      onClick={(e) => { e.stopPropagation(); openRename(p) }}
+                      title="ตั้งชื่อเล่นเพจ"
+                      style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        width: 22, height: 22, borderRadius: 7, flexShrink: 0, cursor: 'pointer',
+                        background: active ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.75)',
+                        color: active ? 'white' : pc.text,
+                      }}
+                    >
+                      <Pencil size={12} />
+                    </span>
                   </button>
                 )
               })}
@@ -679,7 +725,7 @@ export default function InboxPage() {
                       border: `1px solid ${pageColor(activeConv.page_id).border}33`,
                     }}>
                       <span style={{ width: 7, height: 7, borderRadius: '50%', background: pageColor(activeConv.page_id).border }} />
-                      {activeConv.connected_pages?.page_name}
+                      {activeConv.connected_pages?.nickname || activeConv.connected_pages?.page_name}
                     </span>
                   </div>
                 </div>
@@ -865,7 +911,7 @@ export default function InboxPage() {
               <div style={{ fontSize: 15, fontWeight: 800, color: TEXT, textAlign: 'center' }}>
                 {activeConv.customer_name || 'ลูกค้า'}
               </div>
-              <div style={{ fontSize: 11, color: MUTED }}>📄 {activeConv.connected_pages?.page_name}</div>
+              <div style={{ fontSize: 11, color: MUTED }}>📄 {activeConv.connected_pages?.nickname || activeConv.connected_pages?.page_name}</div>
             </div>
 
             {/* AI Insights */}
@@ -950,6 +996,73 @@ export default function InboxPage() {
           onClose={() => setShowSettings(false)}
           onSaved={() => { loadConversations(); loadQuickReplies() }}
         />
+      )}
+
+      {/* Rename page nickname modal */}
+      {renamePage && (
+        <div
+          onClick={() => setRenamePage(null)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', backdropFilter: 'blur(6px)', zIndex: 250, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+        >
+          <div onClick={(e) => e.stopPropagation()} style={{ background: SURFACE, borderRadius: 20, padding: 24, width: '100%', maxWidth: 400, boxShadow: '0 24px 70px rgba(15,23,42,0.3)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+              <span style={{
+                width: 36, height: 36, borderRadius: 10, flexShrink: 0,
+                background: pageColor(renamePage.id).avatar,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white',
+              }}><Pencil size={17} /></span>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 16, fontWeight: 900, color: TEXT }}>ตั้งชื่อเล่นเพจ</div>
+                <div style={{ fontSize: 11, color: MUTED, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{renamePage.page_name}</div>
+              </div>
+            </div>
+            <p style={{ fontSize: 12, color: MUTED, lineHeight: 1.6, margin: '10px 0 12px' }}>
+              ชื่อเล่นจะแสดงแทนชื่อเต็มในกล่องข้อความ ช่วยให้ดูสะอาดและโฟกัสที่ข้อความลูกค้า
+            </p>
+            <input
+              autoFocus
+              type="text"
+              value={nicknameDraft}
+              onChange={(e) => setNicknameDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') saveNickname() }}
+              placeholder={renamePage.page_name}
+              maxLength={60}
+              style={{
+                width: '100%', padding: '12px 14px', fontSize: 14, fontWeight: 700,
+                border: `2px solid ${pageColor(renamePage.id).border}`, borderRadius: 12,
+                fontFamily: 'inherit', background: SURFACE2, boxSizing: 'border-box', marginBottom: 14, color: TEXT,
+              }}
+            />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={() => { setNicknameDraft(''); }}
+                title="ล้างชื่อเล่น (กลับไปใช้ชื่อเต็ม)"
+                style={{ padding: '11px 14px', fontSize: 12, fontWeight: 800, background: SURFACE2, color: MUTED, border: `1.5px solid ${BORDER}`, borderRadius: 11, cursor: 'pointer', fontFamily: 'inherit' }}
+              >
+                ล้าง
+              </button>
+              <button
+                onClick={() => setRenamePage(null)}
+                style={{ flex: 1, padding: '11px 14px', fontSize: 13, fontWeight: 800, background: SURFACE2, color: TEXT, border: `1.5px solid ${BORDER}`, borderRadius: 11, cursor: 'pointer', fontFamily: 'inherit' }}
+              >
+                ยกเลิก
+              </button>
+              <button
+                className="fbtap"
+                onClick={saveNickname}
+                disabled={savingNickname}
+                style={{
+                  flex: 1, padding: '11px 14px', fontSize: 13, fontWeight: 900,
+                  background: savingNickname ? '#94a3b8' : 'linear-gradient(135deg, #1877f2, #2e89ff)',
+                  color: 'white', border: 'none', borderRadius: 11, cursor: savingNickname ? 'not-allowed' : 'pointer',
+                  fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                }}
+              >
+                <Check size={15} /> {savingNickname ? 'กำลังบันทึก...' : 'บันทึก'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Responsive CSS — เหมือน Messenger บนมือถือ */}
@@ -1123,7 +1236,7 @@ function ConvItem({ conv, active, onClick }: { conv: any; active: boolean; onCli
             maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
             <span style={{ width: 6, height: 6, borderRadius: '50%', background: pc.border, flexShrink: 0 }} />
-            {conv.connected_pages?.page_name}
+            {conv.connected_pages?.nickname || conv.connected_pages?.page_name}
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
