@@ -224,6 +224,23 @@ export default function InboxPage() {
     }
   }
 
+  // ── วัดความสูงจริงของจอ (กัน in-app browser คำนวณ svh/dvh เพี้ยน → แถบล่างลอย) ──
+  useEffect(() => {
+    const setAppHeight = () => {
+      document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`)
+    }
+    setAppHeight()
+    window.addEventListener('resize', setAppHeight)
+    window.addEventListener('orientationchange', setAppHeight)
+    // visualViewport อัปเดตตอนคีย์บอร์ดเด้ง/แถบ browser เปลี่ยน
+    window.visualViewport?.addEventListener('resize', setAppHeight)
+    return () => {
+      window.removeEventListener('resize', setAppHeight)
+      window.removeEventListener('orientationchange', setAppHeight)
+      window.visualViewport?.removeEventListener('resize', setAppHeight)
+    }
+  }, [])
+
   // ── Initial load + auto-sync on mount (with throttle) ──
   useEffect(() => {
     // รู้ว่าเป็น owner หรือ agent → ซ่อนเมนู "ยิงแอดเพจ" สำหรับ agent
@@ -393,7 +410,7 @@ export default function InboxPage() {
   })
 
   return (
-    <div style={{ minHeight: '100vh', width: '100%', maxWidth: '100vw', background: BG, color: TEXT, fontFamily: 'Inter, "Sarabun", system-ui, sans-serif', position: 'relative', overflow: 'hidden', overscrollBehavior: 'none' }}>
+    <div className="ib-root" style={{ minHeight: '100vh', width: '100%', maxWidth: '100vw', background: BG, color: TEXT, fontFamily: 'Inter, "Sarabun", system-ui, sans-serif', position: 'relative', overflow: 'hidden', overscrollBehavior: 'none' }}>
       {/* Background pattern */}
       <div style={{ position: 'fixed', inset: 0, zIndex: 0, pointerEvents: 'none', backgroundImage: `linear-gradient(rgba(24,119,242,0.045) 1px, transparent 1px), linear-gradient(90deg, rgba(24,119,242,0.045) 1px, transparent 1px)`, backgroundSize: '48px 48px' }} />
 
@@ -1121,7 +1138,9 @@ export default function InboxPage() {
             touch-action: pan-y;
           }
           .ib-sidebar { transform: translateX(-100%); transition: transform 0.25s; }
-          .ib-main { margin-left: 0 !important; padding-top: 0 !important; height: 100dvh !important; height: 100svh !important; width: 100% !important; }
+          /* ใช้ความสูงจริงจาก JS (--app-height) กัน in-app browser คำนวณ svh/dvh เพี้ยน → แถบล่างลอย */
+          .ib-root { height: var(--app-height, 100svh) !important; min-height: 0 !important; max-height: var(--app-height, 100svh) !important; }
+          .ib-main { margin-left: 0 !important; padding-top: 0 !important; height: var(--app-height, 100svh) !important; width: 100% !important; }
           .ib-mobile-bar { display: flex !important; }
           /* page bar เลื่อนแนวนอนได้ (เฉพาะตัวมันเอง) */
           .ib-pagebar > div { touch-action: pan-x; }
