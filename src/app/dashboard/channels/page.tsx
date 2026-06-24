@@ -150,7 +150,12 @@ function AddLineModal({ origin, onClose }: { origin: string; onClose: () => void
   const [saving, setSaving] = useState(false)
   const [done, setDone] = useState<{ name: string } | null>(null)
   const [copied, setCopied] = useState(false)
+  const [addedCount, setAddedCount] = useState(0)
   const webhookUrl = `${origin}/api/webhooks/line`
+
+  function addAnother() {
+    setToken(''); setSecret(''); setDone(null); setCopied(false)
+  }
 
   async function connect() {
     if (!token.trim() || !secret.trim() || saving) return
@@ -162,6 +167,7 @@ function AddLineModal({ origin, onClose }: { origin: string; onClose: () => void
       })
       const data = await res.json()
       if (!res.ok || !data.success) { alert('เชื่อมไม่สำเร็จ: ' + (data.error || '')); return }
+      setAddedCount(c => c + 1)
       setDone({ name: data.channel?.page_name || 'LINE OA' })
     } finally {
       setSaving(false)
@@ -174,7 +180,7 @@ function AddLineModal({ origin, onClose }: { origin: string; onClose: () => void
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <h2 style={{ fontSize: 17, fontWeight: 900, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ width: 24, height: 24, borderRadius: 7, background: LINE_GREEN, color: 'white', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900 }}>L</span>
-            เชื่อม LINE Official Account
+            เชื่อม LINE OA{addedCount > 0 ? ` · เพิ่มแล้ว ${addedCount}` : ''}
           </h2>
           <button onClick={onClose} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: MUTED, display: 'flex' }}><X size={20} /></button>
         </div>
@@ -184,7 +190,8 @@ function AddLineModal({ origin, onClose }: { origin: string; onClose: () => void
             <div style={{ background: PRIMARY_LIGHT, borderRadius: 10, padding: '11px 13px', marginBottom: 14, fontSize: 11.5, color: '#0b5fcc', lineHeight: 1.7 }}>
               <strong>หาค่าได้ที่:</strong> developers.line.biz → เลือก Provider → Channel (Messaging API)<br />
               • <strong>Channel access token</strong>: แท็บ "Messaging API" → Issue/Long-lived token<br />
-              • <strong>Channel secret</strong>: แท็บ "Basic settings"
+              • <strong>Channel secret</strong>: แท็บ "Basic settings"<br />
+              <span style={{ color: LINE_GREEN, fontWeight: 800 }}>มีหลาย LINE? เชื่อมทีละอันได้เลย — กรอกของ LINE แรก กด "เชื่อมต่อ" แล้วกด "เพิ่ม LINE อีกอัน"</span>
             </div>
 
             <label style={{ fontSize: 12, fontWeight: 800, color: TEXT, display: 'block', marginBottom: 6 }}>Channel access token <span style={{ color: RED }}>*</span></label>
@@ -211,7 +218,8 @@ function AddLineModal({ origin, onClose }: { origin: string; onClose: () => void
               <div style={{ fontSize: 14, fontWeight: 900, color: '#065f46' }}>เชื่อม "{done.name}" สำเร็จ</div>
             </div>
             <div style={{ background: '#fef3c7', border: '1px solid rgba(217,119,6,0.3)', borderRadius: 10, padding: '11px 13px', marginBottom: 12, fontSize: 12, color: '#92400e', lineHeight: 1.7 }}>
-              <strong>⚠️ อีก 1 ขั้นตอน:</strong> เอา Webhook URL นี้ไปวางใน LINE Developers Console → Messaging API → <strong>Webhook URL</strong> แล้วกด <strong>Verify</strong> + เปิด <strong>Use webhook</strong>
+              <strong>⚠️ อีก 1 ขั้นตอน:</strong> เอา Webhook URL นี้ไปวางใน LINE Developers Console → Messaging API → <strong>Webhook URL</strong> แล้วกด <strong>Verify</strong> + เปิด <strong>Use webhook</strong><br />
+              <span style={{ fontWeight: 800 }}>ใช้ URL เดียวกันนี้กับทุก LINE OA ได้เลย</span> (ระบบแยกแต่ละ OA ให้อัตโนมัติ)
             </div>
             <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
               <input type="text" readOnly value={webhookUrl} onFocus={e => e.target.select()}
@@ -221,7 +229,13 @@ function AddLineModal({ origin, onClose }: { origin: string; onClose: () => void
                 {copied ? <><Check size={13} /> คัดลอก</> : <><Copy size={13} /> คัดลอก</>}
               </button>
             </div>
-            <button onClick={onClose} style={{ width: '100%', padding: '11px', fontSize: 13, fontWeight: 800, background: SURFACE2, color: TEXT, border: `1.5px solid ${BORDER}`, borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit' }}>เสร็จสิ้น</button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={addAnother} className="fbtap"
+                style={{ flex: 1, padding: '12px', fontSize: 13, fontWeight: 900, background: LINE_GREEN, color: 'white', border: 'none', borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                <Plus size={15} /> เพิ่ม LINE อีกอัน
+              </button>
+              <button onClick={onClose} style={{ flex: 1, padding: '12px', fontSize: 13, fontWeight: 800, background: SURFACE2, color: TEXT, border: `1.5px solid ${BORDER}`, borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit' }}>เสร็จสิ้น</button>
+            </div>
           </>
         )}
       </div>
