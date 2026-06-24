@@ -49,6 +49,7 @@ export async function GET(req: Request) {
         id, fb_psid, customer_name, customer_picture,
         last_message, last_message_at, last_sender, unread_count,
         ai_category, ai_sentiment, is_archived, is_resolved, is_starred, tags,
+        send_block_code,
         page_id,
         connected_pages!inner(id, page_name, page_picture, nickname, channel)
       `)

@@ -254,6 +254,7 @@ async function syncOnePage(
               last_message_at: conv.updated_time,
               last_sender: lastSender,
               unread_count: conv.unread_count || 0,
+              ...(lastSender === 'customer' ? { send_block_code: null, send_block_at: null } : {}),
             },
             { onConflict: 'fb_page_id,fb_psid' },
           )
@@ -286,6 +287,7 @@ async function syncOnePage(
               last_message_at: conv.updated_time,
               last_sender: lastSender,
               unread_count: conv.unread_count || 0,
+              ...(lastSender === 'customer' ? { send_block_code: null, send_block_at: null } : {}),
             })
             .eq('id', convId)
         }

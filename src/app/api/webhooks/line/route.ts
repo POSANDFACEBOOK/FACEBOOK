@@ -127,6 +127,7 @@ async function processLineEvent(page: any, event: any) {
       .update({
         last_message: text || '(ไฟล์แนบ)', last_message_at: ts,
         last_sender: 'customer', unread_count: (conv.unread_count || 0) + 1,
+        send_block_code: null, send_block_at: null,  // ลูกค้าทักกลับ → ล้างป้าย
       })
       .eq('id', conv.id)
   }

@@ -96,6 +96,7 @@ export async function POST(req: Request) {
       await sb.from('conversations').update({
         last_message: lastMsg, last_message_at: new Date().toISOString(),
         last_sender: 'page', unread_count: 0, is_resolved: false,
+        send_block_code: null, send_block_at: null,
       }).eq('id', conv.id)
       return NextResponse.json({ success: true, message: saved })
     }
@@ -146,7 +147,15 @@ export async function POST(req: Request) {
         delivery_status: 'failed',
         error_message: userError,
       })
-      return NextResponse.json({ error: userError }, { status: 500 })
+      // mark แชทว่าส่งไม่ได้ (ลูกค้าไม่พร้อม/เกินเวลา) → โชว์ป้ายเตือนให้แอดมิน
+      const blockCode = result.errorCode === 551 ? 551
+        : (result.errorCode === 10 || usedHumanAgent) ? 10 : null
+      if (blockCode) {
+        await sb.from('conversations')
+          .update({ send_block_code: blockCode, send_block_at: new Date().toISOString() })
+          .eq('id', conv.id)
+      }
+      return NextResponse.json({ error: userError, blockCode: blockCode || undefined }, { status: 500 })
     }
 
     // บันทึก message สำเร็จ — sent_by_user_id = agent's id (audit trail)
@@ -175,6 +184,8 @@ export async function POST(req: Request) {
         last_sender: 'page',
         unread_count: 0,
         is_resolved: false,
+        send_block_code: null,
+        send_block_at: null,
       })
       .eq('id', conv.id)
 
