@@ -39,7 +39,7 @@ export async function GET(req: Request) {
     // ดึง pages ที่ user เข้าถึงได้ (สำหรับ filter dropdown)
     const { data: pages } = await sb
       .from('connected_pages')
-      .select('id, page_id, page_name, page_picture')
+      .select('id, page_id, page_name, page_picture, nickname')
       .in('id', accessible)
       .eq('is_active', true)
 
@@ -50,7 +50,7 @@ export async function GET(req: Request) {
         last_message, last_message_at, last_sender, unread_count,
         ai_category, ai_sentiment, is_archived, is_resolved, is_starred, tags,
         page_id,
-        connected_pages!inner(id, page_name, page_picture)
+        connected_pages!inner(id, page_name, page_picture, nickname)
       `)
       .in('page_id', accessible)
       .order('last_message_at', { ascending: false, nullsFirst: false })
