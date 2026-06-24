@@ -127,6 +127,7 @@ export default function InboxPage() {
   const [totalUnread, setTotalUnread] = useState(0)
   const [totalNeedsReply, setTotalNeedsReply] = useState(0)
   const [unreadByPage, setUnreadByPage] = useState<Record<string, number>>({})
+  const [needsReplyByPage, setNeedsReplyByPage] = useState<Record<string, number>>({})
   const [errorBanner, setErrorBanner] = useState<string | null>(null)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -149,6 +150,7 @@ export default function InboxPage() {
     setTotalUnread(res.totalUnread || 0)
     setTotalNeedsReply(res.totalNeedsReply || 0)
     setUnreadByPage(res.unreadByPage || {})
+    setNeedsReplyByPage(res.needsReplyByPage || {})
     setLoadingList(false)
   }
 
@@ -312,6 +314,7 @@ export default function InboxPage() {
       setPages(res.pages || [])
       setTotalUnread(res.totalUnread || 0)
       setUnreadByPage(res.unreadByPage || {})
+    setNeedsReplyByPage(res.needsReplyByPage || {})
       setLoadingList(false)
 
       // Auto-sync ถ้าเลือกเพจที่ยังไม่มี conv ใน DB + ไม่ได้ sync ใน 2 นาทีล่าสุด
@@ -505,6 +508,7 @@ export default function InboxPage() {
   const channelPages = channelFilter ? pages.filter(p => channelOf(p) === channelFilter) : pages
   const sumUnread = (arr: any[]) => arr.reduce((s, p) => s + (unreadByPage[p.id] || 0), 0)
   const channelUnread = sumUnread(channelPages)
+  const channelNeedsReply = channelPages.reduce((s, p) => s + (needsReplyByPage[p.id] || 0), 0)
   const fbPages = pages.filter(p => channelOf(p) === 'facebook')
   const linePages = pages.filter(p => channelOf(p) === 'line')
 
@@ -575,7 +579,7 @@ export default function InboxPage() {
             <NavItem icon={<BarChart3 size={15} />} label="ยิงแอดเพจ" />
           </Link>
         )}
-        <NavItem icon={<MessageSquare size={15} />} label="กล่องข้อความ" active badge={totalUnread} />
+        <NavItem icon={<MessageSquare size={15} />} label="กล่องข้อความ" active badge={channelUnread} />
         <button onClick={() => setShowSettings(true)} style={{ all: 'unset', display: 'block', cursor: 'pointer' }}>
           <NavItem icon={<Settings size={15} />} label="ตั้งค่าแชท" />
         </button>
@@ -825,8 +829,8 @@ export default function InboxPage() {
             }}>
               {([
                 ['all', 'ทั้งหมด', null, null],
-                ['unread', 'ใหม่', null, totalUnread > 0 ? totalUnread : null],
-                ['needs_reply', 'ยังไม่ตอบ', null, totalNeedsReply > 0 ? totalNeedsReply : null],
+                ['unread', 'ใหม่', null, channelUnread > 0 ? channelUnread : null],
+                ['needs_reply', 'ยังไม่ตอบ', null, channelNeedsReply > 0 ? channelNeedsReply : null],
                 ['starred', null, Star, null],
                 ['archived', null, Archive, null],
               ] as const).map(([key, label, Icon, count]) => {

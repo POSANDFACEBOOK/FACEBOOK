@@ -105,12 +105,25 @@ export async function GET(req: Request) {
       unreadByPage[r.page_id] = (unreadByPage[r.page_id] || 0) + 1
     }
 
+    // นับ needs_reply ต่อเพจ (ลูกค้าทักล่าสุด ยังไม่ตอบ) — ใช้แยกตัวเลขตามช่องทาง
+    const { data: needsReplyRows } = await sb
+      .from('conversations')
+      .select('page_id')
+      .in('page_id', accessible)
+      .eq('last_sender', 'customer')
+      .eq('is_archived', false)
+    const needsReplyByPage: Record<string, number> = {}
+    for (const r of (needsReplyRows || []) as Array<{ page_id: string }>) {
+      needsReplyByPage[r.page_id] = (needsReplyByPage[r.page_id] || 0) + 1
+    }
+
     return NextResponse.json({
       conversations: conversations || [],
       pages: pages || [],
       totalUnread: totalUnread || 0,
       totalNeedsReply: totalNeedsReply || 0,
       unreadByPage,
+      needsReplyByPage,
     })
   } catch (err: any) {
     return NextResponse.json({ error: err.message, conversations: [], pages: [] }, { status: 500 })
