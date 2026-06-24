@@ -739,26 +739,35 @@ export default function InboxPage() {
                 <button
                   onClick={() => setActiveConv(null)}
                   className="ib-back"
-                  style={{ ...btnGhost, padding: 7, display: 'none' }}
+                  title="กลับไปเลือกแชทอื่น"
+                  style={{
+                    display: 'none', alignItems: 'center', justifyContent: 'center',
+                    width: 38, height: 38, flexShrink: 0, borderRadius: 11,
+                    background: pageColor(activeConv.page_id).bg,
+                    color: pageColor(activeConv.page_id).text,
+                    border: `1.5px solid ${pageColor(activeConv.page_id).border}`,
+                    cursor: 'pointer', fontFamily: 'inherit',
+                  }}
                 >
-                  <ChevronLeft size={16} />
+                  <ChevronLeft size={22} strokeWidth={2.6} />
                 </button>
                 <Avatar name={activeConv.customer_name} src={activeConv.customer_picture} size={42} ringColor={pageColor(activeConv.page_id).border} />
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 14, fontWeight: 800, color: TEXT, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <div style={{ fontSize: 15.5, fontWeight: 900, color: TEXT, display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {activeConv.customer_name || 'ลูกค้า'}
-                    {activeConv.is_starred && <Star size={13} fill={YELLOW} color={YELLOW} />}
+                    {activeConv.is_starred && <Star size={13} fill={YELLOW} color={YELLOW} style={{ flexShrink: 0 }} />}
                   </div>
                   <div style={{ marginTop: 3 }}>
                     <span style={{
                       display: 'inline-flex', alignItems: 'center', gap: 5,
-                      padding: '3px 9px', borderRadius: 999,
+                      padding: '3px 10px', borderRadius: 999,
                       background: pageColor(activeConv.page_id).bg,
                       color: pageColor(activeConv.page_id).text,
-                      fontSize: 11, fontWeight: 800,
-                      border: `1px solid ${pageColor(activeConv.page_id).border}33`,
+                      fontSize: 11.5, fontWeight: 900,
+                      border: `1.5px solid ${pageColor(activeConv.page_id).border}`,
+                      maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     }}>
-                      <span style={{ width: 7, height: 7, borderRadius: '50%', background: pageColor(activeConv.page_id).border }} />
+                      <span style={{ width: 7, height: 7, borderRadius: '50%', background: pageColor(activeConv.page_id).border, flexShrink: 0 }} />
                       {activeConv.connected_pages?.nickname || activeConv.connected_pages?.page_name}
                     </span>
                   </div>
@@ -1146,12 +1155,14 @@ export default function InboxPage() {
           .ib-pagebar > div { touch-action: pan-x; }
         }
 
-        /* Mobile — Messenger-like UX */
-        @media (max-width: 680px) {
+        /* Mobile/tablet — Messenger-like UX (≤820 ครอบทุกมือถือ + แท็บเล็ตเล็ก/in-app browser) */
+        @media (max-width: 820px) {
           /* Single column toggle */
           .ib-col1 { width: 100% !important; }
           .ib-main[data-active="1"] .ib-col1 { display: none !important; }
           .ib-main[data-active="0"] .ib-col2 { display: none !important; }
+          /* เปิดแชท → ซ่อน mobile bar (กันบัง header) + โชว์ปุ่มกลับในหัวแชท */
+          .ib-main[data-active="1"] .ib-mobile-bar { display: none !important; }
           .ib-back { display: flex !important; }
 
           /* Page bar — แนวนอน scroll (เหมือน stories) เห็นทุกเพจ */
@@ -1188,13 +1199,13 @@ export default function InboxPage() {
 
         /* iOS safe area — กัน input ทับ home bar */
         @supports (padding: env(safe-area-inset-bottom)) {
-          @media (max-width: 680px) {
+          @media (max-width: 820px) {
             .ib-main { padding-bottom: env(safe-area-inset-bottom) !important; }
           }
         }
 
         /* iOS zoom prevention — input fontSize ≥ 16 */
-        @media (max-width: 680px) {
+        @media (max-width: 820px) {
           input[type="text"], input[type="search"], textarea, select {
             font-size: 16px !important;
           }
