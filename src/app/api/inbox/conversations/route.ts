@@ -91,16 +91,17 @@ export async function GET(req: Request) {
       .eq('last_sender', 'customer')
       .eq('is_archived', false)
 
-    // นับ unread ต่อเพจ
+    // นับ unread ต่อเพจ — นับ "จำนวนแชท" ที่มีข้อความค้าง (ให้ตรงกับ totalUnread
+    // ที่นับจำนวนแชทเช่นกัน) ไม่ใช่บวกจำนวนข้อความ เพื่อให้ผลรวมท้ายเพจ = ตัวเลข "ทุกเพจ"
     const { data: unreadRows } = await sb
       .from('conversations')
-      .select('page_id, unread_count')
+      .select('page_id')
       .in('page_id', accessible)
       .gt('unread_count', 0)
       .eq('is_archived', false)
     const unreadByPage: Record<string, number> = {}
-    for (const r of (unreadRows || []) as Array<{ page_id: string; unread_count: number }>) {
-      unreadByPage[r.page_id] = (unreadByPage[r.page_id] || 0) + (r.unread_count || 0)
+    for (const r of (unreadRows || []) as Array<{ page_id: string }>) {
+      unreadByPage[r.page_id] = (unreadByPage[r.page_id] || 0) + 1
     }
 
     return NextResponse.json({
