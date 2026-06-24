@@ -6,6 +6,7 @@ import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase'
 import { getCurrentUserContext } from '@/lib/team'
 import { sendTextMessage, sendSenderAction } from '@/lib/messenger'
+import { pushLineMessage } from '@/lib/line'
 
 export const dynamic = 'force-dynamic'
 
@@ -40,7 +41,7 @@ export async function POST(req: Request) {
 
     const { data: page } = await sb
       .from('connected_pages')
-      .select('page_access_token')
+      .select('page_access_token, channel')
       .eq('id', conv.page_id)
       .single()
 
@@ -48,6 +49,36 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Page token not found' }, { status: 400 })
     }
 
+    // ── LINE: ส่งด้วย push API (ไม่มีกฎ 24 ชม. แบบ FB แต่กิน push quota) ──
+    if (page.channel === 'line') {
+      const lineRes = await pushLineMessage(page.page_access_token, conv.fb_psid, text.trim())
+      if (!lineRes.success) {
+        const userError = '⚠️ LINE ส่งไม่สำเร็จ: ' + (lineRes.error || '') +
+          (lineRes.errorCode === 429 ? ' (เกินโควต้า push ของเดือนนี้)' : '')
+        await sb.from('inbox_messages').insert({
+          conversation_id: conv.id, fb_sender_id: conv.fb_page_id, direction: 'outbound',
+          message_text: text.trim(), sent_by: 'page_user', sent_by_user_id: ctx.userId,
+          delivery_status: 'failed', error_message: userError,
+        })
+        return NextResponse.json({ error: userError }, { status: 500 })
+      }
+      const { data: saved } = await sb
+        .from('inbox_messages')
+        .insert({
+          conversation_id: conv.id, fb_sender_id: conv.fb_page_id, direction: 'outbound',
+          message_text: text.trim(), sent_by: 'page_user', sent_by_user_id: ctx.userId,
+          delivery_status: 'sent',
+        })
+        .select('*')
+        .single()
+      await sb.from('conversations').update({
+        last_message: text.trim(), last_message_at: new Date().toISOString(),
+        last_sender: 'page', unread_count: 0, is_resolved: false,
+      }).eq('id', conv.id)
+      return NextResponse.json({ success: true, message: saved })
+    }
+
+    // ── Facebook: ตามเดิม ──
     // optimistic typing indicator
     sendSenderAction(page.page_access_token, conv.fb_psid, 'typing_on').catch(() => {})
 

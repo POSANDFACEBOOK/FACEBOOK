@@ -2,7 +2,7 @@
 import { useEffect, useState, useRef, ReactNode } from 'react'
 import { useSession, signOut } from 'next-auth/react'
 import Link from 'next/link'
-import { Bell, Plus, ChevronRight, TrendingUp, Activity, Target, LogOut, X, ArrowLeft, Zap, DollarSign, Eye, MousePointer, Users, BarChart3, Percent, Power, Trash2, RefreshCw, Trophy, Pause, CheckCircle, Sparkles, Download, MessageSquare, UserPlus } from 'lucide-react'
+import { Bell, Plus, ChevronRight, TrendingUp, Activity, Target, LogOut, X, ArrowLeft, Zap, DollarSign, Eye, MousePointer, Users, BarChart3, Percent, Power, Trash2, RefreshCw, Trophy, Pause, CheckCircle, Sparkles, Download, MessageSquare, UserPlus, Share2 } from 'lucide-react'
 
 // ─── Design Tokens ─────────────────────────────────────────────
 const BG = '#eaf2fd', SURFACE = '#ffffff', SURFACE2 = '#f0f6ff'
@@ -314,6 +314,11 @@ export default function Dashboard() {
         {isOwner && (
           <Link href="/dashboard/team" style={{ textDecoration: 'none' }}>
             <NavItem icon={<UserPlus size={16} />} label="จัดการทีม" />
+          </Link>
+        )}
+        {isOwner && (
+          <Link href="/dashboard/channels" style={{ textDecoration: 'none' }}>
+            <NavItem icon={<Share2 size={16} />} label="ช่องทางแชท" />
           </Link>
         )}
 

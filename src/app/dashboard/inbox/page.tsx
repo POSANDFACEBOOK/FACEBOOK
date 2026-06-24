@@ -6,7 +6,7 @@ import {
   ArrowLeft, Send, Sparkles, RefreshCw, Search, Star, Archive, CheckCircle2,
   MessageSquare, Inbox, Settings, Zap, X, ChevronLeft, MoreVertical, Bot,
   AlertCircle, BarChart3, Bell, Plus, LogOut, ListFilter, MailOpen, MailQuestion,
-  Pencil, Check, Copy,
+  Pencil, Check, Copy, Share2,
 } from 'lucide-react'
 
 // ─── Design Tokens (sync กับ dashboard) ───────────────────────
@@ -475,6 +475,11 @@ export default function InboxPage() {
         <button onClick={() => setShowSettings(true)} style={{ all: 'unset', display: 'block', cursor: 'pointer' }}>
           <NavItem icon={<Settings size={15} />} label="ตั้งค่าแชท" />
         </button>
+        {isOwner && (
+          <Link href="/dashboard/channels" style={{ textDecoration: 'none' }}>
+            <NavItem icon={<Share2 size={15} />} label="ช่องทางแชท" />
+          </Link>
+        )}
 
         <div style={{ flex: 1, minHeight: 16 }} />
 
@@ -1329,7 +1334,11 @@ function ConvItem({ conv, active, onClick }: { conv: any; active: boolean; onCli
             border: `1px solid ${pc.border}33`,
             maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: pc.border, flexShrink: 0 }} />
+            {conv.connected_pages?.channel === 'line' ? (
+              <span style={{ fontSize: 8, fontWeight: 900, color: 'white', background: '#06c755', borderRadius: 3, padding: '1px 3px', flexShrink: 0, letterSpacing: 0.3 }}>LINE</span>
+            ) : (
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: pc.border, flexShrink: 0 }} />
+            )}
             {conv.connected_pages?.nickname || conv.connected_pages?.page_name}
           </span>
         </div>
