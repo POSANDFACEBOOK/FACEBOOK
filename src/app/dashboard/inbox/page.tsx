@@ -50,19 +50,28 @@ const sentimentConfig: Record<string, { label: string; emoji: string; color: str
   negative: { label: 'ไม่พอใจ', emoji: '😡', color: RED },
 }
 
-// Stable color per page so admins can spot which page a chat is from at a glance
+// สีประจำเพจ — เรียงให้ index ติดกันต่างกันมากที่สุด (เพจ 6 อันแรกจะได้ blue/red/green/amber/violet/teal)
 const PAGE_PALETTE = [
   { bg: '#dbeafe', border: '#2563eb', text: '#1d4ed8', avatar: 'linear-gradient(135deg, #60a5fa, #2563eb)' }, // blue
+  { bg: '#fee2e2', border: '#dc2626', text: '#b91c1c', avatar: 'linear-gradient(135deg, #f87171, #dc2626)' }, // red
   { bg: '#dcfce7', border: '#16a34a', text: '#15803d', avatar: 'linear-gradient(135deg, #4ade80, #16a34a)' }, // green
   { bg: '#fef3c7', border: '#d97706', text: '#b45309', avatar: 'linear-gradient(135deg, #fbbf24, #d97706)' }, // amber
+  { bg: '#f3e8ff', border: '#7c3aed', text: '#6d28d9', avatar: 'linear-gradient(135deg, #a78bfa, #7c3aed)' }, // violet
+  { bg: '#ccfbf1', border: '#0d9488', text: '#0f766e', avatar: 'linear-gradient(135deg, #2dd4bf, #0d9488)' }, // teal
   { bg: '#fce7f3', border: '#db2777', text: '#be185d', avatar: 'linear-gradient(135deg, #f472b6, #db2777)' }, // pink
-  { bg: '#e3effe', border: '#7c3aed', text: '#6d28d9', avatar: 'linear-gradient(135deg, #a78bfa, #7c3aed)' }, // violet
-  { bg: '#cffafe', border: '#0891b2', text: '#0e7490', avatar: 'linear-gradient(135deg, #22d3ee, #0891b2)' }, // cyan
-  { bg: '#fee2e2', border: '#dc2626', text: '#b91c1c', avatar: 'linear-gradient(135deg, #f87171, #dc2626)' }, // red
-  { bg: '#dcebff', border: '#1877f2', text: '#1877f2', avatar: 'linear-gradient(135deg, #5fa3ff, #1877f2)' }, // indigo
+  { bg: '#e2e8f0', border: '#475569', text: '#334155', avatar: 'linear-gradient(135deg, #94a3b8, #475569)' }, // slate
 ]
+// แมป page_id → ลำดับ (เรียงตาม id เพื่อให้สีคงที่) → สีไม่ซ้ำกันถ้าเพจ ≤ 8
+const PAGE_INDEX = new Map<string, number>()
+function registerPageOrder(pages: Array<{ id: string }>) {
+  PAGE_INDEX.clear()
+  ;[...pages].map(p => p.id).sort().forEach((id, i) => PAGE_INDEX.set(id, i))
+}
 function pageColor(pageId?: string) {
-  if (!pageId) return PAGE_PALETTE[7]
+  if (!pageId) return PAGE_PALETTE[PAGE_PALETTE.length - 1]
+  const idx = PAGE_INDEX.get(pageId)
+  if (idx !== undefined) return PAGE_PALETTE[idx % PAGE_PALETTE.length]
+  // fallback (เพจที่ยังไม่ register) — hash
   let hash = 0
   for (let i = 0; i < pageId.length; i++) hash = ((hash << 5) - hash + pageId.charCodeAt(i)) | 0
   return PAGE_PALETTE[Math.abs(hash) % PAGE_PALETTE.length]
@@ -130,6 +139,7 @@ export default function InboxPage() {
 
     const res = await fetch(`/api/inbox/conversations?${params.toString()}`).then(r => r.json())
     setConversations(res.conversations || [])
+    registerPageOrder(res.pages || [])  // กำหนดสีประจำเพจ (ไม่ซ้ำ) ก่อน render
     setPages(res.pages || [])
     setTotalUnread(res.totalUnread || 0)
     setTotalNeedsReply(res.totalNeedsReply || 0)
