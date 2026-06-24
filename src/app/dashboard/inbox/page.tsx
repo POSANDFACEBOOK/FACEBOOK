@@ -6,7 +6,7 @@ import {
   ArrowLeft, Send, Sparkles, RefreshCw, Search, Star, Archive, CheckCircle2,
   MessageSquare, Inbox, Settings, Zap, X, ChevronLeft, MoreVertical, Bot,
   AlertCircle, BarChart3, Bell, Plus, LogOut, ListFilter, MailOpen, MailQuestion,
-  Pencil, Check, Copy, Share2,
+  Pencil, Check, Copy, Share2, ImagePlus,
 } from 'lucide-react'
 
 // ─── Design Tokens (sync กับ dashboard) ───────────────────────
@@ -117,6 +117,7 @@ export default function InboxPage() {
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [sending, setSending] = useState(false)
+  const [uploading, setUploading] = useState(false)
   const [aiLoading, setAiLoading] = useState(false)
   const [aiSuggestions, setAiSuggestions] = useState<string[]>([])
   const [draft, setDraft] = useState('')
@@ -128,6 +129,7 @@ export default function InboxPage() {
   const [errorBanner, setErrorBanner] = useState<string | null>(null)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const pollRef = useRef<any>(null)
   const openReqRef = useRef<string>('')  // กัน race ตอนเปิดหลายแชทเร็วๆ
 
@@ -238,20 +240,34 @@ export default function InboxPage() {
     }
   }
 
-  // ── วัดความสูงจริงของจอ (กัน in-app browser คำนวณ svh/dvh เพี้ยน → แถบล่างลอย) ──
+  // ── ตามขนาด "visual viewport" จริง (กันคีย์บอร์ด iOS ดัน layout เด้ง / แถบล่างลอย) ──
+  // ใช้ visualViewport.height (หดตามคีย์บอร์ด) แทน innerHeight (ไม่หดบน iOS)
+  // + ตาม offsetTop ที่เบราว์เซอร์เลื่อน visual viewport เพื่อให้ composer อยู่เหนือคีย์บอร์ดเป๊ะ
   useEffect(() => {
-    const setAppHeight = () => {
-      document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`)
+    const vv = window.visualViewport
+    const root = document.documentElement
+    let raf = 0
+    const apply = () => {
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => {  // batch — กัน layout thrash จาก scroll event ถี่ๆ
+        const raw = vv && vv.height > 0 ? vv.height : window.innerHeight
+        const h = Math.max(Math.round(raw), 240)  // clamp กันค่า transient เล็กผิดปกติ
+        const top = vv ? Math.max(Math.round(vv.offsetTop), 0) : 0
+        root.style.setProperty('--app-height', `${h}px`)
+        root.style.setProperty('--app-offset', `${top}px`)
+      })
     }
-    setAppHeight()
-    window.addEventListener('resize', setAppHeight)
-    window.addEventListener('orientationchange', setAppHeight)
-    // visualViewport อัปเดตตอนคีย์บอร์ดเด้ง/แถบ browser เปลี่ยน
-    window.visualViewport?.addEventListener('resize', setAppHeight)
+    apply()
+    window.addEventListener('resize', apply)
+    window.addEventListener('orientationchange', apply)
+    vv?.addEventListener('resize', apply)
+    vv?.addEventListener('scroll', apply)  // offsetTop เปลี่ยนตอนเบราว์เซอร์เลื่อนเข้า input
     return () => {
-      window.removeEventListener('resize', setAppHeight)
-      window.removeEventListener('orientationchange', setAppHeight)
-      window.visualViewport?.removeEventListener('resize', setAppHeight)
+      cancelAnimationFrame(raf)
+      window.removeEventListener('resize', apply)
+      window.removeEventListener('orientationchange', apply)
+      vv?.removeEventListener('resize', apply)
+      vv?.removeEventListener('scroll', apply)
     }
   }, [])
 
@@ -377,6 +393,66 @@ export default function InboxPage() {
       setErrorBanner(e.message)
     }
     setSending(false)
+  }
+
+  // ── ส่งรูปภาพ: อัปโหลด → ส่งผ่าน FB/LINE ──
+  async function handleSendImage(file: File) {
+    if (!activeConv || uploading || sending) return
+    const okTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+    if (!okTypes.includes(file.type)) { setErrorBanner('รองรับเฉพาะรูปภาพ (jpg, png, gif, webp)'); return }
+    if (file.size > 5 * 1024 * 1024) { setErrorBanner('รูปต้องไม่เกิน 5 MB'); return }
+
+    setUploading(true)
+    setErrorBanner(null)
+    const convId = activeConv.id
+    const previewUrl = URL.createObjectURL(file)
+    const optimistic = {
+      id: `temp-${Date.now()}`,
+      direction: 'outbound',
+      message_text: null,
+      attachments: [{ type: 'image', url: previewUrl }],
+      sent_by: 'page_user',
+      delivery_status: 'sending',
+      created_at: new Date().toISOString(),
+    }
+    setMessages(prev => [...prev, optimistic])
+    setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
+
+    let swapped = false
+    try {
+      // 1) อัปโหลดขึ้น storage
+      const fd = new FormData()
+      fd.append('file', file)
+      fd.append('conversationId', convId)
+      const upRes = await fetch('/api/inbox/upload', { method: 'POST', body: fd })
+      const upData = await upRes.json()
+      if (!upRes.ok || !upData.url) throw new Error(upData.error || 'อัปโหลดไม่สำเร็จ')
+
+      // แทน blob preview ด้วย URL จริงทันที (กันรูปหายถ้า send ช้า/รีเฟรช) + คืน blob
+      setMessages(prev => prev.map(m => m.id === optimistic.id ? { ...m, attachments: [{ type: 'image', url: upData.url }] } : m))
+      URL.revokeObjectURL(previewUrl); swapped = true
+
+      // 2) ส่งให้ลูกค้า
+      const res = await fetch('/api/inbox/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId: convId, imageUrl: upData.url }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.success) {
+        setErrorBanner(data.error || 'ส่งรูปไม่สำเร็จ')
+        setMessages(prev => prev.map(m => m.id === optimistic.id ? { ...m, delivery_status: 'failed', error_message: data.error } : m))
+      } else {
+        setMessages(prev => prev.map(m => m.id === optimistic.id ? data.message : m))
+        loadConversations()
+      }
+    } catch (e: any) {
+      setErrorBanner(e.message)
+      setMessages(prev => prev.map(m => m.id === optimistic.id ? { ...m, delivery_status: 'failed', error_message: e.message } : m))
+    } finally {
+      if (!swapped) setTimeout(() => URL.revokeObjectURL(previewUrl), 30000)
+      setUploading(false)
+    }
   }
 
   // ── AI Suggest ──
@@ -909,6 +985,25 @@ export default function InboxPage() {
                 )}
 
                 <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/gif,image/webp"
+                    style={{ display: 'none' }}
+                    onChange={e => { const f = e.target.files?.[0]; if (f) handleSendImage(f); e.target.value = '' }}
+                  />
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploading || sending}
+                    title="แนบรูปภาพ"
+                    style={{
+                      padding: '11px 12px', borderRadius: 12, border: `1.5px solid ${BORDER}`,
+                      background: SURFACE2, color: PRIMARY, flexShrink: 0,
+                      cursor: uploading ? 'wait' : 'pointer', display: 'flex', alignItems: 'center',
+                    }}
+                  >
+                    {uploading ? <RefreshCw size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <ImagePlus size={16} />}
+                  </button>
                   <button
                     onClick={() => handleAiSuggest()}
                     disabled={aiLoading}
@@ -934,6 +1029,7 @@ export default function InboxPage() {
                         handleSend()
                       }
                     }}
+                    onFocus={() => { setTimeout(() => messagesEndRef.current?.scrollIntoView({ block: 'end' }), 350) }}
                     placeholder="พิมพ์ข้อความ..."
                     rows={1}
                     className="ib-chat-input"
@@ -1167,8 +1263,14 @@ export default function InboxPage() {
             touch-action: pan-y;
           }
           .ib-sidebar { transform: translateX(-100%); transition: transform 0.25s; }
-          /* ใช้ความสูงจริงจาก JS (--app-height) กัน in-app browser คำนวณ svh/dvh เพี้ยน → แถบล่างลอย */
-          .ib-root { height: var(--app-height, 100svh) !important; min-height: 0 !important; max-height: var(--app-height, 100svh) !important; }
+          /* ใช้ความสูง+offset จริงจาก visualViewport (--app-height/--app-offset)
+             → คีย์บอร์ดเด้งแล้ว composer ยังอยู่เหนือคีย์บอร์ดเป๊ะ ไม่หลุดขึ้นบน */
+          .ib-root {
+            height: var(--app-height, 100svh) !important;
+            min-height: 0 !important;
+            max-height: var(--app-height, 100svh) !important;
+            transform: translateY(var(--app-offset, 0px));
+          }
           .ib-main { margin-left: 0 !important; padding-top: 0 !important; height: var(--app-height, 100svh) !important; width: 100% !important; }
           .ib-mobile-bar { display: flex !important; }
           /* รายการแชท (ยังไม่เปิดแชท): mobile bar เป็น fixed → ดันเนื้อหาลงมาไม่ให้โดนบัง */

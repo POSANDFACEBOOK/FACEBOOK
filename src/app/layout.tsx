@@ -7,7 +7,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <meta
           name="viewport"
-          content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+          content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
         />
         <meta name="theme-color" content="#1877f2" />
         <meta name="apple-mobile-web-app-capable" content="yes" />

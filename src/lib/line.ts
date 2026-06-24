@@ -72,6 +72,29 @@ export async function pushLineMessage(
   }
 }
 
+/** ส่งรูปหาลูกค้า LINE (push) — ใช้ public URL (https) */
+export async function pushLineImage(
+  accessToken: string,
+  to: string,
+  imageUrl: string,
+): Promise<{ success: boolean; error?: string; errorCode?: number }> {
+  try {
+    const res = await fetch(`${LINE_API}/message/push`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({
+        to,
+        messages: [{ type: 'image', originalContentUrl: imageUrl, previewImageUrl: imageUrl }],
+      }),
+    })
+    if (res.status === 200) return { success: true }
+    const data: any = await res.json().catch(() => ({}))
+    return { success: false, error: data?.message || `LINE push error ${res.status}`, errorCode: res.status }
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'network error' }
+  }
+}
+
 /** สรุป content ของข้อความ LINE เป็น text + attachments ที่เก็บใน DB */
 export function describeLineMessage(msg: any): { text: string | null; attachments: any[] } {
   switch (msg?.type) {
