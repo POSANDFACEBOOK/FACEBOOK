@@ -12,11 +12,11 @@ const GREEN = '#059669', GREEN_L = '#d1fae5'
 const RED = '#dc2626', RED_L = '#fee2e2'
 const YELLOW = '#d97706', YELLOW_L = '#fef3c7'
 
-type Page = { id: string; page_name: string; page_picture: string | null }
+type Page = { id: string; page_name: string; page_picture: string | null; channel?: string }
 type Member = {
   userId: string; name: string; image: string | null; email: string | null
   role: string; joinedAt: string; facebookId?: string | null
-  pages: { pageId: string; pageName: string; pagePicture: string | null }[]
+  pages: { pageId: string; pageName: string; pagePicture: string | null; channel?: string }[]
 }
 type ResetTarget = { kind: 'member' | 'invite'; id: string; name: string }
 type Invitation = {
@@ -41,6 +41,7 @@ export default function TeamPage() {
   const [members, setMembers] = useState<Member[]>([])
   const [invitations, setInvitations] = useState<Invitation[]>([])
   const [showInvite, setShowInvite] = useState(false)
+  const [editMember, setEditMember] = useState<Member | null>(null)
   const [resetTarget, setResetTarget] = useState<ResetTarget | null>(null)
   const [origin, setOrigin] = useState('')
 
@@ -187,6 +188,17 @@ export default function TeamPage() {
                     <span style={{ padding: '4px 10px', background: PRIMARY_LIGHT, color: PRIMARY, fontWeight: 800, borderRadius: 8, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>
                       {m.role}
                     </span>
+                    <button
+                      onClick={() => setEditMember(m)}
+                      title="จัดการเพจ/ช่องทางที่ดูแล"
+                      style={{
+                        padding: '7px 11px', background: GREEN_L, color: GREEN,
+                        border: 'none', borderRadius: 8, cursor: 'pointer', fontFamily: 'inherit',
+                        display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 800,
+                      }}
+                    >
+                      <Users size={14} /> จัดการเพจ
+                    </button>
                     {!m.facebookId && (
                       <button
                         onClick={() => setResetTarget({ kind: 'member', id: m.userId, name: m.name })}
@@ -220,9 +232,9 @@ export default function TeamPage() {
                           fontSize: 11, background: 'white', border: `1px solid ${BORDER}`,
                           padding: '4px 9px', borderRadius: 7, color: TEXT, fontWeight: 700,
                         }}>
-                          {p.pagePicture ? (
-                            <img src={p.pagePicture} alt="" style={{ width: 14, height: 14, borderRadius: '50%' }} />
-                          ) : '📄'}
+                          {p.channel === 'line'
+                            ? <span style={{ fontSize: 8, fontWeight: 900, color: 'white', background: '#06c755', borderRadius: 3, padding: '1px 3px' }}>LINE</span>
+                            : (p.pagePicture ? <img src={p.pagePicture} alt="" style={{ width: 14, height: 14, borderRadius: '50%' }} /> : '📄')}
                           {p.pageName}
                           <button onClick={() => handleRemove(m, p.pageId)} title="ถอนสิทธิ์เพจนี้" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: MUTED, marginLeft: 2, display: 'flex' }}>
                             <X size={11} />
@@ -278,6 +290,93 @@ export default function TeamPage() {
           onClose={() => { setResetTarget(null); loadAll() }}
         />
       )}
+
+      {editMember && (
+        <EditAccessModal
+          member={editMember}
+          pages={pages}
+          onClose={() => { setEditMember(null); loadAll() }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── จัดการเพจ/ช่องทางที่แอดมินดูแล (เพิ่ม/ลบ รวม LINE) ──
+function EditAccessModal({ member, pages, onClose }: { member: Member; pages: Page[]; onClose: () => void }) {
+  const [selected, setSelected] = useState<string[]>(member.pages.map(p => p.pageId))
+  const [saving, setSaving] = useState(false)
+  const toggle = (id: string) => setSelected(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id])
+
+  const fb = pages.filter(p => (p.channel || 'facebook') === 'facebook')
+  const line = pages.filter(p => p.channel === 'line')
+
+  async function save() {
+    setSaving(true)
+    try {
+      const res = await fetch('/api/team/members', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: member.userId, pageIds: selected }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.success) { alert('บันทึกไม่สำเร็จ: ' + (data.error || '')); return }
+      onClose()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const Row = ({ p }: { p: Page }) => (
+    <label style={{
+      display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
+      background: selected.includes(p.id) ? PRIMARY_LIGHT : SURFACE2,
+      border: `1.5px solid ${selected.includes(p.id) ? 'rgba(24,119,242,0.4)' : BORDER}`,
+      borderRadius: 10, cursor: 'pointer',
+    }}>
+      <input type="checkbox" checked={selected.includes(p.id)} onChange={() => toggle(p.id)} style={{ width: 18, height: 18, accentColor: PRIMARY, cursor: 'pointer' }} />
+      {p.channel === 'line'
+        ? <span style={{ width: 22, height: 22, borderRadius: 6, background: '#06c755', color: 'white', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 900, flexShrink: 0 }}>L</span>
+        : (p.page_picture ? <img src={p.page_picture} alt="" style={{ width: 24, height: 24, borderRadius: '50%' }} /> : <span style={{ fontSize: 16 }}>📄</span>)}
+      <span style={{ fontSize: 13, fontWeight: 700, color: TEXT }}>{p.page_name}</span>
+    </label>
+  )
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, backdropFilter: 'blur(6px)' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: SURFACE, borderRadius: 20, padding: 24, width: '100%', maxWidth: 460, maxHeight: '92dvh', overflowY: 'auto', boxShadow: '0 24px 70px rgba(15,23,42,0.3)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+          <h2 style={{ fontSize: 17, fontWeight: 900, margin: 0 }}>จัดการเพจของ {member.name}</h2>
+          <button onClick={onClose} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: MUTED, display: 'flex' }}><X size={20} /></button>
+        </div>
+        <p style={{ fontSize: 12, color: MUTED, fontWeight: 600, margin: '0 0 14px' }}>เลือกเพจ Facebook และ LINE OA ที่ให้แอดมินคนนี้ตอบแชท</p>
+
+        {line.length > 0 && (
+          <>
+            <div style={{ fontSize: 11, fontWeight: 900, color: '#06804a', margin: '4px 0 6px', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ width: 16, height: 16, borderRadius: 4, background: '#06c755', color: 'white', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 900 }}>L</span>
+              LINE OA ({line.length})
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
+              {line.map(p => <Row key={p.id} p={p} />)}
+            </div>
+          </>
+        )}
+
+        <div style={{ fontSize: 11, fontWeight: 900, color: PRIMARY, margin: '4px 0 6px', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ width: 16, height: 16, borderRadius: 4, background: '#1877f2', color: 'white', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 900 }}>f</span>
+          Facebook ({fb.length})
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 18 }}>
+          {fb.map(p => <Row key={p.id} p={p} />)}
+        </div>
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={onClose} style={{ flex: 1, padding: '12px', fontSize: 13, fontWeight: 800, background: SURFACE2, color: TEXT, border: `1.5px solid ${BORDER}`, borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit' }}>ยกเลิก</button>
+          <button onClick={save} disabled={saving} className="fbtap" style={{ flex: 2, padding: '12px', fontSize: 14, fontWeight: 900, background: saving ? '#94a3b8' : PRIMARY, color: 'white', border: 'none', borderRadius: 12, cursor: saving ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}>
+            {saving ? 'กำลังบันทึก...' : `บันทึก (${selected.length} เพจ)`}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -651,10 +750,10 @@ Email: ${result.email}
                         onChange={() => toggle(p.id)}
                         style={{ width: 18, height: 18, accentColor: PRIMARY, cursor: 'pointer' }}
                       />
-                      {p.page_picture ? (
-                        <img src={p.page_picture} alt="" style={{ width: 24, height: 24, borderRadius: '50%' }} />
-                      ) : <span style={{ fontSize: 16 }}>📄</span>}
-                      <span style={{ fontSize: 13, fontWeight: 700, color: TEXT }}>{p.page_name}</span>
+                      {p.channel === 'line'
+                        ? <span style={{ width: 24, height: 24, borderRadius: 6, background: '#06c755', color: 'white', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 900, flexShrink: 0 }}>L</span>
+                        : (p.page_picture ? <img src={p.page_picture} alt="" style={{ width: 24, height: 24, borderRadius: '50%' }} /> : <span style={{ fontSize: 16 }}>📄</span>)}
+                      <span style={{ fontSize: 13, fontWeight: 700, color: TEXT }}>{p.page_name}{p.channel === 'line' ? ' (LINE)' : ''}</span>
                     </label>
                   ))}
                 </div>
