@@ -618,7 +618,7 @@ export default function InboxPage() {
       <main data-active={activeConv ? '1' : '0'} style={{ marginLeft: 244, height: '100vh', display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 1, overflow: 'hidden' }} className="ib-main">
         {/* เลือกช่องทางก่อน (Facebook / LINE) — โชว์เมื่อมีทั้งสองช่องทางและยังไม่เลือก */}
         {showChannelGate && (
-          <div style={{ position: 'absolute', inset: 0, zIndex: 35, background: BG, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, gap: 20 }}>
+          <div className="ib-channel-gate" style={{ position: 'fixed', top: 0, right: 0, bottom: 0, left: 244, zIndex: 120, background: BG, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, gap: 20, overflowY: 'auto' }}>
             <div style={{ textAlign: 'center' }}>
               <div style={{ fontSize: 22, fontWeight: 900, color: TEXT }}>เลือกช่องทางที่จะตอบ</div>
               <div style={{ fontSize: 13, color: MUTED, fontWeight: 600, marginTop: 4 }}>แยกตอบ Facebook กับ LINE เพื่อไม่ให้สับสน</div>
@@ -1376,6 +1376,8 @@ export default function InboxPage() {
           }
           .ib-main { margin-left: 0 !important; padding-top: 0 !important; height: var(--app-height, 100svh) !important; width: 100% !important; }
           .ib-mobile-bar { display: flex !important; }
+          /* หน้าเลือกช่องทาง — เต็มจอบนมือถือ (ครอบ sidebar/mobile bar) */
+          .ib-channel-gate { left: 0 !important; }
           /* รายการแชท (ยังไม่เปิดแชท): mobile bar เป็น fixed → ดันเนื้อหาลงมาไม่ให้โดนบัง */
           .ib-root[data-active="0"] .ib-main { padding-top: 52px !important; }
           /* page bar เลื่อนแนวนอนได้ (เฉพาะตัวมันเอง) */
