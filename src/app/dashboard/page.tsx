@@ -280,8 +280,8 @@ export default function Dashboard() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '2px 8px 16px', borderBottom: `1px solid ${BORDER}`, marginBottom: 10 }}>
           <div style={{ width: 40, height: 40, background: 'linear-gradient(135deg, #1877f2 0%, #2e89ff 60%, #5fa3ff 100%)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, boxShadow: '0 4px 14px rgba(11,95,204,0.4)' }}>⚡</div>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontWeight: 900, fontSize: 15, color: TEXT, lineHeight: 1.2 }}>FB Ads AI</div>
-            <div style={{ fontSize: 10, color: MUTED, fontWeight: 700, marginTop: 1 }}>Smart Manager</div>
+            <div style={{ fontWeight: 900, fontSize: 14, color: TEXT, lineHeight: 1.2 }}>FACEBOOK CHAT</div>
+            <div style={{ fontSize: 10, color: PRIMARY, fontWeight: 800, marginTop: 1, letterSpacing: 0.5 }}>NAIWANSOOK</div>
           </div>
         </div>
 
@@ -395,7 +395,7 @@ export default function Dashboard() {
       <div className="fb-mobile-bar" style={{ display: 'none', position: 'sticky', top: 0, zIndex: 45, background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(20px)', borderBottom: `1.5px solid ${BORDER}`, padding: '10px 16px', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
           <div style={{ width: 32, height: 32, background: 'linear-gradient(135deg, #1877f2, #5fa3ff)', borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15 }}>⚡</div>
-          <div style={{ fontWeight: 900, fontSize: 13 }}>FB Ads AI</div>
+          <div style={{ fontWeight: 900, fontSize: 12.5 }}>FACEBOOK CHAT NAIWANSOOK</div>
         </div>
         {isOwner && (
           <button className="fbtap" onClick={() => setShowModal(true)} style={{ ...btnPrimary, padding: '8px 16px', fontSize: 12, fontWeight: 900, display: 'flex', alignItems: 'center', gap: 5 }}>

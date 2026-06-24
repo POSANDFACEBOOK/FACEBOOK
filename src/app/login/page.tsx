@@ -79,7 +79,7 @@ function LoginInner() {
         }}>⚡</div>
 
         <h1 style={{ fontSize: 26, fontWeight: 900, color: '#1a1f3c', margin: '0 0 7px', letterSpacing: '-0.5px' }}>
-          FB Ads AI Manager
+          FACEBOOK CHAT NAIWANSOOK
         </h1>
         <p style={{ color: '#6b7280', marginBottom: 28, fontSize: 14, lineHeight: 1.6, fontWeight: 500 }}>
           ระบบจัดการโฆษณาและตอบแชท Facebook

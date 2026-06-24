@@ -14,11 +14,11 @@ export default function Home() {
   return (
     <html lang="th">
       <head>
-        <title>FB Ads AI Manager</title>
+        <title>FACEBOOK CHAT NAIWANSOOK</title>
         <meta name="description" content="AI-powered Facebook Ads Manager" />
       </head>
       <body style={{ fontFamily: 'sans-serif', padding: '40px', textAlign: 'center' }}>
-        <h1>FB Ads AI Manager</h1>
+        <h1>FACEBOOK CHAT NAIWANSOOK</h1>
         <p>AI-powered Facebook Ads Management Platform</p>
       </body>
     </html>
