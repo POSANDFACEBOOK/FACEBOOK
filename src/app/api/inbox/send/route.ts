@@ -112,17 +112,20 @@ export async function POST(req: Request) {
 
     let result = await fbSend('RESPONSE')
 
-    // 2) ถ้าเกิน 24 ชม. (code 10) → ลองใหม่ด้วย HUMAN_AGENT tag (ขยายหน้าต่างเป็น 7 วัน)
-    //    ใช้ได้จริงเมื่อ FB App ผ่าน App Review ฟีเจอร์ Human Agent แล้วเท่านั้น
+    // 2) เกิน 24 ชม. (code 10) หรือ "ไม่พร้อมใช้งาน" (code 551) → ลองซ้ำด้วย HUMAN_AGENT tag
+    //    (ขยายหน้าต่างเป็น 7 วัน — ใช้ได้จริงเมื่อ FB App ผ่าน App Review ฟีเจอร์ Human Agent แล้ว)
     let usedHumanAgent = false
-    if (!result.success && result.errorCode === 10) {
+    if (!result.success && (result.errorCode === 10 || result.errorCode === 551)) {
       usedHumanAgent = true
       result = await fbSend('MESSAGE_TAG', 'HUMAN_AGENT')
     }
 
     if (!result.success) {
       let userError = result.error || 'Send failed'
-      if (result.errorCode === 100 || result.errorCode === 200) {
+      if (result.errorCode === 551) {
+        // 551 = ลูกค้าไม่พร้อมรับข้อความ (ปิดรับ/บล็อกเพจ หรือเลิกใช้บัญชี) — ฝั่งลูกค้า บังคับไม่ได้
+        userError = '⚠️ ลูกค้าปิดรับข้อความหรือบล็อกเพจอยู่ (Facebook #551) — ส่งไม่ได้ในขณะนี้ ต้องรอลูกค้าทักกลับมาก่อน'
+      } else if (result.errorCode === 100 || result.errorCode === 200) {
         // HUMAN_AGENT ถูกปฏิเสธ = ยังไม่ได้รับอนุมัติฟีเจอร์
         userError = '⚠️ ตอบเกิน 24 ชม. ต้องใช้ Human Agent แต่ FB App ยังไม่ได้รับอนุมัติฟีเจอร์นี้ — submit App Review (Human Agent) ที่ developers.facebook.com'
       } else if (result.errorCode === 10) {
