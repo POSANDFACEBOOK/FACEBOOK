@@ -424,7 +424,7 @@ export default function InboxPage() {
   })
 
   return (
-    <div className="ib-root" style={{ minHeight: '100vh', width: '100%', maxWidth: '100vw', background: BG, color: TEXT, fontFamily: 'Inter, "Sarabun", system-ui, sans-serif', position: 'relative', overflow: 'hidden', overscrollBehavior: 'none' }}>
+    <div className="ib-root" data-active={activeConv ? '1' : '0'} style={{ minHeight: '100vh', width: '100%', maxWidth: '100vw', background: BG, color: TEXT, fontFamily: 'Inter, "Sarabun", system-ui, sans-serif', position: 'relative', overflow: 'hidden', overscrollBehavior: 'none' }}>
       {/* Background pattern */}
       <div style={{ position: 'fixed', inset: 0, zIndex: 0, pointerEvents: 'none', backgroundImage: `linear-gradient(rgba(24,119,242,0.045) 1px, transparent 1px), linear-gradient(90deg, rgba(24,119,242,0.045) 1px, transparent 1px)`, backgroundSize: '48px 48px' }} />
 
@@ -1166,6 +1166,8 @@ export default function InboxPage() {
           .ib-root { height: var(--app-height, 100svh) !important; min-height: 0 !important; max-height: var(--app-height, 100svh) !important; }
           .ib-main { margin-left: 0 !important; padding-top: 0 !important; height: var(--app-height, 100svh) !important; width: 100% !important; }
           .ib-mobile-bar { display: flex !important; }
+          /* รายการแชท (ยังไม่เปิดแชท): mobile bar เป็น fixed → ดันเนื้อหาลงมาไม่ให้โดนบัง */
+          .ib-root[data-active="0"] .ib-main { padding-top: 52px !important; }
           /* page bar เลื่อนแนวนอนได้ (เฉพาะตัวมันเอง) */
           .ib-pagebar > div { touch-action: pan-x; }
         }
@@ -1176,8 +1178,8 @@ export default function InboxPage() {
           .ib-col1 { width: 100% !important; }
           .ib-main[data-active="1"] .ib-col1 { display: none !important; }
           .ib-main[data-active="0"] .ib-col2 { display: none !important; }
-          /* เปิดแชท → ซ่อน mobile bar (กันบัง header) + โชว์ปุ่มกลับในหัวแชท */
-          .ib-main[data-active="1"] .ib-mobile-bar { display: none !important; }
+          /* เปิดแชท → ซ่อน mobile bar (sibling ของ .ib-main จึงใช้ .ib-root) + โชว์ปุ่มกลับ */
+          .ib-root[data-active="1"] .ib-mobile-bar { display: none !important; }
           .ib-back { display: flex !important; }
 
           /* Page bar — แนวนอน scroll (เหมือน stories) เห็นทุกเพจ */
@@ -1198,9 +1200,10 @@ export default function InboxPage() {
             max-width: 200px;
           }
 
-          /* ซ่อน page bar + mobile bar เมื่อเปิดแชท → เห็นแชทเต็มจอ */
-          .ib-main[data-active="1"] .ib-pagebar { display: none !important; }
-          .ib-main[data-active="1"] .ib-mobile-bar { display: none !important; }
+          /* ซ่อน page bar + mobile bar เมื่อเปิดแชท → เห็นแชทเต็มจอ
+             ใช้ .ib-root (พ่อร่วมของทั้งคู่) เพราะ .ib-mobile-bar เป็น sibling ของ .ib-main */
+          .ib-root[data-active="1"] .ib-pagebar { display: none !important; }
+          .ib-root[data-active="1"] .ib-mobile-bar { display: none !important; }
 
           /* Mobile back button — แสดงในหัว chat เพื่อกลับ list */
           .ib-back {
@@ -1391,9 +1394,15 @@ function MessageBubble({ message: m, customerName, customerPic }: { message: any
         }}>
           {m.message_text}
           {(() => {
-            // ถ้ามี image attachment แล้ว → ไม่แสดง file/link attachments อื่น
-            // (FB มักส่ง sticker + share ว่างคู่กัน)
-            const atts = (m.attachments || []) as any[]
+            // dedupe ตาม url (FB ส่ง sticker ผ่านทั้ง field sticker + attachments url เดียวกัน → ซ้ำ)
+            const seen = new Set<string>()
+            const atts = ((m.attachments || []) as any[]).filter(a => {
+              if (!a?.url) return false
+              if (seen.has(a.url)) return false
+              seen.add(a.url)
+              return true
+            })
+            // ถ้ามี image แล้ว → ไม่แสดง file/link อื่น
             const hasImage = atts.some(a => a.type === 'image' && a.url)
             const filtered = hasImage ? atts.filter(a => a.type === 'image' && a.url) : atts
             return filtered.map((a, i) => (
