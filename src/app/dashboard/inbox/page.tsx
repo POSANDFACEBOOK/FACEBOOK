@@ -6,7 +6,7 @@ import {
   ArrowLeft, Send, Sparkles, RefreshCw, Search, Star, Archive, CheckCircle2,
   MessageSquare, Inbox, Settings, Zap, X, ChevronLeft, MoreVertical, Bot,
   AlertCircle, BarChart3, Bell, Plus, LogOut, ListFilter, MailOpen, MailQuestion,
-  Pencil, Check,
+  Pencil, Check, Copy,
 } from 'lucide-react'
 
 // ─── Design Tokens (sync กับ dashboard) ───────────────────────
@@ -390,7 +390,7 @@ export default function InboxPage() {
   })
 
   return (
-    <div style={{ minHeight: '100vh', background: BG, color: TEXT, fontFamily: 'Inter, "Sarabun", system-ui, sans-serif', position: 'relative', overflow: 'hidden' }}>
+    <div style={{ minHeight: '100vh', width: '100%', maxWidth: '100vw', background: BG, color: TEXT, fontFamily: 'Inter, "Sarabun", system-ui, sans-serif', position: 'relative', overflow: 'hidden', overscrollBehavior: 'none' }}>
       {/* Background pattern */}
       <div style={{ position: 'fixed', inset: 0, zIndex: 0, pointerEvents: 'none', backgroundImage: `linear-gradient(rgba(24,119,242,0.045) 1px, transparent 1px), linear-gradient(90deg, rgba(24,119,242,0.045) 1px, transparent 1px)`, backgroundSize: '48px 48px' }} />
 
@@ -1078,7 +1078,19 @@ export default function InboxPage() {
       {/* Responsive CSS — เหมือน Messenger บนมือถือ */}
       <style jsx global>{`
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        html, body { overflow-x: hidden; overscroll-behavior: none; }
+
+        /* ── Fix body: กันเลื่อนซ้าย-ขวา + rubber-band ทุกอุปกรณ์ ── */
+        * { box-sizing: border-box; }
+        html, body {
+          overflow-x: hidden !important;
+          max-width: 100%;
+          width: 100%;
+          position: relative;
+          overscroll-behavior: none;
+          overscroll-behavior-x: none;
+          -webkit-text-size-adjust: 100%;
+        }
+        .ib-main, .ib-pagebar, .ib-col1, .ib-col2, .ib-col3 { max-width: 100%; min-width: 0; }
 
         /* Tablet — hide right panel */
         @media (max-width: 1280px) {
@@ -1091,11 +1103,21 @@ export default function InboxPage() {
           .ib-pagebar > div { grid-template-columns: repeat(2, 1fr) !important; }
         }
 
-        /* Mobile — hide sidebar (use top bar instead) */
+        /* Mobile/tablet — hide sidebar + ล็อก viewport (กันเลื่อน/เด้ง) */
         @media (max-width: 820px) {
+          html, body {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            width: 100%; height: 100%;
+            overflow: hidden !important;
+            overscroll-behavior: none;
+            touch-action: pan-y;
+          }
           .ib-sidebar { transform: translateX(-100%); transition: transform 0.25s; }
-          .ib-main { margin-left: 0 !important; padding-top: 0 !important; height: 100dvh !important; }
+          .ib-main { margin-left: 0 !important; padding-top: 0 !important; height: 100dvh !important; height: 100svh !important; width: 100% !important; }
           .ib-mobile-bar { display: flex !important; }
+          /* page bar เลื่อนแนวนอนได้ (เฉพาะตัวมันเอง) */
+          .ib-pagebar > div { touch-action: pan-x; }
         }
 
         /* Mobile — Messenger-like UX */
@@ -1359,6 +1381,10 @@ function SettingsModal({ pages, onClose, onSaved }: { pages: any[]; onClose: () 
   const [newQR, setNewQR] = useState({ shortcut: '', title: '', message: '' })
   const [saving, setSaving] = useState(false)
   const [tab, setTab] = useState<'general'|'auto'|'kb'|'qr'>('general')
+  const [origin, setOrigin] = useState('')
+  const [linkCopied, setLinkCopied] = useState(false)
+  useEffect(() => { if (typeof window !== 'undefined') setOrigin(window.location.origin) }, [])
+  const inboxLink = `${origin}/dashboard/inbox`
 
   useEffect(() => {
     if (!selectedPage) return
@@ -1558,6 +1584,31 @@ function SettingsModal({ pages, onClose, onSaved }: { pages: any[]; onClose: () 
               </div>
             </div>
           )}
+        </div>
+
+        {/* ── ลิงก์ตอบแชทสำหรับแอดมิน ── */}
+        <div style={{ padding: '14px 22px', borderTop: `1.5px solid ${BORDER}`, background: '#f0f6ff' }}>
+          <div style={{ fontSize: 12.5, fontWeight: 900, color: TEXT, marginBottom: 3, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <MessageSquare size={14} color={PRIMARY} /> ลิงก์ตอบแชทสำหรับแอดมิน
+          </div>
+          <div style={{ fontSize: 11, color: MUTED, marginBottom: 9, lineHeight: 1.6 }}>
+            ส่งลิงก์นี้ให้แอดมิน → เปิดแล้ว login (อีเมล+รหัสที่คุณตั้งให้จากหน้า "จัดการทีม") เข้าหน้าตอบแชทได้ทันที
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              readOnly
+              value={inboxLink}
+              onFocus={e => e.target.select()}
+              style={{ flex: 1, padding: '10px 12px', fontSize: 12, border: `1.5px solid ${BORDER}`, borderRadius: 10, fontFamily: 'monospace', background: SURFACE, boxSizing: 'border-box', minWidth: 0 }}
+            />
+            <button
+              className="fbtap"
+              onClick={async () => { try { await navigator.clipboard.writeText(inboxLink); setLinkCopied(true); setTimeout(() => setLinkCopied(false), 1500) } catch {} }}
+              style={{ padding: '10px 14px', fontSize: 12, fontWeight: 800, background: linkCopied ? GREEN_L : 'linear-gradient(135deg, #1877f2, #2e89ff)', color: linkCopied ? GREEN : 'white', border: 'none', borderRadius: 10, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap', flexShrink: 0 }}
+            >
+              {linkCopied ? <><Check size={13} /> คัดลอกแล้ว</> : <><Copy size={13} /> คัดลอกลิงก์</>}
+            </button>
+          </div>
         </div>
 
         {/* Footer */}
