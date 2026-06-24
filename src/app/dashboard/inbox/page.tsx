@@ -427,8 +427,8 @@ export default function InboxPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '2px 8px 16px', borderBottom: `1px solid ${BORDER}`, marginBottom: 10 }}>
           <div style={{ width: 40, height: 40, background: 'linear-gradient(135deg, #1877f2 0%, #2e89ff 60%, #5fa3ff 100%)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, boxShadow: '0 4px 14px rgba(11,95,204,0.4)' }}>⚡</div>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontWeight: 900, fontSize: 15, color: TEXT, lineHeight: 1.2 }}>FB Ads AI</div>
-            <div style={{ fontSize: 10, color: MUTED, fontWeight: 700, marginTop: 1 }}>Smart Manager</div>
+            <div style={{ fontWeight: 900, fontSize: 14, color: TEXT, lineHeight: 1.2 }}>FACEBOOK CHAT</div>
+            <div style={{ fontSize: 10, color: PRIMARY, fontWeight: 800, marginTop: 1, letterSpacing: 0.5 }}>NAIWANSOOK</div>
           </div>
         </div>
 
@@ -481,7 +481,7 @@ export default function InboxPage() {
       }}>
         <Link href={isOwner ? '/dashboard' : '/dashboard/inbox'} style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ width: 32, height: 32, background: 'linear-gradient(135deg, #1877f2, #5fa3ff)', borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15 }}>⚡</div>
-          <div style={{ fontWeight: 900, fontSize: 13, color: TEXT }}>FB Ads AI</div>
+          <div style={{ fontWeight: 900, fontSize: 12.5, color: TEXT }}>FACEBOOK CHAT NAIWANSOOK</div>
         </Link>
         <div style={{ flex: 1 }} />
         {isOwner && (
