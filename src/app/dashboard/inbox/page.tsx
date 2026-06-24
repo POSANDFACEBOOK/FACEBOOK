@@ -123,6 +123,7 @@ export default function InboxPage() {
   const [aiSuggestions, setAiSuggestions] = useState<string[]>([])
   const [draft, setDraft] = useState('')
   const [showSettings, setShowSettings] = useState(false)
+  const [showSavedReplies, setShowSavedReplies] = useState(false)
   const [showRightPanel, setShowRightPanel] = useState(true)
   const [totalUnread, setTotalUnread] = useState(0)
   const [totalNeedsReply, setTotalNeedsReply] = useState(0)
@@ -1112,24 +1113,6 @@ export default function InboxPage() {
 
               {/* Composer */}
               <div style={{ padding: '12px 18px 16px', background: SURFACE, borderTop: `1.5px solid ${BORDER}` }}>
-                {/* Quick reply chips */}
-                {quickReplies.length > 0 && (
-                  <div style={{ display: 'flex', gap: 5, marginBottom: 8, overflowX: 'auto', paddingBottom: 4, width: '100%', boxSizing: 'border-box', WebkitOverflowScrolling: 'touch' }}>
-                    {quickReplies.slice(0, 6).map(qr => (
-                      <button
-                        key={qr.id}
-                        onClick={() => setDraft(qr.message)}
-                        style={{
-                          padding: '5px 10px', borderRadius: 999, border: `1px solid ${BORDER}`,
-                          background: SURFACE2, fontSize: 11, fontWeight: 700, color: PRIMARY,
-                          cursor: 'pointer', whiteSpace: 'nowrap', fontFamily: 'inherit',
-                        }}
-                        title={qr.message}
-                      >⚡ {qr.title}</button>
-                    ))}
-                  </div>
-                )}
-
                 <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
                   <input
                     ref={fileInputRef}
@@ -1138,6 +1121,19 @@ export default function InboxPage() {
                     style={{ display: 'none' }}
                     onChange={e => { const f = e.target.files?.[0]; if (f) handleSendImage(f); e.target.value = '' }}
                   />
+                  {/* ปุ่ม + : ข้อความตอบกลับที่บันทึกไว้ (saved replies) */}
+                  <button
+                    onClick={() => setShowSavedReplies(true)}
+                    title="ข้อความตอบกลับที่บันทึกไว้"
+                    style={{
+                      padding: '11px 12px', borderRadius: 12, border: 'none', flexShrink: 0,
+                      background: 'linear-gradient(135deg, #1877f2, #2e89ff)', color: 'white',
+                      cursor: 'pointer', display: 'flex', alignItems: 'center',
+                      boxShadow: '0 4px 12px rgba(24,119,242,0.32)',
+                    }}
+                  >
+                    <Plus size={18} strokeWidth={2.8} />
+                  </button>
                   <button
                     onClick={() => fileInputRef.current?.click()}
                     disabled={uploading || sending}
@@ -1301,6 +1297,42 @@ export default function InboxPage() {
           onClose={() => setShowSettings(false)}
           onSaved={() => { loadConversations(); loadQuickReplies() }}
         />
+      )}
+
+      {/* ข้อความตอบกลับที่บันทึกไว้ (saved replies) — เปิดจากปุ่ม + ในแถบพิมพ์ */}
+      {showSavedReplies && (
+        <div onClick={() => setShowSavedReplies(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.5)', zIndex: 210, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: SURFACE, width: '100%', maxWidth: 520, maxHeight: '72dvh', borderRadius: '20px 20px 0 0', display: 'flex', flexDirection: 'column', boxShadow: '0 -10px 40px rgba(15,23,42,0.25)' }}>
+            <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 10 }}>
+              <div style={{ width: 44, height: 5, borderRadius: 3, background: '#cbd5e1' }} />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 18px 12px', borderBottom: `1px solid ${BORDER}` }}>
+              <button onClick={() => setShowSavedReplies(false)} style={{ background: 'transparent', border: 'none', color: MUTED, fontWeight: 800, fontSize: 14, cursor: 'pointer', fontFamily: 'inherit' }}>ยกเลิก</button>
+              <div style={{ fontSize: 14.5, fontWeight: 900, color: TEXT }}>ข้อความตอบกลับที่บันทึกไว้</div>
+              <button onClick={() => { setShowSavedReplies(false); setShowSettings(true) }} style={{ background: 'transparent', border: 'none', color: PRIMARY, fontWeight: 800, fontSize: 14, cursor: 'pointer', fontFamily: 'inherit' }}>+ สร้าง</button>
+            </div>
+            <div style={{ overflowY: 'auto', padding: '4px 0 calc(16px + env(safe-area-inset-bottom))' }}>
+              {quickReplies.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '40px 24px', color: MUTED, fontSize: 13, lineHeight: 1.8 }}>
+                  ยังไม่มีข้อความบันทึกไว้<br />
+                  <span style={{ fontSize: 12 }}>กด "+ สร้าง" เพื่อเพิ่มข้อความตอบกลับที่ใช้บ่อย</span>
+                </div>
+              ) : quickReplies.map(qr => (
+                <button
+                  key={qr.id}
+                  onClick={() => { setDraft(qr.message); setShowSavedReplies(false) }}
+                  style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', padding: '13px 18px', background: 'transparent', border: 'none', borderBottom: `1px solid ${BORDER}`, cursor: 'pointer', fontFamily: 'inherit' }}
+                >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 800, color: TEXT, marginBottom: 3 }}>⚡ {qr.title}</div>
+                    <div style={{ fontSize: 12.5, color: MUTED, lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{qr.message}</div>
+                  </div>
+                  <span style={{ fontSize: 11.5, fontWeight: 800, color: PRIMARY, background: PRIMARY_LIGHT, padding: '6px 13px', borderRadius: 999, flexShrink: 0 }}>ใช้</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Rename page nickname modal */}
