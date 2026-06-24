@@ -144,7 +144,8 @@ function parseMsgAttachments(m: any): any[] {
   const seen = new Set<string>()
   // dedupe ตาม url — FB ส่ง sticker ผ่านทั้ง field "sticker" และ "attachments" url เดียวกัน → กันซ้ำ
   const add = (item: any) => { if (item.url && !seen.has(item.url)) { seen.add(item.url); list.push(item) } }
-  if (m.sticker) add({ type: 'image', url: m.sticker, name: 'sticker' })
+  const isSticker = !!m.sticker
+  if (isSticker) add({ type: 'image', url: m.sticker, name: 'sticker' })
   for (const s of (m.shares?.data || []) as any[]) {
     if (s.link) add({ type: 'file', url: s.link, name: s.description || 'ลิงก์' })
   }
@@ -152,6 +153,8 @@ function parseMsgAttachments(m: any): any[] {
     const url = a.image_data?.url || a.file_url || a.video_data?.url || a.audio_data?.url || a.payload?.url
     if (!url) continue  // ไม่มี url → ข้าม เพื่อให้ row เหลือ [] แล้ว repair จับได้
     const isImage = a.mime_type?.startsWith('image/') || !!a.image_data || a.type === 'image'
+    // สติ๊กเกอร์: FB ส่งซ้ำใน attachments ด้วย url คนละค่า → ข้ามรูป ไม่เก็บซ้ำ
+    if (isSticker && isImage) continue
     add({ type: isImage ? 'image' : 'file', url, name: a.name || (isImage ? 'รูปภาพ' : 'ไฟล์แนบ') })
   }
   return list

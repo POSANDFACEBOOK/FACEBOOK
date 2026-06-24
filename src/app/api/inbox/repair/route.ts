@@ -90,7 +90,8 @@ export async function POST(req: Request) {
           const attachments: any[] = []
           const seen = new Set<string>()
           const add = (item: any) => { if (item.url && !seen.has(item.url)) { seen.add(item.url); attachments.push(item) } }
-          if (data.sticker) add({ type: 'image', url: data.sticker, name: 'sticker' })
+          const isSticker = !!data.sticker
+          if (isSticker) add({ type: 'image', url: data.sticker, name: 'sticker' })
           for (const s of (data.shares?.data || []) as any[]) {
             if (s.link) add({ type: 'file', url: s.link, name: s.description || 'ลิงก์' })
           }
@@ -98,6 +99,7 @@ export async function POST(req: Request) {
             const url = a.image_data?.url || a.file_url || a.video_data?.url || a.audio_data?.url || a.payload?.url
             if (!url) continue
             const isImage = a.mime_type?.startsWith('image/') || !!a.image_data || a.type === 'image'
+            if (isSticker && isImage) continue  // สติ๊กเกอร์ไม่เก็บรูปซ้ำ
             add({ type: isImage ? 'image' : 'file', url, name: a.name || (isImage ? 'รูปภาพ' : 'ไฟล์แนบ') })
           }
           if (!newText && attachments.length === 0) { result.push({ id: m.id, status: 'still_empty' }); return }

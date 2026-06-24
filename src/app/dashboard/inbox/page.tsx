@@ -1706,9 +1706,11 @@ function MessageBubble({ message: m, customerName, customerPic }: { message: any
               seen.add(a.url)
               return true
             })
+            // สติ๊กเกอร์: FB ส่ง url 2 ค่า (sticker + attachment) → โชว์อันเดียว
+            const stickerAtt = atts.find(a => a.name === 'sticker' && a.type === 'image' && a.url)
             // ถ้ามี image แล้ว → ไม่แสดง file/link อื่น
             const hasImage = atts.some(a => a.type === 'image' && a.url)
-            const filtered = hasImage ? atts.filter(a => a.type === 'image' && a.url) : atts
+            const filtered = stickerAtt ? [stickerAtt] : (hasImage ? atts.filter(a => a.type === 'image' && a.url) : atts)
             return filtered.map((a, i) => (
               a.type === 'image' && a.url ? (
                 <img key={i} src={a.url} style={{ maxWidth: 200, marginTop: m.message_text ? 6 : 0, borderRadius: 8, display: 'block' }} alt="" />
