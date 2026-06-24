@@ -628,11 +628,21 @@ export default function InboxPage() {
                 const un = sumUnread(arr)
                 return (
                   <button key={ch} className="fbpop" onClick={() => pickChannel(ch as 'facebook' | 'line')}
-                    style={{ flex: '1 1 200px', minWidth: 170, maxWidth: 240, background: 'white', border: `2px solid ${color}`, borderRadius: 20, padding: '26px 18px', cursor: 'pointer', fontFamily: 'inherit', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 11, boxShadow: `0 8px 24px ${color}22` }}>
+                    style={{ position: 'relative', flex: '1 1 200px', minWidth: 170, maxWidth: 240, background: 'white', border: `2px solid ${color}`, borderRadius: 20, padding: '26px 18px', cursor: 'pointer', fontFamily: 'inherit', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 11, boxShadow: `0 8px 24px ${color}22` }}>
+                    {/* แจ้งเตือนจำนวนแชทที่ยังไม่ได้อ่าน — มุมขวาบน */}
+                    {un > 0 && (
+                      <span style={{ position: 'absolute', top: -10, right: -10, minWidth: 30, height: 30, padding: '0 8px', borderRadius: 15, background: RED, color: 'white', fontSize: 14, fontWeight: 900, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 12px rgba(220,38,38,0.5)', border: '2.5px solid white' }}>
+                        {un > 99 ? '99+' : un}
+                      </span>
+                    )}
                     <div style={{ width: 58, height: 58, borderRadius: 16, background: color, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, fontWeight: 900 }}>{mark}</div>
                     <div style={{ fontSize: 18, fontWeight: 900, color: TEXT }}>{label}</div>
                     <div style={{ fontSize: 12, color: MUTED, fontWeight: 700 }}>{arr.length} เพจ</div>
-                    {un > 0 && <span style={{ background: RED, color: 'white', fontSize: 12, fontWeight: 800, padding: '3px 12px', borderRadius: 999 }}>{un} ยังไม่ตอบ</span>}
+                    {un > 0 ? (
+                      <span style={{ background: '#fee2e2', color: RED, fontSize: 12.5, fontWeight: 900, padding: '4px 13px', borderRadius: 999 }}>🔴 {un} แชทยังไม่อ่าน</span>
+                    ) : (
+                      <span style={{ background: '#dcfce7', color: GREEN, fontSize: 12, fontWeight: 800, padding: '4px 13px', borderRadius: 999 }}>✓ อ่านครบแล้ว</span>
+                    )}
                   </button>
                 )
               })}
