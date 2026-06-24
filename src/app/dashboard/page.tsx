@@ -122,6 +122,11 @@ export default function Dashboard() {
     setAbTests(abTestsRes.tests || [])
     setInboxUnread(inboxRes.totalUnread || 0)
     setIsOwner(meRes?.role?.isOwner ?? true)
+    // agent (ตอบแชทอย่างเดียว) → เด้งไปหน้ากล่องข้อความ ไม่ให้เห็นหน้ายิงแอด
+    if (meRes?.role?.isAgentOnly) {
+      window.location.replace('/dashboard/inbox')
+      return
+    }
     setLoading(false)
   }
 
@@ -231,6 +236,19 @@ export default function Dashboard() {
     } finally {
       setDeleting(null)
     }
+  }
+
+  // ขณะโหลดครั้งแรก → แสดง loader เต็มจอ (กัน agent เห็นหน้ายิงแอดวูบก่อนถูกเด้งไป inbox)
+  if (loading) {
+    return (
+      <div style={{ minHeight: '100vh', background: BG, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: "'Sarabun', sans-serif" }}>
+        <div style={{ textAlign: 'center', color: MUTED }}>
+          <div style={{ width: 46, height: 46, margin: '0 auto 14px', borderRadius: 14, background: 'linear-gradient(135deg, #1877f2, #5fa3ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, boxShadow: '0 6px 18px rgba(11,95,204,0.4)' }}>⚡</div>
+          <div style={{ fontWeight: 800, fontSize: 13 }}>กำลังโหลด...</div>
+        </div>
+        <style>{`@keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }`}</style>
+      </div>
+    )
   }
 
   return (
