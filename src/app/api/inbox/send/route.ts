@@ -5,8 +5,8 @@ import { NextResponse } from 'next/server'
 import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase'
 import { getCurrentUserContext } from '@/lib/team'
-import { sendTextMessage, sendSenderAction } from '@/lib/messenger'
-import { pushLineMessage } from '@/lib/line'
+import { sendTextMessage, sendSenderAction, sendAttachment } from '@/lib/messenger'
+import { pushLineMessage, pushLineImage } from '@/lib/line'
 
 export const dynamic = 'force-dynamic'
 
@@ -20,10 +20,16 @@ export async function POST(req: Request) {
     const ctx = await getCurrentUserContext(session)
     if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const { conversationId, text } = await req.json()
-    if (!conversationId || !text || typeof text !== 'string' || !text.trim()) {
-      return NextResponse.json({ error: 'Missing conversationId or text' }, { status: 400 })
+    const { conversationId, text, imageUrl } = await req.json()
+    const hasText = typeof text === 'string' && text.trim().length > 0
+    const hasImage = typeof imageUrl === 'string' && imageUrl.length > 0
+    if (!conversationId || (!hasText && !hasImage)) {
+      return NextResponse.json({ error: 'Missing conversationId or content' }, { status: 400 })
     }
+    // ค่าที่ใช้บันทึก/แสดง
+    const msgText = hasImage ? null : text.trim()
+    const attachments = hasImage ? [{ type: 'image', url: imageUrl }] : []
+    const lastMsg = hasImage ? '📷 รูปภาพ' : text.trim()
 
     const sb = supabaseAdmin()
 
@@ -39,6 +45,20 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
+    // อนุญาตเฉพาะรูปจาก storage ของเราเอง + ผูกกับ conversation นี้ (กัน SSRF + ใช้รูปข้ามแชท)
+    if (hasImage) {
+      let okUrl = false
+      try {
+        const u = new URL(imageUrl)
+        const base = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL || '')
+        const prefix = `/storage/v1/object/public/chat-uploads/${conv.page_id}/${conversationId}/`
+        okUrl = u.protocol === 'https:' && u.origin === base.origin && u.pathname.startsWith(prefix)
+      } catch { okUrl = false }
+      if (!okUrl) {
+        return NextResponse.json({ error: 'Invalid image URL' }, { status: 400 })
+      }
+    }
+
     const { data: page } = await sb
       .from('connected_pages')
       .select('page_access_token, channel')
@@ -51,13 +71,15 @@ export async function POST(req: Request) {
 
     // ── LINE: ส่งด้วย push API (ไม่มีกฎ 24 ชม. แบบ FB แต่กิน push quota) ──
     if (page.channel === 'line') {
-      const lineRes = await pushLineMessage(page.page_access_token, conv.fb_psid, text.trim())
+      const lineRes = hasImage
+        ? await pushLineImage(page.page_access_token, conv.fb_psid, imageUrl)
+        : await pushLineMessage(page.page_access_token, conv.fb_psid, text.trim())
       if (!lineRes.success) {
         const userError = '⚠️ LINE ส่งไม่สำเร็จ: ' + (lineRes.error || '') +
           (lineRes.errorCode === 429 ? ' (เกินโควต้า push ของเดือนนี้)' : '')
         await sb.from('inbox_messages').insert({
           conversation_id: conv.id, fb_sender_id: conv.fb_page_id, direction: 'outbound',
-          message_text: text.trim(), sent_by: 'page_user', sent_by_user_id: ctx.userId,
+          message_text: msgText, attachments, sent_by: 'page_user', sent_by_user_id: ctx.userId,
           delivery_status: 'failed', error_message: userError,
         })
         return NextResponse.json({ error: userError }, { status: 500 })
@@ -66,13 +88,13 @@ export async function POST(req: Request) {
         .from('inbox_messages')
         .insert({
           conversation_id: conv.id, fb_sender_id: conv.fb_page_id, direction: 'outbound',
-          message_text: text.trim(), sent_by: 'page_user', sent_by_user_id: ctx.userId,
+          message_text: msgText, attachments, sent_by: 'page_user', sent_by_user_id: ctx.userId,
           delivery_status: 'sent',
         })
         .select('*')
         .single()
       await sb.from('conversations').update({
-        last_message: text.trim(), last_message_at: new Date().toISOString(),
+        last_message: lastMsg, last_message_at: new Date().toISOString(),
         last_sender: 'page', unread_count: 0, is_resolved: false,
       }).eq('id', conv.id)
       return NextResponse.json({ success: true, message: saved })
@@ -83,25 +105,19 @@ export async function POST(req: Request) {
     sendSenderAction(page.page_access_token, conv.fb_psid, 'typing_on').catch(() => {})
 
     // 1) ส่งแบบ RESPONSE (ภายใน 24 ชม. ของข้อความล่าสุดลูกค้า)
-    let result = await sendTextMessage(
-      page.page_access_token,
-      conv.fb_psid,
-      text.trim(),
-      'RESPONSE'
-    )
+    const fbSend = (mt: 'RESPONSE' | 'MESSAGE_TAG', tag?: string) =>
+      hasImage
+        ? sendAttachment(page.page_access_token, conv.fb_psid, 'image', imageUrl, mt, tag)
+        : sendTextMessage(page.page_access_token, conv.fb_psid, text.trim(), mt, tag)
+
+    let result = await fbSend('RESPONSE')
 
     // 2) ถ้าเกิน 24 ชม. (code 10) → ลองใหม่ด้วย HUMAN_AGENT tag (ขยายหน้าต่างเป็น 7 วัน)
     //    ใช้ได้จริงเมื่อ FB App ผ่าน App Review ฟีเจอร์ Human Agent แล้วเท่านั้น
     let usedHumanAgent = false
     if (!result.success && result.errorCode === 10) {
       usedHumanAgent = true
-      result = await sendTextMessage(
-        page.page_access_token,
-        conv.fb_psid,
-        text.trim(),
-        'MESSAGE_TAG',
-        'HUMAN_AGENT'
-      )
+      result = await fbSend('MESSAGE_TAG', 'HUMAN_AGENT')
     }
 
     if (!result.success) {
@@ -120,7 +136,8 @@ export async function POST(req: Request) {
         conversation_id: conv.id,
         fb_sender_id: conv.fb_page_id,
         direction: 'outbound',
-        message_text: text.trim(),
+        message_text: msgText,
+        attachments,
         sent_by: 'page_user',
         sent_by_user_id: ctx.userId,
         delivery_status: 'failed',
@@ -137,7 +154,8 @@ export async function POST(req: Request) {
         fb_message_id: result.message_id,
         fb_sender_id: conv.fb_page_id,
         direction: 'outbound',
-        message_text: text.trim(),
+        message_text: msgText,
+        attachments,
         sent_by: 'page_user',
         sent_by_user_id: ctx.userId,
         delivery_status: 'sent',
@@ -149,7 +167,7 @@ export async function POST(req: Request) {
     await sb
       .from('conversations')
       .update({
-        last_message: text.trim(),
+        last_message: lastMsg,
         last_message_at: new Date().toISOString(),
         last_sender: 'page',
         unread_count: 0,

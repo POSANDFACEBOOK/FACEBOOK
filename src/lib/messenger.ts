@@ -77,29 +77,34 @@ export async function sendTextMessage(
   }
 }
 
-/** ส่งรูป/ไฟล์แนบ */
+/** ส่งรูป/ไฟล์แนบ (รองรับ messaging_type + HUMAN_AGENT tag เหมือนข้อความ) */
 export async function sendAttachment(
   pageToken: string,
   recipientPsid: string,
   attachmentType: 'image' | 'video' | 'audio' | 'file',
-  url: string
-): Promise<SendMessageResult> {
+  url: string,
+  messagingType: 'RESPONSE' | 'UPDATE' | 'MESSAGE_TAG' = 'RESPONSE',
+  tag?: string,
+): Promise<SendMessageResult & { errorCode?: number }> {
   try {
+    const body: any = {
+      messaging_type: messagingType,
+      recipient: { id: recipientPsid },
+      message: {
+        attachment: {
+          type: attachmentType,
+          payload: { url, is_reusable: true },
+        },
+      },
+    }
+    if (tag) body.tag = tag
     const res = await fetch(`${FB_API}/me/messages?access_token=${pageToken}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        recipient: { id: recipientPsid },
-        message: {
-          attachment: {
-            type: attachmentType,
-            payload: { url, is_reusable: true },
-          },
-        },
-      }),
+      body: JSON.stringify(body),
     })
     const data = await res.json()
-    if (data.error) return { success: false, error: data.error.message }
+    if (data.error) return { success: false, error: data.error.message, errorCode: data.error.code }
     return { success: true, message_id: data.message_id }
   } catch (e: any) {
     return { success: false, error: e.message }
