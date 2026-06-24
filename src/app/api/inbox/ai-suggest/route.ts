@@ -6,12 +6,17 @@ import { NextResponse } from 'next/server'
 import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase'
 import { getCurrentUserContext } from '@/lib/team'
+import { listRecentPagePosts } from '@/lib/messenger'
 import Anthropic from '@anthropic-ai/sdk'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
+
+// cache โพสต์เพจ (ลด FB call ทุกครั้งที่กด AI) — TTL 15 นาที, อยู่ใน instance ที่ warm
+const postsCache = new Map<string, { posts: Array<{ message: string; created_time: string }>; at: number }>()
+const POSTS_TTL = 15 * 60 * 1000
 
 export async function POST(req: Request) {
   try {
@@ -66,52 +71,74 @@ export async function POST(req: Request) {
     const tone = settings?.ai_tone || 'friendly'
     const kb = settings?.knowledge_base || ''
 
-    // ดึง page name
+    // ดึง page (name + token + fb id) สำหรับดึงโพสต์
     const { data: page } = await sb
       .from('connected_pages')
-      .select('page_name')
+      .select('page_name, page_access_token, page_id')
       .eq('id', conv.page_id)
       .single()
 
+    // ── ดึงโพสต์ล่าสุดของเพจ (ข้อมูลร้าน + โปรโมชั่นล่าสุด) — cache 15 นาที ──
+    let posts: Array<{ message: string; created_time: string }> = []
+    if (page?.page_access_token && page?.page_id) {
+      const cached = postsCache.get(conv.page_id)
+      if (cached && Date.now() - cached.at < POSTS_TTL) {
+        posts = cached.posts
+      } else {
+        posts = await listRecentPagePosts(page.page_id, page.page_access_token, 12)
+        postsCache.set(conv.page_id, { posts, at: Date.now() })
+      }
+    }
+    const postsBlock = posts.length > 0
+      ? posts.slice(0, 10).map(p => {
+          const d = p.created_time ? new Date(p.created_time).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' }) : ''
+          return `• (${d}) ${p.message.replace(/\s+/g, ' ').slice(0, 350)}`
+        }).join('\n')
+      : '(ไม่มีข้อมูลโพสต์)'
+
     const transcript = recent
-      .map(m => `${m.direction === 'inbound' ? `[ลูกค้า] ${conv.customer_name}` : `[เพจ ${page?.page_name || ''}]`}: ${m.message_text || '(ไฟล์แนบ)'}`)
+      .map(m => `${m.direction === 'inbound' ? `[ลูกค้า ${conv.customer_name}]` : `[เพจ]`}: ${m.message_text || '(ส่งรูป/ไฟล์)'}`)
       .join('\n')
 
     const toneGuide: Record<string, string> = {
-      friendly: 'เป็นกันเอง อบอุ่น ใช้คำลงท้าย ค่ะ/ครับ มี emoji ได้บ้าง',
-      professional: 'ทางการ สุภาพ กระชับ ตรงประเด็น ไม่ใช้ emoji',
-      casual: 'สบายๆ เหมือนเพื่อน ใช้คำง่ายๆ มี emoji ได้',
+      friendly: 'เป็นกันเอง อบอุ่น ใช้คำลงท้าย ค่ะ/ครับ มี emoji พอเหมาะ',
+      professional: 'สุภาพ ทางการ กระชับ ตรงประเด็น ไม่ใช้ emoji',
+      casual: 'สบายๆ เหมือนคุยกับเพื่อน ใช้คำง่ายๆ มี emoji ได้',
     }
 
-    const prompt = `คุณคือ AI ผู้ช่วยตอบแชทลูกค้าให้กับเพจ Facebook "${page?.page_name || ''}"
+    const prompt = `คุณคือ "แอดมินตอบแชท" ของเพจ Facebook "${page?.page_name || ''}" ตอบลูกค้าเหมือนคนจริง อบอุ่น เป็นธรรมชาติ ไม่ใช่บอท
 
-# บทสนทนาล่าสุด:
-${transcript}
-
-# ข้อมูลร้าน/สินค้า/FAQ (ใช้อ้างอิงเวลาตอบ):
+# ข้อมูลร้าน/สินค้า/FAQ (ตั้งค่าไว้):
 ${kb || '(ยังไม่ได้ตั้งค่า)'}
 
+# โพสต์ล่าสุดของเพจ (ข้อมูลจริง — ใช้ตอบเรื่องสินค้า ราคา โปรโมชั่นล่าสุด เมนู บริการ):
+${postsBlock}
+
+# บทสนทนาล่าสุดกับลูกค้า:
+${transcript}
+
 # โทนการตอบ: ${toneGuide[tone] || toneGuide.friendly}
+${instruction ? `# คำสั่งพิเศษจากแอดมิน: ${instruction}` : ''}
 
-${instruction ? `# คำสั่งพิเศษจาก user: ${instruction}` : ''}
+# กติกาสำคัญ:
+- ตอบให้ตรงคำถาม/ข้อความล่าสุดของลูกค้า เป็นภาษาไทยที่ฟังเป็นธรรมชาติเหมือนแอดมินคนจริง ไม่ห้วน ไม่เป็นทางการเกินจนแข็ง
+- ใช้ "ข้อมูลร้าน" + "โพสต์ล่าสุด" เป็นความจริงในการตอบ โดยเฉพาะเรื่อง ราคา / โปรโมชั่น / รายละเอียดสินค้า / เวลาเปิด-ปิด
+- ถ้าลูกค้าถามโปรล่าสุดหรือราคา ให้ดึงจากโพสต์ล่าสุดมาตอบให้ตรง
+- ❗ ห้ามแต่งราคา/โปรโมชั่น/ข้อมูลที่ไม่มีในข้อมูลที่ให้ — ถ้าไม่มีข้อมูล ให้ตอบสุภาพว่าจะเช็คให้ / ขอข้อมูลเพิ่มเติม
+- กระชับแต่ครบถ้วน ชวนปิดการขายอย่างนุ่มนวลเมื่อเหมาะสม
 
-# งานของคุณ:
-1. เสนอข้อความตอบกลับ 3 แบบ ให้ user เลือก (สั้น กลาง ยาว) — ทุกแบบต้องเป็นภาษาไทย เป็นธรรมชาติ ตอบตรงคำถามของลูกค้า
-2. วิเคราะห์ category: 'inquiry' (ถามทั่วไป) | 'price' (ถามราคา) | 'order' (สั่งซื้อ) | 'complaint' (ร้องเรียน) | 'support' (ขอความช่วยเหลือ) | 'spam' | 'other'
-3. วิเคราะห์ sentiment: 'positive' | 'neutral' | 'negative'
-4. สรุปบทสนทนาสั้นๆ 1 ประโยค
+# งาน:
+1. เสนอข้อความตอบ 3 แบบ: สั้น (1-2 ประโยค) / กลาง / ละเอียด — ทุกแบบพร้อมส่งได้ทันที
+2. category: 'inquiry'|'price'|'order'|'complaint'|'support'|'spam'|'other'
+3. sentiment: 'positive'|'neutral'|'negative'
+4. summary: สรุปบทสนทนาสั้นๆ 1 ประโยค
 
 ตอบเป็น JSON เท่านั้น:
-{
-  "suggestions": ["ตอบแบบสั้น", "ตอบแบบกลาง", "ตอบแบบยาว"],
-  "category": "...",
-  "sentiment": "...",
-  "summary": "..."
-}`
+{"suggestions":["สั้น","กลาง","ละเอียด"],"category":"...","sentiment":"...","summary":"..."}`
 
     const resp = await anthropic.messages.create({
       model: 'claude-sonnet-4-6',
-      max_tokens: 1500,
+      max_tokens: 2000,
       messages: [{ role: 'user', content: prompt }],
     })
 

@@ -267,6 +267,31 @@ export async function getUserProfilesBatch(
   return out
 }
 
+/**
+ * ดึงโพสต์ล่าสุดของเพจ (ข้อความ) — ใช้เป็นบริบทให้ AI ตอบเรื่องสินค้า/ราคา/โปรโมชั่น
+ * ลองหลาย edge เผื่อ permission ต่างกัน
+ */
+export async function listRecentPagePosts(
+  fbPageId: string,
+  pageToken: string,
+  limit = 12,
+): Promise<Array<{ message: string; created_time: string }>> {
+  const fields = 'message,created_time'
+  for (const edge of ['published_posts', 'posts', 'feed']) {
+    try {
+      const res = await fetch(`${FB_API}/${fbPageId}/${edge}?fields=${fields}&limit=${limit}&access_token=${pageToken}`)
+      const data: any = await res.json()
+      if (data.error) continue
+      return (data.data || [])
+        .filter((p: any) => p.message && String(p.message).trim())
+        .map((p: any) => ({ message: String(p.message), created_time: p.created_time }))
+    } catch {
+      continue
+    }
+  }
+  return []
+}
+
 /** ดึงข้อมูล user (ลูกค้า) จาก PSID — ได้ name + profile pic */
 export async function getUserProfile(
   psid: string,

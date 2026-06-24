@@ -1,5 +1,5 @@
 'use client'
-import { Suspense, useState } from 'react'
+import { Suspense, useState, useEffect } from 'react'
 import { signIn, signOut, useSession } from 'next-auth/react'
 import { useSearchParams, useRouter } from 'next/navigation'
 
@@ -12,10 +12,15 @@ export default function LoginPage() {
 }
 
 function LoginInner() {
-  const { data: session } = useSession()
+  const { data: session, status } = useSession()
   const searchParams = useSearchParams()
   const router = useRouter()
   const callbackUrl = searchParams.get('callbackUrl') || '/dashboard'
+
+  // login อยู่แล้ว → ข้ามหน้านี้ เข้าหน้าปลายทางเลย (เช่น ลิงก์แชท /dashboard/inbox)
+  useEffect(() => {
+    if (status === 'authenticated') router.replace(callbackUrl)
+  }, [status, callbackUrl, router])
 
   const [mode, setMode] = useState<'owner' | 'agent'>('owner')
   const [email, setEmail] = useState('')
@@ -46,6 +51,18 @@ function LoginInner() {
       setError('เกิดข้อผิดพลาด: ' + (err?.message || 'unknown'))
       setBusy(false)
     }
+  }
+
+  // กำลัง login อยู่แล้ว → แสดง loader สั้นๆ ระหว่าง redirect (ไม่โชว์การ์ด "ไปที่ Dashboard")
+  if (status === 'authenticated') {
+    return (
+      <div style={{ minHeight: '100vh', background: '#eaf2fd', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: "'Sarabun', sans-serif" }}>
+        <div style={{ textAlign: 'center', color: '#6b7280' }}>
+          <div style={{ width: 46, height: 46, margin: '0 auto 12px', borderRadius: 14, background: 'linear-gradient(135deg, #1877f2, #5fa3ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, boxShadow: '0 6px 18px rgba(11,95,204,0.4)' }}>⚡</div>
+          <div style={{ fontWeight: 800, fontSize: 13 }}>กำลังเข้าสู่ระบบ...</div>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -94,48 +111,7 @@ function LoginInner() {
           borderRadius: 26, padding: '26px 24px',
           boxShadow: '8px 8px 28px rgba(24,119,242,0.14), -6px -6px 20px rgba(255,255,255,0.95), 0 2px 8px rgba(0,0,0,0.05)',
         }}>
-          {session ? (
-            <div>
-              {/* Logged-in state */}
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 11,
-                background: 'linear-gradient(135deg, #f0fdf4, #dcfce7)',
-                border: '1.5px solid rgba(5,150,105,0.22)', borderRadius: 14,
-                padding: '11px 15px', marginBottom: 22, textAlign: 'left',
-                boxShadow: '2px 2px 8px rgba(5,150,105,0.1), -1px -1px 5px rgba(255,255,255,0.9)',
-              }}>
-                <span style={{ fontSize: 22 }}>✅</span>
-                <div>
-                  <p style={{ fontSize: 11, color: '#059669', fontWeight: 800, margin: 0, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Login สำเร็จ</p>
-                  <p style={{ fontSize: 13, color: '#1a1f3c', margin: 0, fontWeight: 700 }}>{session.user?.name || session.user?.email}</p>
-                </div>
-              </div>
-
-              <a href="/dashboard" style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9,
-                width: '100%', padding: '14px 24px',
-                background: 'linear-gradient(135deg, #1877f2 0%, #2e89ff 55%, #5fa3ff 100%)',
-                color: 'white', borderRadius: 15, fontSize: 15, fontWeight: 800,
-                textDecoration: 'none', marginBottom: 11,
-                boxShadow: '0 6px 22px rgba(11,95,204,0.45), 0 2px 8px rgba(11,95,204,0.22), inset 0 1px 0 rgba(255,255,255,0.28), inset 0 -2px 0 rgba(0,0,0,0.14)',
-                transition: 'all 0.2s', boxSizing: 'border-box', letterSpacing: '0.02em',
-              }}>
-                🚀 ไปที่ Dashboard
-              </a>
-
-              <button onClick={() => signOut({ callbackUrl: '/login' })} style={{
-                width: '100%', padding: '12px 24px',
-                background: 'linear-gradient(145deg, #ffffff, #f0f4ff)',
-                color: '#6b7280',
-                border: '1.5px solid rgba(24,119,242,0.15)', borderRadius: 14, fontSize: 13, fontWeight: 700,
-                cursor: 'pointer',
-                boxShadow: '3px 3px 10px rgba(24,119,242,0.1), -2px -2px 8px rgba(255,255,255,0.9)',
-                fontFamily: 'inherit', transition: 'all 0.2s',
-              }}>
-                Logout แล้ว Login ใหม่
-              </button>
-            </div>
-          ) : (
+          {(
             <>
               {/* Mode tabs */}
               <div style={{
