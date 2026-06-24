@@ -15,9 +15,10 @@ const YELLOW = '#d97706', YELLOW_L = '#fef3c7'
 type Page = { id: string; page_name: string; page_picture: string | null }
 type Member = {
   userId: string; name: string; image: string | null; email: string | null
-  role: string; joinedAt: string
+  role: string; joinedAt: string; facebookId?: string | null
   pages: { pageId: string; pageName: string; pagePicture: string | null }[]
 }
+type ResetTarget = { kind: 'member' | 'invite'; id: string; name: string }
 type Invitation = {
   id: string; token: string; role: string
   page_ids: string[]; note: string | null
@@ -40,6 +41,7 @@ export default function TeamPage() {
   const [members, setMembers] = useState<Member[]>([])
   const [invitations, setInvitations] = useState<Invitation[]>([])
   const [showInvite, setShowInvite] = useState(false)
+  const [resetTarget, setResetTarget] = useState<ResetTarget | null>(null)
   const [origin, setOrigin] = useState('')
 
   useEffect(() => {
@@ -185,6 +187,19 @@ export default function TeamPage() {
                     <span style={{ padding: '4px 10px', background: PRIMARY_LIGHT, color: PRIMARY, fontWeight: 800, borderRadius: 8, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>
                       {m.role}
                     </span>
+                    {!m.facebookId && (
+                      <button
+                        onClick={() => setResetTarget({ kind: 'member', id: m.userId, name: m.name })}
+                        title="ตั้ง/รีเซ็ตรหัสผ่าน"
+                        style={{
+                          padding: '7px 9px', background: PRIMARY_LIGHT, color: PRIMARY,
+                          border: 'none', borderRadius: 8, cursor: 'pointer', fontFamily: 'inherit',
+                          display: 'flex', alignItems: 'center',
+                        }}
+                      >
+                        <Key size={14} />
+                      </button>
+                    )}
                     <button
                       onClick={() => handleRemove(m)}
                       title="ลบจากทีมทั้งหมด"
@@ -241,6 +256,7 @@ export default function TeamPage() {
                   inv={inv}
                   origin={origin}
                   onRevoke={() => handleRevokeInvite(inv.id)}
+                  onReset={() => setResetTarget({ kind: 'invite', id: inv.id, name: inv.invitee_name || inv.invitee_email || '' })}
                 />
               ))}
             </div>
@@ -255,11 +271,18 @@ export default function TeamPage() {
           onClose={() => { setShowInvite(false); loadAll() }}
         />
       )}
+
+      {resetTarget && (
+        <ResetPasswordModal
+          target={resetTarget}
+          onClose={() => { setResetTarget(null); loadAll() }}
+        />
+      )}
     </div>
   )
 }
 
-function InviteRow({ inv, origin, onRevoke }: { inv: Invitation; origin: string; onRevoke: () => void }) {
+function InviteRow({ inv, origin, onRevoke, onReset }: { inv: Invitation; origin: string; onRevoke: () => void; onReset: () => void }) {
   const [copied, setCopied] = useState(false)
   const isCredentials = inv.auth_method === 'credentials'
   const copyTarget = isCredentials ? (inv.invitee_email || '') : `${origin}/invite/${inv.token}`
@@ -340,7 +363,7 @@ function InviteRow({ inv, origin, onRevoke }: { inv: Invitation; origin: string;
           )}
         </div>
         {inv.status === 'pending' && (
-          <div style={{ display: 'flex', gap: 6 }}>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {!isCredentials && (
               <button
                 onClick={copyAction}
@@ -353,6 +376,20 @@ function InviteRow({ inv, origin, onRevoke }: { inv: Invitation; origin: string;
                 }}
               >
                 {copied ? (<><Check size={12} /> คัดลอกแล้ว</>) : (<><Copy size={12} /> คัดลอกลิงก์</>)}
+              </button>
+            )}
+            {isCredentials && (
+              <button
+                onClick={onReset}
+                title="ตั้งรหัสผ่านใหม่"
+                style={{
+                  padding: '8px 12px', fontSize: 11, fontWeight: 800,
+                  background: PRIMARY_LIGHT, color: PRIMARY, border: `1px solid ${BORDER}`,
+                  borderRadius: 9, cursor: 'pointer', fontFamily: 'inherit',
+                  display: 'flex', alignItems: 'center', gap: 5,
+                }}
+              >
+                <Key size={12} /> ตั้งรหัสใหม่
               </button>
             )}
             <button
@@ -381,6 +418,7 @@ function InviteModal({ pages, origin, onClose }: { pages: Page[]; origin: string
   const [authMethod, setAuthMethod] = useState<'credentials' | 'facebook'>('credentials')
   const [inviteeEmail, setInviteeEmail] = useState('')
   const [inviteeName, setInviteeName] = useState('')
+  const [inviteePassword, setInviteePassword] = useState('')
   const [selected, setSelected] = useState<string[]>([])
   const [note, setNote] = useState('')
   const [creating, setCreating] = useState(false)
@@ -391,11 +429,12 @@ function InviteModal({ pages, origin, onClose }: { pages: Page[]; origin: string
     setSelected(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id])
   }
 
+  const pwOk = inviteePassword.trim() === '' || inviteePassword.trim().length >= 6
   const canSubmit =
     selected.length > 0 &&
     !creating &&
     (authMethod === 'facebook' ||
-      (authMethod === 'credentials' && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(inviteeEmail.trim()) && inviteeName.trim().length > 0))
+      (authMethod === 'credentials' && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(inviteeEmail.trim()) && inviteeName.trim().length > 0 && pwOk))
 
   async function create() {
     if (!canSubmit) return
@@ -409,6 +448,7 @@ function InviteModal({ pages, origin, onClose }: { pages: Page[]; origin: string
       if (authMethod === 'credentials') {
         body.inviteeEmail = inviteeEmail.trim()
         body.inviteeName = inviteeName.trim()
+        if (inviteePassword.trim()) body.password = inviteePassword.trim()
       }
       const res = await fetch('/api/team/invite', {
         method: 'POST',
@@ -562,6 +602,28 @@ Email: ${result.email}
                       background: SURFACE2, boxSizing: 'border-box',
                     }}
                   />
+                </div>
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ fontSize: 12, fontWeight: 800, color: TEXT, display: 'block', marginBottom: 6 }}>
+                    รหัสผ่าน <span style={{ color: MUTED, fontWeight: 600 }}>(เว้นว่าง = ระบบสุ่มให้)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={inviteePassword}
+                    onChange={e => setInviteePassword(e.target.value)}
+                    placeholder="ตั้งรหัสง่ายๆ ให้แอดมิน เช่น naiwansook123"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    style={{
+                      width: '100%', padding: '10px 12px', fontSize: 13,
+                      border: `1.5px solid ${BORDER}`, borderRadius: 10, fontFamily: 'inherit',
+                      background: SURFACE2, boxSizing: 'border-box',
+                    }}
+                  />
+                  {inviteePassword.trim().length > 0 && inviteePassword.trim().length < 6 && (
+                    <div style={{ fontSize: 11, color: RED, marginTop: 4, fontWeight: 700 }}>ต้องยาวอย่างน้อย 6 ตัว</div>
+                  )}
                 </div>
               </>
             )}
@@ -780,6 +842,112 @@ function CredentialField({
         >
           {copied ? <Check size={13} /> : <Copy size={13} />}
         </button>
+      </div>
+    </div>
+  )
+}
+
+function genPw(len = 10): string {
+  const c = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+  let s = ''
+  for (let i = 0; i < len; i++) s += c[Math.floor(Math.random() * c.length)]
+  return s
+}
+
+function ResetPasswordModal({ target, onClose }: { target: ResetTarget; onClose: () => void }) {
+  const [pw, setPw] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [done, setDone] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  const valid = pw.trim().length >= 6
+
+  async function save() {
+    if (!valid || saving) return
+    setSaving(true)
+    try {
+      const body: any = { password: pw.trim() }
+      if (target.kind === 'invite') body.invitationId = target.id
+      else body.memberUserId = target.id
+      const res = await fetch('/api/team/reset-password', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.success) { alert('ตั้งรหัสไม่สำเร็จ: ' + (data.error || 'unknown')); return }
+      setDone(true)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', zIndex: 260, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, backdropFilter: 'blur(6px)' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: SURFACE, borderRadius: 20, padding: 26, width: '100%', maxWidth: 420, boxShadow: '0 24px 70px rgba(15,23,42,0.3)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <h2 style={{ fontSize: 17, fontWeight: 900, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Key size={18} color={PRIMARY} /> ตั้ง/รีเซ็ตรหัสผ่าน
+          </h2>
+          <button onClick={onClose} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: MUTED, display: 'flex' }}><X size={20} /></button>
+        </div>
+        <div style={{ fontSize: 12, color: MUTED, fontWeight: 600, marginBottom: 16 }}>แอดมิน: {target.name || '—'}</div>
+
+        {!done ? (
+          <>
+            <label style={{ fontSize: 12, fontWeight: 800, color: TEXT, display: 'block', marginBottom: 6 }}>รหัสผ่านใหม่</label>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+              <input
+                autoFocus
+                type="text"
+                value={pw}
+                onChange={e => setPw(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') save() }}
+                placeholder="อย่างน้อย 6 ตัว"
+                autoCapitalize="none" autoCorrect="off" spellCheck={false}
+                style={{ flex: 1, padding: '11px 13px', fontSize: 14, fontWeight: 700, border: `1.5px solid ${BORDER}`, borderRadius: 11, fontFamily: 'monospace', background: SURFACE2, boxSizing: 'border-box', color: TEXT, minWidth: 0 }}
+              />
+              <button onClick={() => setPw(genPw())} title="สุ่มรหัส" style={{ padding: '0 14px', fontSize: 12, fontWeight: 800, background: SURFACE2, color: PRIMARY, border: `1.5px solid ${BORDER}`, borderRadius: 11, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
+                <RefreshCw size={13} /> สุ่ม
+              </button>
+            </div>
+            <div style={{ fontSize: 11, color: MUTED, lineHeight: 1.6, marginBottom: 18 }}>
+              ตั้งรหัสง่ายๆ ที่แอดมินจำได้ (พิมพ์บนมือถือสะดวก) แล้วบอกแอดมินไปตอนนี้ได้เลย
+            </div>
+            <button
+              className="fbtap"
+              onClick={save}
+              disabled={!valid || saving}
+              style={{
+                width: '100%', padding: '12px', fontSize: 14, fontWeight: 900,
+                background: (!valid || saving) ? '#94a3b8' : 'linear-gradient(135deg, #1877f2, #2e89ff)',
+                color: 'white', border: 'none', borderRadius: 12, cursor: (!valid || saving) ? 'not-allowed' : 'pointer',
+                fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              }}
+            >
+              <Check size={15} /> {saving ? 'กำลังบันทึก...' : 'บันทึกรหัสผ่าน'}
+            </button>
+          </>
+        ) : (
+          <>
+            <div style={{ background: '#f0fdf4', border: '1.5px solid rgba(5,150,105,0.25)', borderRadius: 14, padding: 14, marginBottom: 14, textAlign: 'center' }}>
+              <div style={{ fontSize: 26, marginBottom: 2 }}>✅</div>
+              <div style={{ fontSize: 13.5, fontWeight: 900, color: '#065f46' }}>ตั้งรหัสผ่านใหม่สำเร็จ</div>
+            </div>
+            <CredentialField
+              label="รหัสผ่านใหม่"
+              value={pw.trim()}
+              icon={<Key size={13} />}
+              mono
+              copied={copied}
+              onCopy={async () => { try { await navigator.clipboard.writeText(pw.trim()); setCopied(true); setTimeout(() => setCopied(false), 1500) } catch {} }}
+            />
+            <div style={{ fontSize: 11, color: MUTED, lineHeight: 1.6, margin: '4px 0 16px' }}>
+              ส่งรหัสนี้ให้แอดมินไป login ที่หน้าเดิม (อีเมลเดิม) ได้ทันที
+            </div>
+            <button onClick={onClose} style={{ width: '100%', padding: '11px', fontSize: 13, fontWeight: 800, background: SURFACE2, color: TEXT, border: `1.5px solid ${BORDER}`, borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+              เสร็จสิ้น
+            </button>
+          </>
+        )}
       </div>
     </div>
   )
