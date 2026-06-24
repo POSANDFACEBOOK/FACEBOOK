@@ -515,6 +515,11 @@ export default function InboxPage() {
   const pickChannel = (ch: 'facebook' | 'line') => {
     setChannelFilter(ch); setPageFilter(''); setActiveConv(null); setMessages([])
   }
+  // กลับไปหน้าเลือกช่องทาง (Facebook / LINE) ใหม่
+  const backToChannels = () => {
+    setChannelFilter(null); setPageFilter(''); setActiveConv(null); setMessages([])
+    setDraft(''); setAiSuggestions([]); setErrorBanner(null)
+  }
 
   // ถ้ามีช่องทางเดียว → เลือกให้อัตโนมัติ (ไม่ต้องโชว์หน้าเลือก)
   useEffect(() => {
@@ -606,11 +611,28 @@ export default function InboxPage() {
         borderBottom: `1.5px solid ${BORDER}`, padding: '10px 14px',
         alignItems: 'center', gap: 10, height: 52, boxSizing: 'border-box',
       }}>
-        <Link href={isOwner ? '/dashboard' : '/dashboard/inbox'} style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ width: 32, height: 32, background: 'linear-gradient(135deg, #1877f2, #5fa3ff)', borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15 }}>⚡</div>
-          <div style={{ fontWeight: 900, fontSize: 12.5, color: TEXT }}>FACEBOOK CHAT NAIWANSOOK</div>
+        <Link href={isOwner ? '/dashboard' : '/dashboard/inbox'} style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexShrink: 1 }}>
+          <div style={{ width: 32, height: 32, flexShrink: 0, background: 'linear-gradient(135deg, #1877f2, #5fa3ff)', borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15 }}>⚡</div>
+          <div style={{ fontWeight: 900, fontSize: 12.5, color: TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>FACEBOOK CHAT</div>
         </Link>
         <div style={{ flex: 1 }} />
+        {/* ปุ่มกลับไปหน้าเลือกช่องทาง (เมื่อมีทั้ง FB + LINE) */}
+        {bothChannels && channelFilter && (
+          <button
+            onClick={backToChannels}
+            title="เปลี่ยนช่องทาง"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0,
+              padding: '7px 12px', borderRadius: 999, fontFamily: 'inherit',
+              border: `1.5px solid ${channelFilter === 'line' ? '#06c755' : '#1877f2'}`,
+              background: channelFilter === 'line' ? '#e9faf1' : '#eaf2fd',
+              color: channelFilter === 'line' ? '#06804a' : '#1877f2',
+              fontSize: 11.5, fontWeight: 800, cursor: 'pointer',
+            }}
+          >
+            <span style={{ fontSize: 13 }}>⇄</span> {channelFilter === 'line' ? 'LINE' : 'Facebook'}
+          </button>
+        )}
         {isOwner && (
           <Link href="/dashboard" style={{ ...btnGhost, padding: '7px 11px', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5, textDecoration: 'none', color: MUTED } as any}>
             <BarChart3 size={13} /> ยิงแอดเพจ
@@ -936,6 +958,23 @@ export default function InboxPage() {
                 >
                   <ChevronLeft size={22} strokeWidth={2.6} />
                 </button>
+                {bothChannels && (
+                  <button
+                    onClick={backToChannels}
+                    className="ib-chan-back"
+                    title="เปลี่ยนช่องทาง"
+                    style={{
+                      display: 'none', alignItems: 'center', justifyContent: 'center', gap: 4,
+                      height: 38, flexShrink: 0, padding: '0 11px', borderRadius: 11,
+                      border: `1.5px solid ${channelFilter === 'line' ? '#06c755' : '#1877f2'}`,
+                      background: channelFilter === 'line' ? '#e9faf1' : '#eaf2fd',
+                      color: channelFilter === 'line' ? '#06804a' : '#1877f2',
+                      fontSize: 11.5, fontWeight: 800, fontFamily: 'inherit', cursor: 'pointer',
+                    }}
+                  >
+                    ⇄ {channelFilter === 'line' ? 'LINE' : 'Facebook'}
+                  </button>
+                )}
                 <Avatar name={activeConv.customer_name} src={activeConv.customer_picture} size={42} ringColor={pageColor(activeConv.page_id).border} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 15.5, fontWeight: 900, color: TEXT, display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1397,6 +1436,7 @@ export default function InboxPage() {
           /* เปิดแชท → ซ่อน mobile bar (sibling ของ .ib-main จึงใช้ .ib-root) + โชว์ปุ่มกลับ */
           .ib-root[data-active="1"] .ib-mobile-bar { display: none !important; }
           .ib-back { display: flex !important; }
+          .ib-chan-back { display: flex !important; }
 
           /* Page bar — แนวนอน scroll (เหมือน stories) เห็นทุกเพจ */
           .ib-pagebar { padding: 8px 10px !important; }
