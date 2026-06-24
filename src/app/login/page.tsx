@@ -20,6 +20,7 @@ function LoginInner() {
   const [mode, setMode] = useState<'owner' | 'agent'>('owner')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -31,7 +32,7 @@ function LoginInner() {
     try {
       const res = await signIn('credentials', {
         email: email.trim(),
-        password,
+        password: password.trim(),
         redirect: false,
         callbackUrl,
       })
@@ -212,20 +213,48 @@ function LoginInner() {
                         boxSizing: 'border-box', marginBottom: 10,
                       }}
                     />
-                    <input
-                      type="password"
-                      value={password}
-                      onChange={e => setPassword(e.target.value)}
-                      placeholder="รหัสผ่าน"
-                      autoComplete="current-password"
-                      required
-                      style={{
-                        width: '100%', padding: '12px 14px', fontSize: 13,
-                        border: '1.5px solid rgba(24,119,242,0.15)', borderRadius: 12,
-                        fontFamily: 'inherit', background: '#f0f6ff',
-                        boxSizing: 'border-box', marginBottom: 12,
-                      }}
-                    />
+                    <div style={{ position: 'relative', marginBottom: 12 }}>
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        value={password}
+                        onChange={e => setPassword(e.target.value)}
+                        placeholder="รหัสผ่าน"
+                        autoComplete="current-password"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        required
+                        style={{
+                          width: '100%', padding: '12px 44px 12px 14px', fontSize: 13,
+                          border: '1.5px solid rgba(24,119,242,0.15)', borderRadius: 12,
+                          fontFamily: 'inherit', background: '#f0f6ff',
+                          boxSizing: 'border-box',
+                          letterSpacing: showPassword ? 'normal' : '0.05em',
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(v => !v)}
+                        aria-label={showPassword ? 'ซ่อนรหัสผ่าน' : 'แสดงรหัสผ่าน'}
+                        title={showPassword ? 'ซ่อนรหัสผ่าน' : 'แสดงรหัสผ่าน'}
+                        style={{
+                          position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
+                          width: 32, height: 32, border: 'none', background: 'transparent',
+                          cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          color: '#6b7280', padding: 0,
+                        }}
+                      >
+                        {showPassword ? (
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" /><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" /><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" /><line x1="2" y1="2" x2="22" y2="22" />
+                          </svg>
+                        ) : (
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" />
+                          </svg>
+                        )}
+                      </button>
+                    </div>
                     {error && (
                       <div style={{
                         background: '#fee2e2', color: '#991b1b',

@@ -113,8 +113,14 @@ export async function POST(req: Request) {
         }, { status: 409 })
       }
 
-      plainPassword = generatePassword(12)
-      const passwordHash = await bcrypt.hash(plainPassword, 10)
+      // เจ้าของตั้งรหัสเองได้ (เว้นว่าง = สุ่มให้)
+      const customPw = typeof body.password === 'string' ? body.password.trim() : ''
+      if (customPw && customPw.length < 6) {
+        return NextResponse.json({ error: 'รหัสผ่านต้องยาวอย่างน้อย 6 ตัว' }, { status: 400 })
+      }
+      const pw: string = customPw || generatePassword(12)
+      plainPassword = pw
+      const passwordHash = await bcrypt.hash(pw, 10)
 
       insertRow.invitee_email = inviteeEmail
       insertRow.invitee_email_lower = emailLower

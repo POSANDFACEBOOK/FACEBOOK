@@ -17,7 +17,7 @@ const FB_API = 'https://graph.facebook.com/v19.0'
 async function authorizeCredentials(creds: any): Promise<{ id: string; name: string; email: string } | null> {
   if (!creds?.email || !creds?.password) return null
   const email = String(creds.email).trim().toLowerCase()
-  const password = String(creds.password)
+  const password = String(creds.password).trim()
   if (!email || !password) return null
 
   try {
