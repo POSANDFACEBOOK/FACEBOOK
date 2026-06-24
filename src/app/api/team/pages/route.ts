@@ -24,7 +24,7 @@ export async function GET() {
     const sb = supabaseAdmin()
     const { data: pages } = await sb
       .from('connected_pages')
-      .select('id, page_id, page_name, page_picture')
+      .select('id, page_id, page_name, page_picture, channel')
       .in('id', ownedIds)
       .eq('is_active', true)
       .order('page_name')

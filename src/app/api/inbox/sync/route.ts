@@ -72,6 +72,7 @@ export async function POST(req: Request) {
       .select('id, page_id, page_name, page_access_token, page_picture')
       .in('id', ownedIds)
       .eq('is_active', true)
+      .eq('channel', 'facebook')  // LINE ไม่มี fetch-conversations API — มาทาง webhook อย่างเดียว
 
     if (onlyPageId) {
       if (!ctx.ownedPageIds.has(onlyPageId)) {

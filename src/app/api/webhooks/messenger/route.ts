@@ -86,6 +86,7 @@ async function processMessagingEvent(pageId: string, event: WebhookMessagingEven
     .from('connected_pages')
     .select('id, user_id, page_access_token, page_name, page_picture')
     .eq('page_id', pageId)
+    .eq('channel', 'facebook')
     .single()
 
   if (!page) {

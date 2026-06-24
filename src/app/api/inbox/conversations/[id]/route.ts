@@ -22,7 +22,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       .from('conversations')
       .select(`
         *,
-        connected_pages!inner(id, page_id, page_name, page_picture, nickname)
+        connected_pages!inner(id, page_id, page_name, page_picture, nickname, channel)
       `)
       .eq('id', params.id)
       .single()

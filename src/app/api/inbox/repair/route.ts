@@ -79,6 +79,7 @@ export async function POST(req: Request) {
     // refetch แบบขนาน (ครั้งละ 6) ลด latency จาก sequential
     for (let i = 0; i < filtered.length; i += 6) {
       await Promise.all(filtered.slice(i, i + 6).map(async (m: any) => {
+        if (String(m.fb_message_id || '').startsWith('line_')) { result.push({ id: m.id, status: 'skipped_line' }); return }  // LINE ไม่ refetch ผ่าน FB Graph
         const token = tokenMap.get(m.conversations.page_id)
         if (!token) { result.push({ id: m.id, status: 'no_token' }); return }
         try {
