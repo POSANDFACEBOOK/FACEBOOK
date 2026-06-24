@@ -51,20 +51,37 @@ export async function POST(req: Request) {
     // optimistic typing indicator
     sendSenderAction(page.page_access_token, conv.fb_psid, 'typing_on').catch(() => {})
 
-    // ส่งข้อความ — RESPONSE (ภายใน 24 ชม. ของ last message ลูกค้า)
-    const result = await sendTextMessage(
+    // 1) ส่งแบบ RESPONSE (ภายใน 24 ชม. ของข้อความล่าสุดลูกค้า)
+    let result = await sendTextMessage(
       page.page_access_token,
       conv.fb_psid,
       text.trim(),
       'RESPONSE'
     )
 
+    // 2) ถ้าเกิน 24 ชม. (code 10) → ลองใหม่ด้วย HUMAN_AGENT tag (ขยายหน้าต่างเป็น 7 วัน)
+    //    ใช้ได้จริงเมื่อ FB App ผ่าน App Review ฟีเจอร์ Human Agent แล้วเท่านั้น
+    let usedHumanAgent = false
+    if (!result.success && result.errorCode === 10) {
+      usedHumanAgent = true
+      result = await sendTextMessage(
+        page.page_access_token,
+        conv.fb_psid,
+        text.trim(),
+        'MESSAGE_TAG',
+        'HUMAN_AGENT'
+      )
+    }
+
     if (!result.success) {
       let userError = result.error || 'Send failed'
-      if (result.errorCode === 10) {
-        userError = '⚠️ ลูกค้าทักมาเกิน 24 ชม. — Facebook ห้ามตอบ (Messenger 24-hour rule) ต้องรอลูกค้าทักก่อน หรือขอ Human Agent feature จาก FB App Review'
-      } else if (result.errorCode === 100) {
-        userError = '⚠️ FB App ยังไม่ได้รับอนุมัติ Human Agent feature — submit App Review ที่ developers.facebook.com'
+      if (result.errorCode === 100 || result.errorCode === 200) {
+        // HUMAN_AGENT ถูกปฏิเสธ = ยังไม่ได้รับอนุมัติฟีเจอร์
+        userError = '⚠️ ตอบเกิน 24 ชม. ต้องใช้ Human Agent แต่ FB App ยังไม่ได้รับอนุมัติฟีเจอร์นี้ — submit App Review (Human Agent) ที่ developers.facebook.com'
+      } else if (result.errorCode === 10) {
+        userError = usedHumanAgent
+          ? '⚠️ ลูกค้าทักมาเกิน 7 วันแล้ว — Facebook ห้ามตอบทุกกรณี ต้องรอลูกค้าทักกลับมาก่อน'
+          : '⚠️ ลูกค้าทักมาเกิน 24 ชม. — Facebook ห้ามตอบ (Messenger 24-hour rule) ต้องรอลูกค้าทักก่อน'
       } else if (result.errorCode === 190) {
         userError = '⚠️ Page token หมดอายุ — กลับไปกด Sync แล้วลองใหม่'
       }
