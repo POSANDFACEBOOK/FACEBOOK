@@ -102,6 +102,7 @@ export default function InboxPage() {
   const [quickReplies, setQuickReplies] = useState<any[]>([])
 
   // Filters
+  const [channelFilter, setChannelFilter] = useState<'facebook' | 'line' | null>(null)
   const [pageFilter, setPageFilter] = useState<string>('')
   const [statusFilter, setStatusFilter] = useState<'all'|'unread'|'needs_reply'|'starred'|'unresolved'|'archived'>('all')
   const [search, setSearch] = useState('')
@@ -496,7 +497,30 @@ export default function InboxPage() {
   }
 
   // ── Render ──
+  // ── แยกช่องทาง (Facebook / LINE) — เลือกก่อนตอบ ไม่ให้ปนกัน ──
+  const channelOf = (p: any) => p?.channel || 'facebook'
+  const availableChannels = Array.from(new Set(pages.map(channelOf)))
+  const bothChannels = availableChannels.includes('facebook') && availableChannels.includes('line')
+  const showChannelGate = bothChannels && channelFilter === null
+  const channelPages = channelFilter ? pages.filter(p => channelOf(p) === channelFilter) : pages
+  const sumUnread = (arr: any[]) => arr.reduce((s, p) => s + (unreadByPage[p.id] || 0), 0)
+  const channelUnread = sumUnread(channelPages)
+  const fbPages = pages.filter(p => channelOf(p) === 'facebook')
+  const linePages = pages.filter(p => channelOf(p) === 'line')
+
+  const pickChannel = (ch: 'facebook' | 'line') => {
+    setChannelFilter(ch); setPageFilter(''); setActiveConv(null); setMessages([])
+  }
+
+  // ถ้ามีช่องทางเดียว → เลือกให้อัตโนมัติ (ไม่ต้องโชว์หน้าเลือก)
+  useEffect(() => {
+    if (pages.length === 0 || channelFilter) return
+    const chans = Array.from(new Set(pages.map(channelOf)))
+    if (chans.length === 1) setChannelFilter(chans[0] as 'facebook' | 'line')
+  }, [pages, channelFilter])
+
   const filteredConvs = conversations.filter(c => {
+    if (channelFilter && (c.connected_pages?.channel || 'facebook') !== channelFilter) return false
     if (!search) return true
     const s = search.toLowerCase()
     return (c.customer_name || '').toLowerCase().includes(s)
@@ -592,6 +616,29 @@ export default function InboxPage() {
 
       {/* Main 3-column layout */}
       <main data-active={activeConv ? '1' : '0'} style={{ marginLeft: 244, height: '100vh', display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 1, overflow: 'hidden' }} className="ib-main">
+        {/* เลือกช่องทางก่อน (Facebook / LINE) — โชว์เมื่อมีทั้งสองช่องทางและยังไม่เลือก */}
+        {showChannelGate && (
+          <div style={{ position: 'absolute', inset: 0, zIndex: 35, background: BG, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, gap: 20 }}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 22, fontWeight: 900, color: TEXT }}>เลือกช่องทางที่จะตอบ</div>
+              <div style={{ fontSize: 13, color: MUTED, fontWeight: 600, marginTop: 4 }}>แยกตอบ Facebook กับ LINE เพื่อไม่ให้สับสน</div>
+            </div>
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', justifyContent: 'center', width: '100%', maxWidth: 520 }}>
+              {([['facebook', 'Facebook', '#1877f2', 'f', fbPages], ['line', 'LINE', '#06c755', 'L', linePages]] as const).map(([ch, label, color, mark, arr]) => {
+                const un = sumUnread(arr)
+                return (
+                  <button key={ch} className="fbpop" onClick={() => pickChannel(ch as 'facebook' | 'line')}
+                    style={{ flex: '1 1 200px', minWidth: 170, maxWidth: 240, background: 'white', border: `2px solid ${color}`, borderRadius: 20, padding: '26px 18px', cursor: 'pointer', fontFamily: 'inherit', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 11, boxShadow: `0 8px 24px ${color}22` }}>
+                    <div style={{ width: 58, height: 58, borderRadius: 16, background: color, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, fontWeight: 900 }}>{mark}</div>
+                    <div style={{ fontSize: 18, fontWeight: 900, color: TEXT }}>{label}</div>
+                    <div style={{ fontSize: 12, color: MUTED, fontWeight: 700 }}>{arr.length} เพจ</div>
+                    {un > 0 && <span style={{ background: RED, color: 'white', fontSize: 12, fontWeight: 800, padding: '3px 12px', borderRadius: 999 }}>{un} ยังไม่ตอบ</span>}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
         {/* Page tiles top bar — 3 ต่อแถว มีตัวเลข unread สีแดง */}
         {pages.length > 0 && (
           <div style={{
@@ -599,6 +646,31 @@ export default function InboxPage() {
             borderBottom: `1.5px solid ${BORDER}`, padding: '12px 16px',
             flexShrink: 0,
           }} className="ib-pagebar">
+            {/* สลับช่องทาง Facebook / LINE (โชว์เมื่อมีทั้งสอง) */}
+            {bothChannels && (
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10, maxWidth: 980 }}>
+                {([['facebook', 'Facebook', '#1877f2', 'f', sumUnread(fbPages)], ['line', 'LINE', '#06c755', 'L', sumUnread(linePages)]] as const).map(([ch, label, color, mark, un]) => {
+                  const on = channelFilter === ch
+                  return (
+                    <button key={ch} className="fbtap" onClick={() => pickChannel(ch as 'facebook' | 'line')}
+                      style={{
+                        flex: 1, position: 'relative', padding: '9px 12px', borderRadius: 11,
+                        border: `2px solid ${on ? color : BORDER}`,
+                        background: on ? color : 'white', color: on ? 'white' : TEXT,
+                        fontSize: 13, fontWeight: 900, fontFamily: 'inherit', cursor: 'pointer',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+                        boxShadow: on ? `0 5px 16px ${color}55` : SHADOW_SM,
+                      }}>
+                      <span style={{ width: 18, height: 18, borderRadius: 5, background: on ? 'rgba(255,255,255,0.25)' : color, color: 'white', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 900 }}>{mark}</span>
+                      {label}
+                      {un > 0 && (
+                        <span style={{ background: on ? 'rgba(255,255,255,0.3)' : RED, color: 'white', fontSize: 10, fontWeight: 800, padding: '1px 6px', borderRadius: 999, minWidth: 18, textAlign: 'center' }}>{un > 99 ? '99+' : un}</span>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
             <div style={{
               display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8,
               maxWidth: 980,
@@ -619,20 +691,20 @@ export default function InboxPage() {
               >
                 <span style={{ fontSize: 14 }}>📂</span>
                 <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  ทุกเพจ ({pages.length})
+                  ทุกเพจ ({channelPages.length})
                 </span>
-                {totalUnread > 0 && (
+                {channelUnread > 0 && (
                   <span style={{
                     background: pageFilter === '' ? 'rgba(255,255,255,0.25)' : RED,
                     color: 'white', fontSize: 10, fontWeight: 800,
                     padding: '2px 7px', borderRadius: 999, minWidth: 20, textAlign: 'center',
                     flexShrink: 0,
-                  }}>{totalUnread > 99 ? '99+' : totalUnread}</span>
+                  }}>{channelUnread > 99 ? '99+' : channelUnread}</span>
                 )}
               </button>
 
               {/* แต่ละเพจ — สีพื้นประจำเพจ (แยกชัด) + ชื่อเล่น + ปุ่มแก้ชื่อ + unread */}
-              {pages.map(p => {
+              {channelPages.map(p => {
                 const pc = pageColor(p.id)
                 const active = pageFilter === p.id
                 const unread = unreadByPage[p.id] || 0
