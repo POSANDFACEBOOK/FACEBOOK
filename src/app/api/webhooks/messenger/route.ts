@@ -156,6 +156,8 @@ async function processMessagingEvent(pageId: string, event: WebhookMessagingEven
         last_message_at: new Date(event.timestamp).toISOString(),
         last_sender: direction === 'inbound' ? 'customer' : 'page',
         unread_count: direction === 'inbound' ? (conv.unread_count || 0) + 1 : conv.unread_count,
+        // ลูกค้าทักกลับ → ส่งได้แล้ว → ล้างป้ายเตือน
+        ...(direction === 'inbound' ? { send_block_code: null, send_block_at: null } : {}),
       })
       .eq('id', conv.id)
   }

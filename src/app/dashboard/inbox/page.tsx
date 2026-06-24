@@ -384,6 +384,8 @@ export default function InboxPage() {
       if (!res.ok || !data.success) {
         setErrorBanner(data.error || 'ส่งไม่สำเร็จ')
         setMessages(prev => prev.map(m => m.id === optimistic.id ? { ...m, delivery_status: 'failed', error_message: data.error } : m))
+        if (data.blockCode) setActiveConv((c: any) => c ? { ...c, send_block_code: data.blockCode } : c)
+        loadConversations()
       } else {
         // replace optimistic with real
         setMessages(prev => prev.map(m => m.id === optimistic.id ? data.message : m))
@@ -442,6 +444,8 @@ export default function InboxPage() {
       if (!res.ok || !data.success) {
         setErrorBanner(data.error || 'ส่งรูปไม่สำเร็จ')
         setMessages(prev => prev.map(m => m.id === optimistic.id ? { ...m, delivery_status: 'failed', error_message: data.error } : m))
+        if (data.blockCode) setActiveConv((c: any) => c ? { ...c, send_block_code: data.blockCode } : c)
+        loadConversations()
       } else {
         setMessages(prev => prev.map(m => m.id === optimistic.id ? data.message : m))
         loadConversations()
@@ -964,6 +968,23 @@ export default function InboxPage() {
                 </div>
               )}
 
+              {/* แจ้งเตือนแชทที่ส่งไม่ได้ (ลูกค้าไม่พร้อม) */}
+              {activeConv.send_block_code && (
+                <div style={{
+                  padding: '10px 18px', background: '#fff4e5',
+                  borderTop: '1px solid rgba(245,158,11,0.3)',
+                  fontSize: 12, color: '#92400e', fontWeight: 600, lineHeight: 1.55,
+                  display: 'flex', gap: 8, alignItems: 'flex-start',
+                }}>
+                  <AlertCircle size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+                  <div>
+                    {activeConv.send_block_code === 551
+                      ? 'ลูกค้ายังไม่เปิด Messenger คุยกับเพจ (หรือปิดรับ/บล็อกเพจ) — พิมพ์ตอบได้ แต่จะส่งไม่ออกจนกว่าลูกค้าจะทักกลับมาก่อน'
+                      : 'เกิน 24 ชม. นับจากข้อความล่าสุดของลูกค้า — Facebook ห้ามตอบจนกว่าลูกค้าจะทักกลับมาใหม่'}
+                  </div>
+                </div>
+              )}
+
               {/* Composer */}
               <div style={{ padding: '12px 18px 16px', background: SURFACE, borderTop: `1.5px solid ${BORDER}` }}>
                 {/* Quick reply chips */}
@@ -1444,6 +1465,18 @@ function ConvItem({ conv, active, onClick }: { conv: any; active: boolean; onCli
             {conv.connected_pages?.nickname || conv.connected_pages?.page_name}
           </span>
         </div>
+        {conv.send_block_code && (
+          <div style={{ marginBottom: 4 }}>
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', gap: 3,
+              padding: '2px 8px', borderRadius: 999,
+              background: '#fff4e5', color: '#b45309',
+              fontSize: 10, fontWeight: 800, border: '1px solid rgba(245,158,11,0.3)',
+            }}>
+              ⚠️ {conv.send_block_code === 551 ? 'ลูกค้ายังไม่เปิดแชท' : 'เกิน 24 ชม.'} — รอลูกค้าทัก
+            </span>
+          </div>
+        )}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
           <div style={{
             fontSize: 12, color: unread ? TEXT : MUTED, fontWeight: unread ? 700 : 500,
