@@ -48,6 +48,14 @@ export async function POST(req: Request) {
 
     const recent = (messages || []).reverse()
 
+    // ยังไม่มีข้อความ → ไม่ต้องเรียก AI (กัน prompt ว่าง) คืนคำทักทายเริ่มต้น
+    if (recent.length === 0) {
+      return NextResponse.json({
+        suggestions: ['สวัสดีค่ะ 😊 มีอะไรให้ช่วยดูแลไหมคะ', 'สวัสดีครับ ยินดีให้บริการครับ มีอะไรสอบถามได้เลยครับ'],
+        category: null, sentiment: null, summary: null,
+      })
+    }
+
     // ดึง knowledge base + tone จาก settings (per-page; ไม่ filter ตาม user_id เพราะ agent ก็ใช้ของ owner)
     const { data: settings } = await sb
       .from('inbox_settings')
