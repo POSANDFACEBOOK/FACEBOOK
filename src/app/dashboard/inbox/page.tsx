@@ -94,6 +94,7 @@ export default function InboxPage() {
   const { data: session } = useSession()
 
   // Data
+  const [isOwner, setIsOwner] = useState<boolean | null>(null)  // null = ยังไม่รู้ → ซ่อนเมนู owner ไว้ก่อน
   const [pages, setPages] = useState<any[]>([])
   const [conversations, setConversations] = useState<any[]>([])
   const [activeConv, setActiveConv] = useState<any | null>(null)
@@ -225,6 +226,8 @@ export default function InboxPage() {
 
   // ── Initial load + auto-sync on mount (with throttle) ──
   useEffect(() => {
+    // รู้ว่าเป็น owner หรือ agent → ซ่อนเมนู "ยิงแอดเพจ" สำหรับ agent
+    fetch('/api/me').then(r => r.json()).then(d => setIsOwner(!!d?.role?.isOwner)).catch(() => setIsOwner(false))
     loadConversations()
     loadQuickReplies()
     // Auto-sync ตอนเปิดแอพ (กัน rate limit ด้วย localStorage throttle 1 นาที)
@@ -432,9 +435,11 @@ export default function InboxPage() {
 
         <div style={{ fontSize: 10, color: MUTED, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.8, padding: '6px 10px 4px' }}>เมนูหลัก</div>
 
-        <Link href="/dashboard" style={{ textDecoration: 'none' }}>
-          <NavItem icon={<BarChart3 size={15} />} label="ยิงแอดเพจ" />
-        </Link>
+        {isOwner && (
+          <Link href="/dashboard" style={{ textDecoration: 'none' }}>
+            <NavItem icon={<BarChart3 size={15} />} label="ยิงแอดเพจ" />
+          </Link>
+        )}
         <NavItem icon={<MessageSquare size={15} />} label="กล่องข้อความ" active badge={totalUnread} />
         <button onClick={() => setShowSettings(true)} style={{ all: 'unset', display: 'block', cursor: 'pointer' }}>
           <NavItem icon={<Settings size={15} />} label="ตั้งค่าแชท" />
@@ -457,14 +462,16 @@ export default function InboxPage() {
         borderBottom: `1.5px solid ${BORDER}`, padding: '10px 14px',
         alignItems: 'center', gap: 10, height: 52, boxSizing: 'border-box',
       }}>
-        <Link href="/dashboard" style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Link href={isOwner ? '/dashboard' : '/dashboard/inbox'} style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ width: 32, height: 32, background: 'linear-gradient(135deg, #1877f2, #5fa3ff)', borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15 }}>⚡</div>
           <div style={{ fontWeight: 900, fontSize: 13, color: TEXT }}>FB Ads AI</div>
         </Link>
         <div style={{ flex: 1 }} />
-        <Link href="/dashboard" style={{ ...btnGhost, padding: '7px 11px', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5, textDecoration: 'none', color: MUTED } as any}>
-          <BarChart3 size={13} /> ยิงแอดเพจ
-        </Link>
+        {isOwner && (
+          <Link href="/dashboard" style={{ ...btnGhost, padding: '7px 11px', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5, textDecoration: 'none', color: MUTED } as any}>
+            <BarChart3 size={13} /> ยิงแอดเพจ
+          </Link>
+        )}
       </div>
 
       {/* Main 3-column layout */}
