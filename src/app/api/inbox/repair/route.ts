@@ -87,15 +87,17 @@ export async function POST(req: Request) {
           if (data.error) { result.push({ id: m.id, status: 'fb_error', error: data.error.message?.slice(0, 80) }); return }
           const newText = data.message || null
           const attachments: any[] = []
-          if (data.sticker) attachments.push({ type: 'image', url: data.sticker, name: 'sticker' })
+          const seen = new Set<string>()
+          const add = (item: any) => { if (item.url && !seen.has(item.url)) { seen.add(item.url); attachments.push(item) } }
+          if (data.sticker) add({ type: 'image', url: data.sticker, name: 'sticker' })
           for (const s of (data.shares?.data || []) as any[]) {
-            if (s.link) attachments.push({ type: 'file', url: s.link, name: s.description || 'ลิงก์' })
+            if (s.link) add({ type: 'file', url: s.link, name: s.description || 'ลิงก์' })
           }
           for (const a of (data.attachments?.data || []) as any[]) {
             const url = a.image_data?.url || a.file_url || a.video_data?.url || a.audio_data?.url || a.payload?.url
             if (!url) continue
             const isImage = a.mime_type?.startsWith('image/') || !!a.image_data || a.type === 'image'
-            attachments.push({ type: isImage ? 'image' : 'file', url, name: a.name || (isImage ? 'รูปภาพ' : 'ไฟล์แนบ') })
+            add({ type: isImage ? 'image' : 'file', url, name: a.name || (isImage ? 'รูปภาพ' : 'ไฟล์แนบ') })
           }
           if (!newText && attachments.length === 0) { result.push({ id: m.id, status: 'still_empty' }); return }
           await sb.from('inbox_messages').update({ message_text: newText, attachments }).eq('id', m.id)
