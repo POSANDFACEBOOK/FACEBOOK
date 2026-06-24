@@ -129,6 +129,7 @@ export default function InboxPage() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const pollRef = useRef<any>(null)
+  const openReqRef = useRef<string>('')  // กัน race ตอนเปิดหลายแชทเร็วๆ
 
   // ── Load conversations ──
   async function loadConversations() {
@@ -148,18 +149,31 @@ export default function InboxPage() {
     setLoadingList(false)
   }
 
-  async function loadMessages(convId: string) {
-    setLoadingMessages(true)
+  async function loadMessages(conv: any) {
+    const convId = conv?.id
+    if (!convId) return
+    // เปิดหน้าแชททันที (optimistic) จากข้อมูลใน list → จอสลับไว ไม่ต้องรอ API
+    openReqRef.current = convId
+    setActiveConv(conv)
+    setMessages([])
+    setDraft('')
     setAiSuggestions([])
-    const res = await fetch(`/api/inbox/conversations/${convId}`).then(r => r.json())
-    if (res.conversation) {
-      setActiveConv(res.conversation)
-      setMessages(res.messages || [])
-      // อัปเดต unread count ใน list
-      setConversations(prev => prev.map(c => c.id === convId ? { ...c, unread_count: 0 } : c))
+    setErrorBanner(null)
+    setLoadingMessages(true)
+    setConversations(prev => prev.map(c => c.id === convId ? { ...c, unread_count: 0 } : c))
+    try {
+      const res = await fetch(`/api/inbox/conversations/${convId}`).then(r => r.json())
+      if (openReqRef.current !== convId) return  // เปิดแชทอื่นไปแล้ว — ทิ้งผลเก่า
+      if (res.conversation) {
+        setActiveConv(res.conversation)
+        setMessages(res.messages || [])
+      }
+    } catch {
+      if (openReqRef.current === convId) setErrorBanner('โหลดข้อความไม่สำเร็จ ลองใหม่อีกครั้ง')
+    } finally {
+      if (openReqRef.current === convId) setLoadingMessages(false)
     }
-    setLoadingMessages(false)
-    setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
+    setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
   }
 
   async function loadQuickReplies() {
@@ -710,7 +724,7 @@ export default function InboxPage() {
                   key={c.id}
                   conv={c}
                   active={activeConv?.id === c.id}
-                  onClick={() => loadMessages(c.id)}
+                  onClick={() => loadMessages(c)}
                 />
               ))
             )}
@@ -737,7 +751,7 @@ export default function InboxPage() {
                 display: 'flex', alignItems: 'center', gap: 12, boxShadow: SHADOW_SM,
               }}>
                 <button
-                  onClick={() => setActiveConv(null)}
+                  onClick={() => { openReqRef.current = ''; setActiveConv(null); setMessages([]); setDraft(''); setAiSuggestions([]); setErrorBanner(null) }}
                   className="ib-back"
                   title="กลับไปเลือกแชทอื่น"
                   style={{
@@ -768,11 +782,11 @@ export default function InboxPage() {
                       maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     }}>
                       <span style={{ width: 7, height: 7, borderRadius: '50%', background: pageColor(activeConv.page_id).border, flexShrink: 0 }} />
-                      {activeConv.connected_pages?.nickname || activeConv.connected_pages?.page_name}
+                      {activeConv.connected_pages?.nickname || activeConv.connected_pages?.page_name || 'เพจ'}
                     </span>
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: 6 }}>
+                <div className="ib-chat-actions" style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                   <button
                     onClick={() => patchConv({ is_starred: !activeConv.is_starred })}
                     title={activeConv.is_starred ? 'เลิก star' : 'Star'}
@@ -797,7 +811,7 @@ export default function InboxPage() {
                   <button
                     onClick={() => setShowRightPanel(!showRightPanel)}
                     title="ข้อมูลลูกค้า"
-                    className="ib-toggle-right"
+                    className="ib-toggle-right ib-hide-mobile"
                     style={{ ...btnGhost, padding: 8 }}
                   >
                     <MoreVertical size={14} />
@@ -857,6 +871,7 @@ export default function InboxPage() {
                           border: `1.5px solid ${BORDER2}`, background: 'white',
                           fontSize: 12, color: TEXT, cursor: 'pointer', fontFamily: 'inherit',
                           lineHeight: 1.5, transition: 'all 0.15s',
+                          whiteSpace: 'normal', wordBreak: 'break-word',
                         }}
                         onMouseEnter={e => { e.currentTarget.style.background = SURFACE2; e.currentTarget.style.borderColor = PRIMARY }}
                         onMouseLeave={e => { e.currentTarget.style.background = 'white'; e.currentTarget.style.borderColor = BORDER2 as string }}
@@ -872,7 +887,7 @@ export default function InboxPage() {
               <div style={{ padding: '12px 18px 16px', background: SURFACE, borderTop: `1.5px solid ${BORDER}` }}>
                 {/* Quick reply chips */}
                 {quickReplies.length > 0 && (
-                  <div style={{ display: 'flex', gap: 5, marginBottom: 8, overflowX: 'auto', paddingBottom: 4 }}>
+                  <div style={{ display: 'flex', gap: 5, marginBottom: 8, overflowX: 'auto', paddingBottom: 4, width: '100%', boxSizing: 'border-box', WebkitOverflowScrolling: 'touch' }}>
                     {quickReplies.slice(0, 6).map(qr => (
                       <button
                         key={qr.id}
@@ -1209,6 +1224,13 @@ export default function InboxPage() {
           input[type="text"], input[type="search"], textarea, select {
             font-size: 16px !important;
           }
+          /* ซ่อนปุ่มที่ไม่จำเป็นบนมือถือ (right panel ใช้ไม่ได้อยู่แล้ว) */
+          .ib-hide-mobile { display: none !important; }
+        }
+        /* จอแคบมาก — ย่อปุ่ม action ในหัวแชท กันล้น/โดนตัด */
+        @media (max-width: 430px) {
+          .ib-chat-actions { gap: 3px !important; }
+          .ib-chat-actions button { padding: 6px !important; }
         }
       `}</style>
     </div>
@@ -1489,8 +1511,8 @@ function SettingsModal({ pages, onClose, onSaved }: { pages: any[]; onClose: () 
   ]
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(6px)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={onClose}>
-      <div onClick={e => e.stopPropagation()} style={{ background: SURFACE, borderRadius: 18, width: '100%', maxWidth: 720, maxHeight: '90vh', overflow: 'hidden', boxShadow: SHADOW_LG, display: 'flex', flexDirection: 'column' }}>
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(6px)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ background: SURFACE, borderRadius: 18, width: '100%', maxWidth: 720, maxHeight: '92dvh', overflow: 'hidden', boxShadow: SHADOW_LG, display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '16px 22px', borderBottom: `1.5px solid ${BORDER}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ fontWeight: 900, fontSize: 16 }}>⚙️ ตั้งค่ากล่องข้อความ</div>
           <button onClick={onClose} style={{ ...btnGhost, padding: 8 }}><X size={16} /></button>
