@@ -359,6 +359,46 @@ export default function InboxPage() {
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [activeConv?.id, pageFilter, statusFilter, search])
 
+  // ── Realtime: เด้งทันทีเมื่อมีข้อความ/แชทใหม่ (Supabase Realtime) ──
+  // ถ้ายังไม่ได้ตั้ง SUPABASE_JWT_SECRET → endpoint คืน token=null → ใช้ polling 30 วิ แทน
+  const rtTimerRef = useRef<any>(null)
+  const rtRefreshRef = useRef<() => void>(() => {})
+  rtRefreshRef.current = () => {
+    if (rtTimerRef.current) return  // coalesce burst ของข้อความ
+    rtTimerRef.current = setTimeout(() => {
+      rtTimerRef.current = null
+      loadConversations()
+      const ac = activeConv
+      if (ac) {
+        fetch(`/api/inbox/conversations/${ac.id}`)
+          .then(r => r.json())
+          .then(res => { if (res.messages) setMessages(res.messages) })
+          .catch(() => {})
+      }
+    }, 250)
+  }
+  useEffect(() => {
+    let channel: any = null, client: any = null, cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch('/api/realtime/token').then(r => r.json())
+        if (cancelled || !res?.token) return
+        const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+        const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+        if (!url || !anon) return
+        const { createClient } = await import('@supabase/supabase-js')
+        client = createClient(url, anon, { realtime: { params: { eventsPerSecond: 10 } } })
+        await client.realtime.setAuth(res.token)
+        channel = client.channel('inbox-rt')
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'inbox_messages' }, () => rtRefreshRef.current())
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'conversations' }, () => rtRefreshRef.current())
+          .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'conversations' }, () => rtRefreshRef.current())
+          .subscribe()
+      } catch {}
+    })()
+    return () => { cancelled = true; try { channel?.unsubscribe(); client?.removeAllChannels?.() } catch {} }
+  }, [])
+
   // ── Send message ──
   async function handleSend() {
     if (!activeConv || !draft.trim() || sending) return
