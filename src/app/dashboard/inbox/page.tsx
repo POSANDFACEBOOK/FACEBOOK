@@ -129,6 +129,7 @@ export default function InboxPage() {
   const [totalNeedsReply, setTotalNeedsReply] = useState(0)
   const [unreadByPage, setUnreadByPage] = useState<Record<string, number>>({})
   const [needsReplyByPage, setNeedsReplyByPage] = useState<Record<string, number>>({})
+  const [markingRead, setMarkingRead] = useState(false)
   const [errorBanner, setErrorBanner] = useState<string | null>(null)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -563,6 +564,23 @@ export default function InboxPage() {
   const sumUnread = (arr: any[]) => arr.reduce((s, p) => s + (unreadByPage[p.id] || 0), 0)
   const channelUnread = sumUnread(channelPages)
   const channelNeedsReply = channelPages.reduce((s, p) => s + (needsReplyByPage[p.id] || 0), 0)
+
+  // อ่านทั้งหมด — เคลียร์ unread ของช่องทางที่เลือก (ใช้ตอนจัดการที่ LINE OA แล้วอยากให้ตัวเลขตรง)
+  async function markAllRead() {
+    if (markingRead || channelUnread === 0) return
+    setMarkingRead(true)
+    const ids = new Set(channelPages.map((p: any) => p.id))
+    setConversations(prev => prev.map(c => ids.has(c.page_id) ? { ...c, unread_count: 0 } : c))
+    setUnreadByPage(prev => { const n = { ...prev }; ids.forEach(id => { n[id as string] = 0 }); return n })
+    setTotalUnread(t => Math.max(0, t - channelUnread))
+    try {
+      await fetch('/api/inbox/mark-read', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(channelFilter ? { channel: channelFilter } : {}),
+      })
+    } catch {}
+    finally { setMarkingRead(false); loadConversations() }
+  }
   const fbPages = pages.filter(p => channelOf(p) === 'facebook')
   const linePages = pages.filter(p => channelOf(p) === 'line')
 
@@ -879,6 +897,21 @@ export default function InboxPage() {
                   <RefreshCw size={11} style={{ animation: 'spin 1s linear infinite' }} />
                   ซิงค์...
                 </div>
+              )}
+              {channelUnread > 0 && (
+                <button
+                  onClick={markAllRead}
+                  disabled={markingRead}
+                  title="ทำเครื่องหมายว่าอ่านทั้งหมด (เคลียร์ตัวเลขแจ้งเตือน)"
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0,
+                    padding: '5px 9px', borderRadius: 8, border: `1.5px solid ${BORDER}`,
+                    background: SURFACE2, color: PRIMARY, fontSize: 11, fontWeight: 800,
+                    fontFamily: 'inherit', cursor: markingRead ? 'wait' : 'pointer', whiteSpace: 'nowrap',
+                  }}
+                >
+                  <Check size={12} strokeWidth={3} /> อ่านทั้งหมด
+                </button>
               )}
             </div>
 
