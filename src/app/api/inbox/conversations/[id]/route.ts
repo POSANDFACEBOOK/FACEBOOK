@@ -39,6 +39,22 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       .order('created_at', { ascending: true })
       .limit(200)
 
+    // Fallback: แชทเก่าที่มี last_message แต่ message row หาย (webhook freeze ก่อน fix)
+    // → สร้าง message สังเคราะห์จาก last_message ให้แอดมินเห็นว่าลูกค้าพิมพ์อะไร
+    let outMessages = messages || []
+    if (outMessages.length === 0 && conversation.last_message) {
+      outMessages = [{
+        id: `synthetic-${conversation.id}`,
+        conversation_id: conversation.id,
+        direction: conversation.last_sender === 'page' ? 'outbound' : 'inbound',
+        message_text: conversation.last_message,
+        attachments: [],
+        sent_by: conversation.last_sender === 'page' ? 'page_user' : 'customer',
+        delivery_status: 'delivered',
+        created_at: conversation.last_message_at || conversation.created_at,
+      }]
+    }
+
     // Mark conversation as read (reset unread count)
     if (conversation.unread_count > 0) {
       await sb
@@ -47,7 +63,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
         .eq('id', params.id)
     }
 
-    return NextResponse.json({ conversation, messages: messages || [] })
+    return NextResponse.json({ conversation, messages: outMessages })
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 })
   }
