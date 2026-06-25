@@ -1696,7 +1696,7 @@ function MessageBubble({ message: m, customerName, customerPic }: { message: any
           borderTopRightRadius: out ? 4 : 16,
           borderTopLeftRadius: out ? 16 : 4,
         }}>
-          {m.message_text}
+          {m.message_text && <div style={{ whiteSpace: 'pre-wrap' }}>{m.message_text}</div>}
           {(() => {
             // dedupe ตาม url (FB ส่ง sticker ผ่านทั้ง field sticker + attachments url เดียวกัน → ซ้ำ)
             const seen = new Set<string>()
