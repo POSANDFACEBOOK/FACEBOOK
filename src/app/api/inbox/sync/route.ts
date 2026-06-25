@@ -6,7 +6,7 @@ import { getServerSession } from 'next-auth'
 import { NextResponse } from 'next/server'
 import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase'
-import { getCurrentUserContext, assertOwner } from '@/lib/team'
+import { getCurrentUserContext } from '@/lib/team'
 import {
   listConversationsWithMessages,
   getUserProfilesBatch,
@@ -55,9 +55,6 @@ export async function POST(req: Request) {
     const ctx = await getCurrentUserContext(session)
     if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const og = assertOwner(ctx)
-    if (!og.ok) return NextResponse.json({ error: og.error }, { status: og.status })
-
     const userId = ctx.userId
 
     const body = await req.json().catch(() => ({}))
@@ -65,17 +62,18 @@ export async function POST(req: Request) {
 
     const sb = supabaseAdmin()
 
-    // sync เฉพาะเพจที่ user เป็น owner
-    const ownedIds = Array.from(ctx.ownedPageIds)
+    // sync เพจที่ user เข้าถึงได้ (owner = เพจตัวเอง, agent = เพจที่ถูกมอบสิทธิ์)
+    // → agent ก็ดึงข้อความใหม่เองได้ ไม่ต้องรอ owner เปิดแอป
+    const accessibleIds = Array.from(ctx.accessiblePageIds)
     let pageQuery = sb
       .from('connected_pages')
-      .select('id, page_id, page_name, page_access_token, page_picture')
-      .in('id', ownedIds)
+      .select('id, page_id, page_name, page_access_token, page_picture, user_id')
+      .in('id', accessibleIds)
       .eq('is_active', true)
       .eq('channel', 'facebook')  // LINE ไม่มี fetch-conversations API — มาทาง webhook อย่างเดียว
 
     if (onlyPageId) {
-      if (!ctx.ownedPageIds.has(onlyPageId)) {
+      if (!ctx.accessiblePageIds.has(onlyPageId)) {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
       }
       pageQuery = pageQuery.eq('id', onlyPageId)
@@ -90,6 +88,7 @@ export async function POST(req: Request) {
     // เร็วกว่าเดิม — ไม่ต้องยิง /me ทุกเพจก่อน sync (ตัด N calls ออกจาก hot path)
     let freshTokensPromise: Promise<Map<string, string>> | null = null
     const refreshToken = async (page: any): Promise<boolean> => {
+      if (!session.accessToken) return false  // agent (ไม่มี FB token) → refresh ไม่ได้ ใช้ token เดิมที่เก็บไว้
       if (!freshTokensPromise) freshTokensPromise = fetchFreshPageTokens(session.accessToken as string)
       const fresh = await freshTokensPromise
       const nt = fresh.get(page.page_id)
@@ -246,7 +245,7 @@ async function syncOnePage(
           .from('conversations')
           .upsert(
             {
-              user_id: userId,
+              user_id: page.user_id || userId,  // เจ้าของเพจ (กัน agent sync แล้วเปลี่ยนเจ้าของ conversation)
               page_id: page.id,
               fb_page_id: page.page_id,
               fb_conversation_id: conv.id,
