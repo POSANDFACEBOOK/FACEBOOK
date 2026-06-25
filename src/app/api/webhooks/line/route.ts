@@ -3,9 +3,11 @@
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { verifyLineSignature, getLineUserProfile, describeLineMessage } from '@/lib/line'
+import { rehostUrlToStorage } from '@/lib/media'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
+export const maxDuration = 30
 
 export async function POST(req: Request) {
   const rawBody = await req.text()
@@ -42,10 +44,12 @@ export async function POST(req: Request) {
     return new Response('Invalid signature', { status: 401 })
   }
 
-  // process events (fire-and-forget per event)
-  for (const event of body.events || []) {
-    processLineEvent(page, event).catch(err => console.error('[line webhook] event error:', err?.message))
-  }
+  // await ให้เสร็จก่อนตอบ 200 — กัน Vercel freeze ก่อนเขียน DB/ดึงรูปเสร็จ
+  await Promise.all(
+    (body.events || []).map(event =>
+      processLineEvent(page, event).catch(err => console.error('[line webhook] event error:', err?.message)),
+    ),
+  )
 
   return NextResponse.json({ ok: true })
 }
@@ -59,8 +63,20 @@ async function processLineEvent(page: any, event: any) {
   if (!lineUserId || !lineMsgId) return  // กัน data ไม่ครบ / 'line_undefined'
 
   const sb = supabaseAdmin()
-  const { text, attachments } = describeLineMessage(event.message)
+  let { text, attachments } = describeLineMessage(event.message)
   const ts = event.timestamp ? new Date(event.timestamp).toISOString() : new Date().toISOString()
+
+  // รูป: ดึง binary จาก LINE content API → เก็บ storage (URL ถาวร) แทน "[รูปภาพ]"
+  if (event.message?.type === 'image') {
+    const hosted = await rehostUrlToStorage(
+      sb,
+      `https://api-data.line.me/v2/bot/message/${lineMsgId}/content`,
+      { Authorization: `Bearer ${page.page_access_token}` },
+      `line/${page.id}`,
+    )
+    if (hosted) { text = null; attachments = [{ type: 'image', url: hosted, name: 'image' }] }
+    // ดึงไม่สำเร็จ → คง "[รูปภาพ]" เดิม
+  }
 
   // หา conversation เดิม
   let { data: conv } = await sb
