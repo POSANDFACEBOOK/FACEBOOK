@@ -5,6 +5,7 @@
 //   Subscription fields: messages, messaging_postbacks, message_deliveries, message_reads
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
+import { rehostUrlToStorage } from '@/lib/media'
 import {
   verifyWebhookSignature,
   getUserProfile,
@@ -15,6 +16,7 @@ import {
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
+export const maxDuration = 30
 
 // ─────────────────────────────────────────────
 // GET — Webhook verification handshake
@@ -59,18 +61,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true })
   }
 
-  // Process each entry async — return 200 ASAP (FB requires < 20s)
-  // We don't await — fire-and-forget (Vercel serverless will keep alive briefly)
-  for (const entry of body.entry || []) {
-    if (entry.messaging) {
-      for (const event of entry.messaging) {
-        // Don't await — process in background to respond quickly
-        processMessagingEvent(entry.id, event).catch(err => {
-          console.error('Webhook processing error:', err)
-        })
-      }
-    }
-  }
+  // await ให้ประมวลผลเสร็จก่อนตอบ 200 — กัน Vercel freeze ก่อนเขียน DB/ดึงรูปเสร็จ
+  // (FB ให้เวลา < 20 วิ ซึ่งเพียงพอสำหรับ 1-2 event + ดึงรูป)
+  await Promise.all(
+    (body.entry || []).flatMap(entry =>
+      (entry.messaging || []).map(event =>
+        processMessagingEvent(entry.id, event).catch(err => console.error('Webhook processing error:', err)),
+      ),
+    ),
+  )
 
   return NextResponse.json({ ok: true })
 }
@@ -165,10 +164,17 @@ async function processMessagingEvent(pageId: string, event: WebhookMessagingEven
   if (!conv) return
 
   // ─── บันทึก message (idempotent ด้วย fb_message_id unique) ───
-  const attachments = (msg.attachments || []).map(a => ({
-    type: a.type,
-    url: a.payload?.url,
-  }))
+  // รูป: FB ให้ URL ชั่วคราว → ดึงมาเก็บ storage ของเรา (URL ถาวร) กันรูปแตกทีหลัง
+  const attachments = await Promise.all(
+    (msg.attachments || []).map(async a => {
+      const srcUrl = a.payload?.url
+      if (a.type === 'image' && srcUrl) {
+        const hosted = await rehostUrlToStorage(sb, srcUrl, {}, `fb/${page.id}`)
+        return { type: 'image', url: hosted || srcUrl }
+      }
+      return { type: a.type, url: srcUrl }
+    }),
+  )
 
   await sb
     .from('inbox_messages')
