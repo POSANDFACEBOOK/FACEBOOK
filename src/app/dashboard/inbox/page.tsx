@@ -1708,6 +1708,23 @@ function ConvItem({ conv, active, onClick }: { conv: any; active: boolean; onCli
   )
 }
 
+// รูปในแชท — ถ้าโหลดไม่ขึ้น (เช่น URL สติ๊กเกอร์ LINE ไม่ทางการ) → fallback เป็นข้อความ
+function MsgImage({ url, name, withText }: { url: string; name?: string; withText?: boolean }) {
+  const [err, setErr] = useState(false)
+  const isSticker = name === 'sticker'
+  if (err) {
+    return <div style={{ fontSize: 13, marginTop: withText ? 6 : 0, fontWeight: 600 }}>{isSticker ? '😊 [สติกเกอร์]' : '🖼️ [รูปภาพ]'}</div>
+  }
+  return (
+    <img
+      src={url}
+      onError={() => setErr(true)}
+      style={{ maxWidth: isSticker ? 130 : 200, marginTop: withText ? 6 : 0, borderRadius: 8, display: 'block' }}
+      alt=""
+    />
+  )
+}
+
 function MessageBubble({ message: m, customerName, customerPic }: { message: any; customerName?: string; customerPic?: string }) {
   const out = m.direction === 'outbound'
   const failed = m.delivery_status === 'failed'
@@ -1753,7 +1770,7 @@ function MessageBubble({ message: m, customerName, customerPic }: { message: any
             const filtered = stickerAtt ? [stickerAtt] : (hasImage ? atts.filter(a => a.type === 'image' && a.url) : atts)
             return filtered.map((a, i) => (
               a.type === 'image' && a.url ? (
-                <img key={i} src={a.url} style={{ maxWidth: 200, marginTop: m.message_text ? 6 : 0, borderRadius: 8, display: 'block' }} alt="" />
+                <MsgImage key={i} url={a.url} name={a.name} withText={!!m.message_text} />
               ) : a.url ? (
                 <div key={i} style={{ marginTop: m.message_text ? 6 : 0, fontSize: 11 }}>📎 {a.name || 'ไฟล์แนบ'}</div>
               ) : null
