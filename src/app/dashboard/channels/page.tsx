@@ -19,6 +19,20 @@ export default function ChannelsPage() {
   const [channels, setChannels] = useState<Channel[]>([])
   const [origin, setOrigin] = useState('')
   const [showAdd, setShowAdd] = useState(false)
+  const [checking, setChecking] = useState(false)
+  const [health, setHealth] = useState<any[] | null>(null)
+
+  async function runHealthCheck() {
+    setChecking(true)
+    try {
+      const res = await fetch('/api/line/health').then(r => r.json())
+      setHealth(res.results || [])
+    } catch {
+      setHealth([])
+    } finally {
+      setChecking(false)
+    }
+  }
 
   useEffect(() => {
     if (typeof window !== 'undefined') setOrigin(window.location.origin)
@@ -88,10 +102,62 @@ export default function ChannelsPage() {
 
         {/* LINE */}
         <section style={{ background: SURFACE, borderRadius: 18, padding: 22, border: `1.5px solid ${BORDER}`, marginBottom: 18 }}>
-          <h2 style={{ fontSize: 15, fontWeight: 900, margin: '0 0 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ width: 22, height: 22, borderRadius: 6, background: LINE_GREEN, color: 'white', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 900 }}>L</span>
-            LINE Official Account ({lineChannels.length})
-          </h2>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+            <h2 style={{ fontSize: 15, fontWeight: 900, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ width: 22, height: 22, borderRadius: 6, background: LINE_GREEN, color: 'white', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 900 }}>L</span>
+              LINE Official Account ({lineChannels.length})
+            </h2>
+            {lineChannels.length > 0 && (
+              <button
+                className="fbtap"
+                onClick={runHealthCheck}
+                disabled={checking}
+                style={{ padding: '9px 16px', fontSize: 12.5, fontWeight: 800, background: checking ? '#94a3b8' : PRIMARY, color: 'white', border: 'none', borderRadius: 11, cursor: checking ? 'wait' : 'pointer', fontFamily: 'inherit' }}
+              >
+                {checking ? 'กำลังตรวจ...' : '🔍 ตรวจสอบการเชื่อมต่อทั้งหมด'}
+              </button>
+            )}
+          </div>
+
+          {/* ผลตรวจสุขภาพ LINE */}
+          {health && (
+            <div style={{ marginBottom: 16 }}>
+              {health.length === 0 ? (
+                <div style={{ fontSize: 12, color: MUTED }}>ไม่พบ LINE OA ให้ตรวจ</div>
+              ) : (
+                <>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: TEXT, marginBottom: 8 }}>
+                    ผลตรวจ: ✅ พร้อมใช้ {health.filter(h => h.ok).length}/{health.length} · ⚠️ ต้องแก้ {health.filter(h => !h.ok).length}
+                  </div>
+                  {health.map((h: any) => {
+                    const fix = !h.tokenOk ? 'Token ใช้ไม่ได้ — เชื่อม LINE ใหม่ (token อาจหมดอายุ)'
+                      : !h.urlOk ? `ยังไม่ตั้ง Webhook URL ใน LINE Developers (ต้องลงท้าย /api/webhooks/line)${h.webhookUrl ? ` — ตอนนี้เป็น: ${h.webhookUrl}` : ''}`
+                      : !h.useWebhook ? "เปิด 'Use webhook' ใน LINE Developers → Messaging API"
+                      : h.testPass === false ? `ทดสอบส่งไม่ผ่าน (${h.testDetail || ''}) — เช็ค URL/Use webhook อีกครั้ง`
+                      : ''
+                    return (
+                      <div key={h.id} style={{ border: `1.5px solid ${h.ok ? 'rgba(5,150,105,0.3)' : 'rgba(217,119,6,0.35)'}`, background: h.ok ? '#f0fdf4' : '#fff7ed', borderRadius: 12, padding: '10px 13px', marginBottom: 8 }}>
+                        <div style={{ fontWeight: 800, fontSize: 13.5, display: 'flex', alignItems: 'center', gap: 6, color: TEXT }}>
+                          {h.ok ? '✅' : '⚠️'} {h.name}
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', fontSize: 11.5, marginTop: 6, color: TEXT, fontWeight: 600 }}>
+                          <span>{h.tokenOk ? '✅' : '❌'} Token</span>
+                          <span>{h.urlOk ? '✅' : '❌'} Webhook URL</span>
+                          <span>{h.useWebhook ? '✅' : '❌'} Use webhook</span>
+                          <span>{h.testPass === true ? '✅' : h.testPass === false ? '❌' : '—'} ทดสอบส่งถึงระบบ</span>
+                        </div>
+                        {fix && <div style={{ fontSize: 11.5, color: '#9a3412', marginTop: 6, lineHeight: 1.5, wordBreak: 'break-word' }}>👉 {fix}</div>}
+                      </div>
+                    )
+                  })}
+                  <div style={{ fontSize: 11, color: MUTED, marginTop: 8, lineHeight: 1.6 }}>
+                    หมายเหตุ: ถ้าทุกข้อ ✅ แล้วลูกค้ายังทักไม่เข้า ให้เช็คใน <strong>LINE OA Manager → Response settings</strong> ว่าเปิด <strong>Webhooks</strong> + ปิด <strong>ตอบกลับอัตโนมัติ</strong> (จุดนี้ API เช็คแทนไม่ได้)
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
           {lineChannels.length === 0 ? (
             <div style={{ padding: 24, textAlign: 'center', color: MUTED, fontSize: 13 }}>
               ยังไม่ได้เชื่อม LINE — กด "เชื่อม LINE OA" เพื่อเริ่ม

@@ -95,6 +95,34 @@ export async function pushLineImage(
   }
 }
 
+/** เช็ค Webhook URL ที่ตั้งไว้ใน LINE Developers + เปิด "Use webhook" ไหม */
+export async function getLineWebhookEndpoint(accessToken: string): Promise<{ endpoint?: string; active?: boolean; error?: string }> {
+  try {
+    const res = await fetch(`${LINE_API}/channel/webhook/endpoint`, { headers: { Authorization: `Bearer ${accessToken}` } })
+    const data: any = await res.json()
+    if (!res.ok) return { error: data?.message || `error ${res.status}` }
+    return { endpoint: data.endpoint, active: data.active }
+  } catch (e: any) {
+    return { error: e?.message || 'network error' }
+  }
+}
+
+/** ยิง test webhook จริง — LINE ส่ง event ทดสอบไปยัง endpoint ที่ตั้งไว้ */
+export async function testLineWebhook(accessToken: string): Promise<{ success?: boolean; statusCode?: number; reason?: string; detail?: string; error?: string }> {
+  try {
+    const res = await fetch(`${LINE_API}/channel/webhook/test`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    const data: any = await res.json().catch(() => ({}))
+    if (!res.ok) return { error: data?.message || `error ${res.status}` }
+    return { success: data.success, statusCode: data.statusCode, reason: data.reason, detail: data.detail }
+  } catch (e: any) {
+    return { error: e?.message || 'network error' }
+  }
+}
+
 /** สรุป content ของข้อความ LINE เป็น text + attachments ที่เก็บใน DB */
 export function describeLineMessage(msg: any): { text: string | null; attachments: any[] } {
   switch (msg?.type) {
