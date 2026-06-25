@@ -166,7 +166,13 @@ export default function InboxPage() {
     setAiSuggestions([])
     setErrorBanner(null)
     setLoadingMessages(true)
+    // optimistic: เคลียร์ทั้ง badge ของ row + ตัวเลขรวม (page tile / ชิป "ใหม่" / sidebar) ทันที
+    const hadUnread = (conv.unread_count || 0) > 0
     setConversations(prev => prev.map(c => c.id === convId ? { ...c, unread_count: 0 } : c))
+    if (hadUnread && conv.page_id) {
+      setUnreadByPage(prev => ({ ...prev, [conv.page_id]: Math.max(0, (prev[conv.page_id] || 0) - 1) }))
+      setTotalUnread(t => Math.max(0, t - 1))
+    }
     try {
       const res = await fetch(`/api/inbox/conversations/${convId}`).then(r => r.json())
       if (openReqRef.current !== convId) return  // เปิดแชทอื่นไปแล้ว — ทิ้งผลเก่า
@@ -334,13 +340,12 @@ export default function InboxPage() {
     return () => { cancelled = true }
   }, [pageFilter, statusFilter])
 
-  // Poll DB ทุก 30 วิ (เร็วพอสำหรับ user แต่ไม่กิน rate limit FB
-  // เพราะ poll DB ของเรา ไม่ใช่ FB)
-  // Background sync FB ทุก 10 นาที (กัน webhook ตก)
+  // Poll DB ทุก 7 วิ (poll DB ของเราเอง ไม่กิน rate limit FB) → จออัปเดตเองไม่ต้องรีเฟรช
+  // Background sync FB ทุก ~5 นาที (กัน webhook ตก)
   useEffect(() => {
     if (pollRef.current) clearInterval(pollRef.current)
     let tick = 0
-    const SYNC_EVERY_TICKS = 20  // 20 × 30s = 10 นาที
+    const SYNC_EVERY_TICKS = 43  // 43 × 7s ≈ 5 นาที
     pollRef.current = setInterval(() => {
       tick++
       loadConversations()
@@ -355,7 +360,7 @@ export default function InboxPage() {
       if (tick % SYNC_EVERY_TICKS === 0) {
         backgroundSync()
       }
-    }, 30000)
+    }, 7000)
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [activeConv?.id, pageFilter, statusFilter, search])
 
@@ -397,6 +402,14 @@ export default function InboxPage() {
       } catch {}
     })()
     return () => { cancelled = true; try { channel?.unsubscribe(); client?.removeAllChannels?.() } catch {} }
+  }, [])
+
+  // รีเฟรชทันทีเมื่อกลับมาที่แอป/แท็บ (สลับแอปแล้วกลับมา → เห็นล่าสุดเลย ไม่ต้องรอ poll)
+  useEffect(() => {
+    const onVisible = () => { if (typeof document === 'undefined' || document.visibilityState === 'visible') rtRefreshRef.current() }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+    return () => { document.removeEventListener('visibilitychange', onVisible); window.removeEventListener('focus', onVisible) }
   }, [])
 
   // ── Send message ──
