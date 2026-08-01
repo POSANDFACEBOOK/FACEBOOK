@@ -27,7 +27,7 @@ export async function GET(req: Request) {
     const pageId = searchParams.get('pageId') || ''
     const filter = searchParams.get('filter') || 'all'
     const q = (searchParams.get('q') || '').trim()
-    const limit = Math.min(Number(searchParams.get('limit') || 50), 200)
+    const limit = Math.min(Number(searchParams.get('limit') || 50), 500)
 
     // ถ้า client filter ด้วย pageId ต้องเป็นเพจที่เข้าถึงได้
     if (pageId && !ctx.accessiblePageIds.has(pageId)) {
