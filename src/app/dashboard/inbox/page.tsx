@@ -97,11 +97,13 @@ function friendlyError(raw?: string): string {
   const e = String(raw || '')
   if (!e) return 'เกิดข้อผิดพลาด ลองใหม่อีกครั้ง'
   if (/^⚠️/.test(e)) return e  // ข้อความที่เขียนให้ผู้ใช้อยู่แล้ว (กฎ 24 ชม./#551)
-  if (/Unauthorized|401/i.test(e)) return 'เซสชันหมดอายุ — กรุณาเข้าสู่ระบบใหม่'
-  if (/Forbidden|403/i.test(e)) return 'ไม่มีสิทธิ์ในเพจนี้ — ติดต่อเจ้าของเพจให้เพิ่มสิทธิ์'
-  if (/Page token not found|190/i.test(e)) return 'การเชื่อมต่อเพจหมดอายุ — ให้เจ้าของเพจเข้าสู่ระบบด้วย Facebook ใหม่อีกครั้ง'
-  if (/Failed to fetch|NetworkError|network/i.test(e)) return 'เชื่อมต่อไม่ได้ — ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่'
-  if (/not found|404/i.test(e)) return 'ไม่พบข้อมูลนี้แล้ว — ลองรีเฟรชหน้าจอ'
+  // เน็ตก่อน (Safari/WebKit ใช้ "Load failed" ไม่ใช่ "Failed to fetch")
+  if (/Failed to fetch|Load failed|NetworkError|ERR_NETWORK|network error/i.test(e)) return 'เชื่อมต่อไม่ได้ — ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่'
+  if (/\bUnauthorized\b|\bHTTP\s*401\b/i.test(e)) return 'เซสชันหมดอายุ — กรุณาเข้าสู่ระบบใหม่'
+  if (/\bForbidden\b|\bHTTP\s*403\b/i.test(e)) return 'ไม่มีสิทธิ์ในเพจนี้ — ติดต่อเจ้าของเพจให้เพิ่มสิทธิ์'
+  if (/Page token not found|\(#190\)|code[:\s]*190\b/i.test(e)) return 'การเชื่อมต่อเพจหมดอายุ — ให้เจ้าของเพจเข้าสู่ระบบด้วย Facebook ใหม่อีกครั้ง'
+  if (/Invalid image URL/i.test(e)) return 'รูปนี้ส่งซ้ำไม่ได้ — กรุณาเลือกรูปใหม่อีกครั้ง'
+  if (/\bnot found\b|\bHTTP\s*404\b/i.test(e)) return 'ไม่พบข้อมูลนี้แล้ว — ลองรีเฟรชหน้าจอ'
   if (/timeout|timed out/i.test(e)) return 'ใช้เวลานานเกินไป — ลองใหม่อีกครั้ง'
   return e
 }
@@ -149,6 +151,10 @@ export default function InboxPage() {
   const [showChatMenu, setShowChatMenu] = useState(false)
   const [sessionExpired, setSessionExpired] = useState(false)
   const [toast, setToast] = useState<{ msg: string; undo?: () => void } | null>(null)
+  // เก็บ "ลายเซ็นข้อความที่กดส่งซ้ำไปแล้ว" — ใช้ ref ไม่ให้หายตอนสลับแชทกลับมา
+  // (ถ้าเก็บใน state แล้วรีเซ็ต ผู้ใช้จะกดส่งซ้ำได้อีก ลูกค้าได้ข้อความเดิมหลายรอบ)
+  const retriedRef = useRef<Set<string>>(new Set())
+  const [retriedTick, setRetriedTick] = useState(0)  // บังคับ re-render หลัง mark
   // ค่าตั้งค่าต่อเพจ (ตอนนี้ใช้เช็คว่าเจ้าของปิดปุ่ม "AI ช่วยตอบ" ไว้ไหม)
   const [aiEnabledByPage, setAiEnabledByPage] = useState<Record<string, boolean>>({})
   const [errorBanner, setErrorBanner] = useState<string | null>(null)
@@ -158,6 +164,9 @@ export default function InboxPage() {
   const pollRef = useRef<any>(null)
   const openReqRef = useRef<string>('')  // กัน race ตอนเปิดหลายแชทเร็วๆ
   const draftRef = useRef<HTMLTextAreaElement>(null)
+  // เก็บไฟล์รูปที่อัปโหลดไม่สำเร็จไว้ เพื่อให้ "ส่งอีกครั้ง" อัปโหลดใหม่ได้จริง
+  // (ถ้าส่ง blob: URL ไป server จะตีกลับ 400 ทุกครั้ง)
+  const pendingFilesRef = useRef<Map<string, File>>(new Map())
 
   // คอม = Enter ส่ง / มือถือ = Enter ขึ้นบรรทัดใหม่
   const [isDesktop, setIsDesktop] = useState(false)
@@ -207,15 +216,37 @@ export default function InboxPage() {
     }
   }
 
-  // รวมข้อความจาก server กับข้อความที่ "กำลังส่ง/ส่งไม่สำเร็จเพราะเน็ต" ที่ยังอยู่บนจอ
-  // → กัน poll/realtime ลบฟองข้อความที่ยังส่งไม่จบทิ้งกลางคัน
+  // ลายเซ็นข้อความ (เนื้อหา + รูปแนบ) — ใช้จับคู่ฟอง optimistic กับแถวจริงจาก server
+  function msgKey(m: any): string {
+    const atts = (m?.attachments || []).map((a: any) => a?.url).filter(Boolean).sort().join(',')
+    return `${(m?.message_text || '').trim()}|${atts}`
+  }
+
+  // เก็บ loadConversations ตัวล่าสุดไว้ ให้ callback ที่ยิงทีหลัง (backgroundSync) ใช้ filter ปัจจุบัน
+  const loadConvRef = useRef(loadConversations)
+  loadConvRef.current = loadConversations
+
+  // รวมข้อความจาก server กับฟอง optimistic ที่ยังไม่มีคู่ในฝั่ง server
+  // - ฟองที่ยังส่งอยู่/ส่งไม่สำเร็จ ต้องไม่ถูก poll ลบทิ้ง (ไม่งั้นข้อความที่พิมพ์หายถาวร)
+  // - ถ้า server มีแถวเดียวกันแล้ว ต้องตัดฟอง optimistic ทิ้ง ไม่งั้นขึ้น 2 ฟอง + React key ซ้ำ
   function mergeServerMessages(serverMsgs: any[]) {
     setMessages(prev => {
-      const keep = prev.filter(m =>
-        typeof m.id === 'string' && m.id.startsWith('temp-') &&
-        (m.delivery_status === 'sending' || m.local_only)
-      )
-      return keep.length ? [...serverMsgs, ...keep] : serverMsgs
+      const temps = prev.filter(m => typeof m.id === 'string' && m.id.startsWith('temp-'))
+      if (temps.length === 0) return serverMsgs
+      const keep = temps.filter(t => {
+        const tk = msgKey(t)
+        const tTime = new Date(t.created_at).getTime()
+        // server บันทึกแถวนี้ไปแล้วหรือยัง (เนื้อหาตรงกัน + เวลาใกล้กันไม่เกิน 2 นาที)
+        return !serverMsgs.some(s =>
+          s.direction === 'outbound' &&
+          msgKey(s) === tk &&
+          Math.abs(new Date(s.created_at).getTime() - tTime) < 120000
+        )
+      })
+      const seen = new Set<string>()
+      return [...serverMsgs, ...keep]
+        .filter(m => { const k = String(m.id); if (seen.has(k)) return false; seen.add(k); return true })
+        .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
     })
   }
 
@@ -354,7 +385,8 @@ export default function InboxPage() {
   useEffect(() => {
     // รู้ว่าเป็น owner หรือ agent → ซ่อนเมนู "ยิงแอดเพจ" สำหรับ agent
     fetch('/api/me').then(r => r.json()).then(d => setIsOwner(!!d?.role?.isOwner)).catch(() => setIsOwner(false))
-    loadConversations()
+    // ไม่เรียก loadConversations ที่นี่ — effect [pageFilter, statusFilter, debouncedSearch]
+    // ยิงให้อยู่แล้วตอน mount (เดิมยิงซ้ำ 2 ครั้งพร้อมกัน ทำให้ลิสต์กระตุก/สีเพจเปลี่ยนเอง)
     loadQuickReplies()
     // Auto-sync ตอนเปิดแอพ (กัน rate limit ด้วย localStorage throttle 1 นาที)
     try {
@@ -363,7 +395,9 @@ export default function InboxPage() {
         localStorage.setItem('inbox_last_mount_sync', String(Date.now()))
         setSyncing(true)
         backgroundSync()
-          .then(() => loadConversations())
+          // ใช้ ref → ได้ตัวล่าสุดที่รู้จัก filter/ค้นหาปัจจุบัน (เดิมใช้ closure ของ render แรก
+          // ทำให้ทับลิสต์ที่ผู้ใช้กรองไว้) + silent กันสปินเนอร์เด้ง
+          .then(() => loadConvRef.current({ silent: true }))
           .finally(() => setSyncing(false))
       }
     } catch {
@@ -418,9 +452,12 @@ export default function InboxPage() {
         if (now - last > 2 * 60 * 1000) {
           lastPageSyncRef.current[pageFilter] = now
           setPageSyncing(true)
-          await backgroundSync(pageFilter)
-          if (!cancelled) await loadConversations({ silent: true })
-          if (!cancelled) setPageSyncing(false)
+          try {
+            await backgroundSync(pageFilter)
+            if (!cancelled) await loadConversations({ silent: true })
+          } finally {
+            setPageSyncing(false)  // ปลดเสมอ — ไม่งั้นพิมพ์ค้นหาระหว่าง sync แล้วสปินเนอร์ค้างตลอด
+          }
         }
       }
     })()
@@ -499,9 +536,11 @@ export default function InboxPage() {
   }, [])
 
   // โหลดค่า "เปิดปุ่ม AI ช่วยตอบ" ของเพจที่กำลังเปิดแชทอยู่ (ไม่งั้นสวิตช์ในตั้งค่าไม่มีผลจริง)
+  const aiFetchedRef = useRef<Set<string>>(new Set())
   useEffect(() => {
     const pid = activeConv?.page_id
-    if (!pid || pid in aiEnabledByPage) return
+    if (!pid || aiFetchedRef.current.has(pid)) return
+    aiFetchedRef.current.add(pid)
     let cancelled = false
     fetch(`/api/inbox/settings?pageId=${pid}`)
       .then(r => r.json())
@@ -512,7 +551,7 @@ export default function InboxPage() {
       })
       .catch(() => { if (!cancelled) setAiEnabledByPage(prev => ({ ...prev, [pid]: true })) })
     return () => { cancelled = true }
-  }, [activeConv?.page_id, aiEnabledByPage])
+  }, [activeConv?.page_id])
 
   // กด Esc = ปิดชั้นบนสุดที่เปิดอยู่ (เมนู → modal) — มาตรฐานที่ผู้ใช้คาดหวัง
   useEffect(() => {
@@ -596,6 +635,13 @@ export default function InboxPage() {
     setSending(false)
   }
 
+  // จำว่าข้อความนี้ถูกกดส่งซ้ำแล้ว — ผูกกับแชท + ลายเซ็นเนื้อหา (ไม่ใช่ id ชั่วคราวที่เปลี่ยนได้)
+  function retryKeyOf(convId: string, m: any) { return `${convId}::${msgKey(m)}` }
+  function markRetried(convId: string, m: any) {
+    retriedRef.current.add(retryKeyOf(convId, m))
+    setRetriedTick(t => t + 1)
+  }
+
   // แทรกข้อความสำเร็จรูป/คำแนะนำ AI — ต่อท้ายของที่พิมพ์ค้างไว้ ไม่ทับทิ้ง
   function insertIntoDraft(text: string) {
     setDraft(prev => {
@@ -607,10 +653,24 @@ export default function InboxPage() {
 
   // ส่งอีกครั้งจากฟองข้อความที่ส่งไม่สำเร็จ (ทั้งข้อความและรูป)
   async function retryMessage(m: any) {
-    if (sending || uploading) return
-    // เอาฟองเดิมออกก่อน แล้วส่งใหม่ (ถ้าเป็น local_only ไม่มีแถวใน DB จึงลบทิ้งได้เลย)
-    setMessages(prev => prev.filter(x => x.id !== m.id))
+    if (sending || uploading || !activeConv) return
+    const convId = activeConv.id
+    const id = String(m.id)
     const imgUrl = (m.attachments || []).find((a: any) => a?.type === 'image' && a.url)?.url
+
+    // รูปที่อัปโหลดไม่สำเร็จ (ยังเป็น blob:) → ต้องอัปโหลดใหม่จากไฟล์เดิม ส่ง URL ไปตรงๆ ไม่ได้
+    if (imgUrl && String(imgUrl).startsWith('blob:')) {
+      const file = pendingFilesRef.current.get(id)
+      if (!file) { setErrorBanner('ส่งรูปซ้ำไม่ได้ — กรุณาเลือกรูปใหม่อีกครั้ง'); return }
+      markRetried(convId, m)
+      setMessages(prev => prev.filter(x => x.id !== m.id))
+      pendingFilesRef.current.delete(id)
+      await handleSendImage(file)
+      return
+    }
+
+    markRetried(convId, m)
+    setMessages(prev => prev.filter(x => x.id !== m.id))
     if (imgUrl) await sendImageUrl(imgUrl)
     else if (m.message_text) await handleSend(m.message_text)
   }
@@ -702,10 +762,12 @@ export default function InboxPage() {
       const msg = friendlyError(e?.message)
       if (isThis()) {
         setErrorBanner(msg)
+        // เก็บไฟล์ไว้ให้ "ส่งอีกครั้ง" อัปโหลดใหม่ได้ (blob: URL ส่งตรงไป server ไม่ได้)
+        pendingFilesRef.current.set(tempId, file)
         setMessages(prev => prev.map(m => m.id === tempId
           ? { ...m, delivery_status: 'failed', error_message: msg, local_only: true } : m))
       }
-      setTimeout(() => URL.revokeObjectURL(previewUrl), 30000)
+      // ไม่ revoke ทันที — ต้องให้ preview ยังแสดงได้ตอนรอผู้ใช้กดส่งอีกครั้ง
     }
     setUploading(false)
   }
@@ -735,11 +797,12 @@ export default function InboxPage() {
   }
 
   // ── Conversation actions ──
-  async function patchConv(patch: any, opts?: { silentToast?: boolean }) {
-    if (!activeConv) return
-    const conv = activeConv
+  async function patchConv(patch: any, opts?: { silentToast?: boolean; convOverride?: any }) {
+    const conv = opts?.convOverride || activeConv
+    if (!conv) return
     const before = Object.fromEntries(Object.keys(patch).map(k => [k, (conv as any)[k]]))
-    setActiveConv((c: any) => c ? { ...c, ...patch } : c)   // optimistic
+    // ผูกกับแชทนี้เสมอ — กัน "เลิกทำ" หลังสลับแชทไปแก้สถานะแชทอื่น
+    setActiveConv((c: any) => c && c.id === conv.id ? { ...c, ...patch } : c)   // optimistic
     try {
       const res = await fetch(`/api/inbox/conversations/${conv.id}`, {
         method: 'PATCH',
@@ -758,7 +821,8 @@ export default function InboxPage() {
           : 'is_resolved' in patch ? (patch.is_resolved ? 'จบบทสนทนาแล้ว' : 'เปิดบทสนทนาใหม่แล้ว')
           : 'is_starred' in patch ? (patch.is_starred ? 'ติดดาวแล้ว' : 'เอาดาวออกแล้ว')
           : 'บันทึกแล้ว'
-        setToast({ msg: label, undo: () => patchConv(before, { silentToast: true }) })
+        // ส่ง conv เดิมไปด้วย — กดเลิกทำหลังสลับแชทก็ยังแก้ถูกแชท
+        setToast({ msg: label, undo: () => patchConv(before, { silentToast: true, convOverride: conv }) })
       }
       loadConversations({ silent: true })
     } catch (e: any) {
@@ -790,8 +854,8 @@ export default function InboxPage() {
     if (!window.confirm(`ทำเครื่องหมายว่าอ่านแล้ว ${scopedUnread} แชท ใน "${scopedName}"?\n\nการกระทำนี้ย้อนกลับไม่ได้`)) return
     setMarkingRead(true)
     const ids = new Set<string>(pageFilter ? [pageFilter] : channelPages.map((p: any) => p.id))
-    // optimistic
-    setConversations(prev => prev.map(c => ids.has(c.page_id) ? { ...c, unread_count: 0 } : c))
+    // optimistic — ไม่แตะแชทที่จัดเก็บ ให้ตรงกับ API (ไม่งั้นเลขเด้งกลับหลังโหลดใหม่)
+    setConversations(prev => prev.map(c => ids.has(c.page_id) && !c.is_archived ? { ...c, unread_count: 0 } : c))
     setUnreadByPage(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = 0 }); return n })
     setTotalUnread(t => Math.max(0, t - scopedUnread))
     try {
@@ -847,7 +911,9 @@ export default function InboxPage() {
 
   // server กรองคำค้นให้แล้ว (ค้นทั้งฐานข้อมูล ไม่ใช่แค่ที่โหลดมา) — ที่นี่กรองแค่ช่องทาง
   // ระหว่างรอ debounce ให้กรองแบบหยาบไปก่อน เพื่อให้จอตอบสนองทันที
-  const searchPending = search.trim() !== debouncedSearch
+  // กรองฝั่ง client ต่อไปจนกว่าผลจาก server จะมาถึงจริง (ไม่ใช่แค่ debounce ครบ)
+  // ไม่งั้นลิสต์เก่าที่ยังไม่กรองจะเด้งขึ้นมาแทนผลค้นหา 1 จังหวะ
+  const searchPending = search.trim() !== debouncedSearch || loadingList
   const filteredConvs = conversations.filter(c => {
     if (channelFilter && (c.connected_pages?.channel || 'facebook') !== channelFilter) return false
     if (!searchPending || !search.trim()) return true
@@ -933,29 +999,13 @@ export default function InboxPage() {
       }}>
         <Link href={isOwner ? '/dashboard' : '/dashboard/inbox'} style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexShrink: 1 }}>
           <div style={{ width: 32, height: 32, flexShrink: 0, background: 'linear-gradient(135deg, #1877f2, #5fa3ff)', borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15 }}>⚡</div>
-          <div style={{ fontWeight: 900, fontSize: 12.5, color: TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>FACEBOOK CHAT</div>
+          <div className="ib-hide-narrow" style={{ fontWeight: 900, fontSize: 12.5, color: TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>FACEBOOK CHAT</div>
         </Link>
         <div style={{ flex: 1 }} />
-        {/* ปุ่มกลับไปหน้าเลือกช่องทาง (เมื่อมีทั้ง FB + LINE) */}
-        {bothChannels && channelFilter && (
-          <button
-            onClick={backToChannels}
-            title="เปลี่ยนช่องทาง"
-            style={{
-              display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0,
-              padding: '7px 12px', borderRadius: 999, fontFamily: 'inherit',
-              border: `1.5px solid ${channelFilter === 'line' ? '#06c755' : '#1877f2'}`,
-              background: channelFilter === 'line' ? '#e9faf1' : '#eaf2fd',
-              color: channelFilter === 'line' ? '#06804a' : '#1877f2',
-              fontSize: 11.5, fontWeight: 800, cursor: 'pointer',
-            }}
-          >
-            <span style={{ fontSize: 13 }}>⇄</span> {channelFilter === 'line' ? 'LINE' : 'Facebook'}
-          </button>
-        )}
+        {/* ตัวสลับช่องทางอยู่ที่แท็บใน page bar ที่เดียว (เดิมมี pill ตรงนี้ซ้ำ ดูเป็นคนละฟีเจอร์) */}
         {isOwner && (
-          <Link href="/dashboard" style={{ ...btnGhost, padding: '7px 11px', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5, textDecoration: 'none', color: MUTED } as any}>
-            <BarChart3 size={13} /> ยิงแอดเพจ
+          <Link href="/dashboard" style={{ ...btnGhost, padding: '8px 12px', fontSize: 11.5, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5, textDecoration: 'none', color: MUTED, whiteSpace: 'nowrap', flexShrink: 0, minHeight: 36 } as any}>
+            <BarChart3 size={14} /> ยิงแอดเพจ
           </Link>
         )}
       </div>
@@ -1179,9 +1229,15 @@ export default function InboxPage() {
             <div style={{ position: 'relative', marginBottom: 10 }}>
               <Search size={14} style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', color: MUTED }} />
               <input
+                type="search"
                 value={search}
                 onChange={e => setSearch(e.target.value)}
                 placeholder="ค้นหาลูกค้า..."
+                aria-label="ค้นหาลูกค้า"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                enterKeyHint="search"
                 style={{
                   width: '100%', padding: '9px 12px 9px 32px', borderRadius: 10,
                   border: `1.5px solid ${BORDER}`, background: SURFACE2,
@@ -1405,9 +1461,8 @@ export default function InboxPage() {
                 >
                   <MoreVertical size={18} />
                 </button>
-              </div>
 
-              {/* เมนูตัวเลือกบนมือถือ */}
+              {/* เมนูตัวเลือกบนมือถือ — อยู่ในหัวแชท (position:relative) จึงเกาะใต้หัวเสมอ */}
               {showChatMenu && (
                 <>
                   <div
@@ -1415,7 +1470,7 @@ export default function InboxPage() {
                     style={{ position: 'fixed', inset: 0, zIndex: 90 }}
                   />
                   <div style={{
-                    position: 'absolute', top: 62, right: 12, zIndex: 100,
+                    position: 'absolute', top: '100%', right: 12, marginTop: 6, zIndex: 100,
                     background: SURFACE, borderRadius: 14, border: `1.5px solid ${BORDER}`,
                     boxShadow: '0 12px 40px rgba(15,23,42,0.18)', overflow: 'hidden', minWidth: 210,
                   }}>
@@ -1458,6 +1513,7 @@ export default function InboxPage() {
                   </div>
                 </>
               )}
+              </div>
 
               {/* Error banner */}
               {errorBanner && (
@@ -1487,7 +1543,7 @@ export default function InboxPage() {
                     message={m}
                     customerName={activeConv.customer_name}
                     customerPic={activeConv.customer_picture}
-                    onRetry={retryMessage}
+                    onRetry={(retriedTick >= 0 && retriedRef.current.has(retryKeyOf(activeConv.id, m))) ? undefined : retryMessage}
                   />
                 ))}
                 <div ref={messagesEndRef} />
@@ -1556,6 +1612,7 @@ export default function InboxPage() {
                     {/* ข้อความตอบกลับที่บันทึกไว้ (saved replies) */}
                     <button
                       onClick={() => setShowSavedReplies(true)}
+                      className="ib-composer-grow"
                       title="ข้อความตอบกลับที่บันทึกไว้"
                       aria-label="ข้อความตอบกลับที่บันทึกไว้"
                       style={{
@@ -1564,6 +1621,7 @@ export default function InboxPage() {
                         cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5,
                         fontSize: 12.5, fontWeight: 800, fontFamily: 'inherit',
                         boxShadow: '0 4px 12px rgba(24,119,242,0.32)', minHeight: 42,
+                        whiteSpace: 'nowrap',
                       }}
                     >
                       <Plus size={17} strokeWidth={2.8} />
@@ -1587,6 +1645,7 @@ export default function InboxPage() {
                     <button
                       onClick={() => handleAiSuggest()}
                       disabled={aiLoading}
+                      className="ib-composer-grow"
                       title="ให้ AI ช่วยร่างคำตอบ"
                       style={{
                         padding: '10px 13px', borderRadius: 12, border: 'none', flexShrink: 0,
@@ -1740,7 +1799,12 @@ export default function InboxPage() {
       {showSettings && (
         <SettingsModal
           pages={pages}
-          onClose={() => setShowSettings(false)}
+          onClose={() => {
+            setShowSettings(false)
+            // ล้าง cache ค่าตั้งค่า → สวิตช์ "เปิดปุ่ม AI ช่วยตอบ" มีผลทันทีในเซสชันเดียวกัน
+            aiFetchedRef.current.clear()
+            setAiEnabledByPage({})
+          }}
           onSaved={() => { loadConversations(); loadQuickReplies() }}
         />
       )}
@@ -1876,7 +1940,7 @@ export default function InboxPage() {
 
       {/* Toast + เลิกทำ */}
       {toast && (
-        <div style={{
+        <div className={activeConv ? 'ib-toast-above-composer' : undefined} style={{
           position: 'fixed', left: '50%', transform: 'translateX(-50%)',
           bottom: 'calc(env(safe-area-inset-bottom, 0px) + 22px)', zIndex: 320,
           background: '#1a1f3c', color: 'white', borderRadius: 14,
@@ -2017,7 +2081,9 @@ export default function InboxPage() {
 
         /* iOS zoom prevention — input fontSize ≥ 16 */
         @media (max-width: 820px) {
-          input[type="text"], input[type="search"], textarea, select {
+          /* ครอบ input ทุกชนิดที่พิมพ์ได้ (เดิมระบุเฉพาะ type="text" → ช่องที่ไม่ระบุ type หลุด) */
+          input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+          textarea, select {
             font-size: 16px !important;
           }
           /* ซ่อนปุ่มที่ไม่จำเป็นบนมือถือ (right panel ใช้ไม่ได้อยู่แล้ว) */
@@ -2032,19 +2098,29 @@ export default function InboxPage() {
         .ib-only-mobile { display: none; }
         @media (max-width: 820px) {
           .ib-only-mobile { display: inline; }
-          /* ปุ่ม action กระจายเต็มแถว กดง่ายด้วยนิ้วโป้ง */
-          .ib-composer-actions > button:first-child { flex: 1; justify-content: center; }
-          .ib-composer-actions > button:last-child { flex: 1; justify-content: center; }
+          /* ปุ่มที่มีข้อความกระจายเต็มแถว กดง่ายด้วยนิ้วโป้ง (ปุ่มไอคอนล้วนคงขนาดเดิม) */
+          .ib-composer-grow { flex: 1; justify-content: center; }
         }
-        @media (min-width: 821px) {
+        /* แถวเดียวเฉพาะตอนคอลัมน์แชทกว้างพอจริง — ที่ 821-1080px ยังมี sidebar 244 + ลิสต์ 290
+           ทำให้เหลือที่ช่องพิมพ์แค่ไม่กี่ px ถ้าบังคับแถวเดียว */
+        @media (min-width: 1100px) {
           .ib-composer { flex-direction: row; align-items: flex-end; gap: 8px; }
-          .ib-composer-input { flex: 1; min-width: 0; }
+          .ib-composer-input { flex: 1; min-width: 240px; }
         }
 
-        /* จอแคบมาก — ย่อปุ่ม action ในหัวแชท กันล้น/โดนตัด */
-        @media (max-width: 430px) {
-          .ib-chat-actions { gap: 3px !important; }
-          .ib-chat-actions button { padding: 6px !important; }
+        /* toast ต้องไม่ทับแถวช่องพิมพ์ตอนเปิดแชทอยู่บนมือถือ */
+        @media (max-width: 820px) {
+          .ib-toast-above-composer {
+            bottom: calc(env(safe-area-inset-bottom, 0px) + 138px) !important;
+          }
+        }
+        /* จอแคบสุด (iPhone SE 320px / in-app browser ที่บีบความกว้าง) */
+        @media (max-width: 400px) {
+          .ib-hide-narrow { display: none !important; }
+        }
+        @media (max-width: 360px) {
+          /* เหลือแต่ไอคอน — ป้าย "ข้อความบันทึก" ทำให้ปุ่มตัดบรรทัดสูงไม่เท่ากัน */
+          .ib-only-mobile { display: none !important; }
         }
       `}</style>
     </div>
@@ -2093,7 +2169,8 @@ function Avatar({ name, src, size = 40, ringColor }: { name?: string; src?: stri
       fontSize: size * 0.4, fontWeight: 800, boxShadow: SHADOW_SM,
       border: ring,
     }}>
-      {(name || '?')[0].toUpperCase()}
+      {/* ตัดตาม code point — ชื่อที่ขึ้นต้นด้วย emoji (เช่น "🌸น้องมิว") จะไม่กลายเป็น "�" */}
+      {(Array.from(name || '?')[0] || '?').toUpperCase()}
     </div>
   )
 }
@@ -2187,7 +2264,10 @@ function ConvItem({ conv, active, onClick }: { conv: any; active: boolean; onCli
 
 // ทำลิงก์/เบอร์โทรในข้อความลูกค้าให้กดได้ (เดิมเป็น text ต้องกดค้าง copy เอง)
 function Linkify({ text, onDark }: { text: string; onDark?: boolean }) {
-  const parts = String(text).split(/(https?:\/\/[^\s]+|www\.[^\s]+|0\d{1,2}[-\s]?\d{3}[-\s]?\d{3,4})/g)
+  // URL: ไม่กินเครื่องหมายวรรคตอนตัวท้าย / เบอร์: ต้องไม่มีตัวเลขขนาบ (กันตัดเลขบัญชี/เลขพัสดุผิด)
+  const parts = String(text).split(
+    /((?:https?:\/\/|www\.)[^\s]*[^\s.,!?;:)\]}"'…]|(?<!\d)0\d{1,2}[-\s]?\d{3}[-\s]?\d{3,4}(?!\d))/g
+  )
   const linkStyle: any = {
     color: onDark ? '#d6e9ff' : PRIMARY,
     textDecoration: 'underline',
@@ -2201,7 +2281,7 @@ function Linkify({ text, onDark }: { text: string; onDark?: boolean }) {
           const href = p.startsWith('http') ? p : `https://${p}`
           return <a key={i} href={href} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} style={linkStyle}>{p}</a>
         }
-        if (/^0\d{1,2}[-\s]?\d{3}[-\s]?\d{3,4}$/.test(p)) {
+        if (/^0\d[\d-\s]{6,}$/.test(p)) {
           return <a key={i} href={`tel:${p.replace(/[-\s]/g, '')}`} onClick={e => e.stopPropagation()} style={linkStyle}>{p}</a>
         }
         return <span key={i}>{p}</span>
