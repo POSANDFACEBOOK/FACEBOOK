@@ -7,7 +7,7 @@ import {
   ArrowLeft, Send, Sparkles, RefreshCw, Search, Star, Archive, CheckCircle2,
   MessageSquare, Inbox, Settings, Zap, X, ChevronLeft, MoreVertical, Bot,
   AlertCircle, BarChart3, Bell, Plus, LogOut, ListFilter, MailOpen, MailQuestion,
-  Pencil, Check, Copy, Share2, ImagePlus,
+  Pencil, Check, Copy, Share2, ImagePlus, Menu,
 } from 'lucide-react'
 
 // ─── Design Tokens (sync กับ dashboard) ───────────────────────
@@ -149,14 +149,18 @@ export default function InboxPage() {
   const [needsReplyByPage, setNeedsReplyByPage] = useState<Record<string, number>>({})
   const [markingRead, setMarkingRead] = useState(false)
   const [showChatMenu, setShowChatMenu] = useState(false)
+  const [showMobileMenu, setShowMobileMenu] = useState(false)
   const [sessionExpired, setSessionExpired] = useState(false)
   const [toast, setToast] = useState<{ msg: string; undo?: () => void } | null>(null)
   // เก็บ "ลายเซ็นข้อความที่กดส่งซ้ำไปแล้ว" — ใช้ ref ไม่ให้หายตอนสลับแชทกลับมา
   // (ถ้าเก็บใน state แล้วรีเซ็ต ผู้ใช้จะกดส่งซ้ำได้อีก ลูกค้าได้ข้อความเดิมหลายรอบ)
   const retriedRef = useRef<Set<string>>(new Set())
+  // id ของแถวใน DB ที่ถูกกดส่งซ้ำไปแล้ว → ซ่อนไม่ให้ฟองแดงเดิมเด้งกลับมาตอน poll
+  const retriedServerIdsRef = useRef<Set<string>>(new Set())
   const [retriedTick, setRetriedTick] = useState(0)  // บังคับ re-render หลัง mark
   // ค่าตั้งค่าต่อเพจ (ตอนนี้ใช้เช็คว่าเจ้าของปิดปุ่ม "AI ช่วยตอบ" ไว้ไหม)
   const [aiEnabledByPage, setAiEnabledByPage] = useState<Record<string, boolean>>({})
+  const [settingsVer, setSettingsVer] = useState(0)  // ++ เมื่อปิดหน้าตั้งค่า → ดึงค่า ai_assist_enabled ใหม่
   const [errorBanner, setErrorBanner] = useState<string | null>(null)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -231,22 +235,34 @@ export default function InboxPage() {
   // - ถ้า server มีแถวเดียวกันแล้ว ต้องตัดฟอง optimistic ทิ้ง ไม่งั้นขึ้น 2 ฟอง + React key ซ้ำ
   function mergeServerMessages(serverMsgs: any[]) {
     setMessages(prev => {
-      const temps = prev.filter(m => typeof m.id === 'string' && m.id.startsWith('temp-'))
-      if (temps.length === 0) return serverMsgs
+      const isTemp = (m: any) => typeof m.id === 'string' && m.id.startsWith('temp-')
+      const hidden = retriedServerIdsRef.current           // แถวที่กด "ส่งอีกครั้ง" ไปแล้ว → ไม่เอากลับมา
+      const server = serverMsgs.filter(s => !hidden.has(String(s.id)))
+      const temps = prev.filter(isTemp)
+
+      // แถวจริงที่แสดงอยู่บนจอแล้ว = มีเจ้าของแล้ว ห้ามเอาไปจับคู่กับ temp ตัวใหม่
+      const shownIds = new Set(prev.filter(m => !isTemp(m)).map(m => String(m.id)))
+      // จับคู่ได้แถวละ 1 ฟองเท่านั้น (splice ออกเมื่อจับแล้ว) — ส่ง "ค่ะ" ซ้ำ 2 ครั้งฟองที่ 2 จะไม่หาย
+      // ไม่เทียบเวลา เพราะ temp ใช้นาฬิกาเครื่อง ส่วนแถวจริงใช้นาฬิกา server
+      // (เครื่องที่ตั้งเวลาเพี้ยนจะจับคู่ไม่ติด แล้วขึ้นฟองซ้ำ) — pool ที่ตัดแถวที่แสดงแล้วออกก็ปลอดภัยพอ
+      const pool = server.filter(s => s.direction === 'outbound' && !shownIds.has(String(s.id)))
       const keep = temps.filter(t => {
-        const tk = msgKey(t)
-        const tTime = new Date(t.created_at).getTime()
-        // server บันทึกแถวนี้ไปแล้วหรือยัง (เนื้อหาตรงกัน + เวลาใกล้กันไม่เกิน 2 นาที)
-        return !serverMsgs.some(s =>
-          s.direction === 'outbound' &&
-          msgKey(s) === tk &&
-          Math.abs(new Date(s.created_at).getTime() - tTime) < 120000
-        )
+        const idx = pool.findIndex(s => msgKey(s) === msgKey(t))
+        if (idx >= 0) { pool.splice(idx, 1); return false }  // server บันทึกแล้ว → ตัดฟอง optimistic
+        return true
       })
+
+      // แถวจริงที่อยู่บนจอแล้วแต่ response รอบนี้ยังไม่มี (poll ที่ยิงก่อนเราส่งข้อความ ตอบช้า)
+      // → ห้ามทิ้ง ไม่งั้นข้อความที่เพิ่งส่งสำเร็จหายไปนานถึง 7 วิ
+      const serverIds = new Set(server.map(s => String(s.id)))
+      const missing = prev.filter(m => !isTemp(m) && !serverIds.has(String(m.id)) && !hidden.has(String(m.id)))
+
       const seen = new Set<string>()
-      return [...serverMsgs, ...keep]
+      const real = [...server, ...missing]
         .filter(m => { const k = String(m.id); if (seen.has(k)) return false; seen.add(k); return true })
         .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+      // ฟองที่ยังส่งไม่จบต่อท้ายเสมอ (เพิ่งกดส่ง = ใหม่สุด) — ไม่ต้องพึ่งนาฬิกาเครื่อง
+      return [...real, ...keep]
     })
   }
 
@@ -539,8 +555,10 @@ export default function InboxPage() {
   const aiFetchedRef = useRef<Set<string>>(new Set())
   useEffect(() => {
     const pid = activeConv?.page_id
-    if (!pid || aiFetchedRef.current.has(pid)) return
-    aiFetchedRef.current.add(pid)
+    if (!pid) return
+    const cacheKey = `${pid}::${settingsVer}`   // settingsVer เพิ่มขึ้นเมื่อปิดหน้าตั้งค่า → ดึงค่าใหม่
+    if (aiFetchedRef.current.has(cacheKey)) return
+    aiFetchedRef.current.add(cacheKey)
     let cancelled = false
     fetch(`/api/inbox/settings?pageId=${pid}`)
       .then(r => r.json())
@@ -551,12 +569,13 @@ export default function InboxPage() {
       })
       .catch(() => { if (!cancelled) setAiEnabledByPage(prev => ({ ...prev, [pid]: true })) })
     return () => { cancelled = true }
-  }, [activeConv?.page_id])
+  }, [activeConv?.page_id, settingsVer])
 
   // กด Esc = ปิดชั้นบนสุดที่เปิดอยู่ (เมนู → modal) — มาตรฐานที่ผู้ใช้คาดหวัง
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
+      if (showMobileMenu) { setShowMobileMenu(false); return }
       if (showChatMenu) { setShowChatMenu(false); return }
       if (renamePage) { setRenamePage(null); return }
       if (showSavedReplies) { setShowSavedReplies(false); return }
@@ -564,7 +583,7 @@ export default function InboxPage() {
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [showChatMenu, renamePage, showSavedReplies, showSettings])
+  }, [showMobileMenu, showChatMenu, renamePage, showSavedReplies, showSettings])
 
   // toast หายเองใน 5 วิ
   useEffect(() => {
@@ -620,7 +639,9 @@ export default function InboxPage() {
         }
         loadConversations({ silent: true })
       } else {
-        if (isThis()) setMessages(prev => prev.map(m => m.id === optimistic.id ? data.message : m))
+        // data.message อาจเป็น null ได้ (insert สำเร็จแต่ select กลับไม่ได้) → ห้ามยัด null ลง array
+        if (isThis()) setMessages(prev => prev.map(m => m.id === optimistic.id
+          ? (data.message || { ...m, delivery_status: 'sent' }) : m))
         loadConversations({ silent: true })
       }
     } catch (e: any) {
@@ -635,8 +656,9 @@ export default function InboxPage() {
     setSending(false)
   }
 
-  // จำว่าข้อความนี้ถูกกดส่งซ้ำแล้ว — ผูกกับแชท + ลายเซ็นเนื้อหา (ไม่ใช่ id ชั่วคราวที่เปลี่ยนได้)
-  function retryKeyOf(convId: string, m: any) { return `${convId}::${msgKey(m)}` }
+  // จำว่า "ฟองนี้" ถูกกดส่งซ้ำแล้ว — ผูกกับ id ของฟอง ไม่ใช่เนื้อหา
+  // (ถ้าผูกเนื้อหา ข้อความสั้นที่ใช้ซ้ำทั้งวันอย่าง "ค่ะ" จะไม่มีปุ่มให้กดอีกเลยตลอดเซสชัน)
+  function retryKeyOf(convId: string, m: any) { return `${convId}::${String(m?.id ?? '')}` }
   function markRetried(convId: string, m: any) {
     retriedRef.current.add(retryKeyOf(convId, m))
     setRetriedTick(t => t + 1)
@@ -670,6 +692,8 @@ export default function InboxPage() {
     }
 
     markRetried(convId, m)
+    // แถวที่มาจาก DB จะถูกดึงกลับมาตอน poll → จำ id ไว้เพื่อซ่อนถาวร
+    if (!String(m.id).startsWith('temp-')) retriedServerIdsRef.current.add(String(m.id))
     setMessages(prev => prev.filter(x => x.id !== m.id))
     if (imgUrl) await sendImageUrl(imgUrl)
     else if (m.message_text) await handleSend(m.message_text)
@@ -709,7 +733,8 @@ export default function InboxPage() {
         }
         loadConversations({ silent: true })
       } else {
-        if (isThis()) setMessages(prev => prev.map(m => m.id === optimistic.id ? data.message : m))
+        if (isThis()) setMessages(prev => prev.map(m => m.id === optimistic.id
+          ? (data.message || { ...m, delivery_status: 'sent' }) : m))
         loadConversations({ silent: true })
       }
     } catch (e: any) {
@@ -775,23 +800,27 @@ export default function InboxPage() {
   // ── AI Suggest ──
   async function handleAiSuggest(instruction?: string) {
     if (!activeConv || aiLoading) return
+    const convId = activeConv.id                      // ผูกกับแชทนี้
+    const isThis = () => openReqRef.current === convId // สลับแชทแล้วต้องไม่เด้งคำแนะนำข้ามคน
     setAiLoading(true)
     setAiSuggestions([])
     try {
       const res = await fetch('/api/inbox/ai-suggest', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversationId: activeConv.id, instruction }),
+        body: JSON.stringify({ conversationId: convId, instruction }),
       })
       const data = await res.json()
+      if (!isThis()) return                            // เปิดแชทอื่นไปแล้ว — ทิ้งผล
       if (data.suggestions?.length) {
         setAiSuggestions(data.suggestions)
-        setActiveConv((c: any) => c ? { ...c, ai_category: data.category, ai_sentiment: data.sentiment, ai_summary: data.summary } : c)
+        setActiveConv((c: any) => c && c.id === convId
+          ? { ...c, ai_category: data.category, ai_sentiment: data.sentiment, ai_summary: data.summary } : c)
       } else {
         setErrorBanner(friendlyError(data.error) || 'AI ยังสร้างคำแนะนำไม่ได้ ลองใหม่อีกครั้ง')
       }
     } catch (e: any) {
-      setErrorBanner(friendlyError(e?.message))
+      if (isThis()) setErrorBanner(friendlyError(e?.message))
     }
     setAiLoading(false)
   }
@@ -1008,6 +1037,19 @@ export default function InboxPage() {
             <BarChart3 size={14} /> ยิงแอดเพจ
           </Link>
         )}
+        {/* เมนูบนมือถือ — sidebar ถูกซ่อน จึงเป็นทางเดียวที่เข้าถึงตั้งค่า/ช่องทาง/ออกจากระบบได้ */}
+        <button
+          onClick={() => setShowMobileMenu(true)}
+          aria-label="เมนู"
+          title="เมนู"
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            width: 38, height: 38, borderRadius: 10, border: `1.5px solid ${BORDER}`,
+            background: SURFACE2, color: TEXT, cursor: 'pointer', fontFamily: 'inherit',
+          }}
+        >
+          <Menu size={19} />
+        </button>
       </div>
 
       {/* Main 3-column layout */}
@@ -1801,9 +1843,8 @@ export default function InboxPage() {
           pages={pages}
           onClose={() => {
             setShowSettings(false)
-            // ล้าง cache ค่าตั้งค่า → สวิตช์ "เปิดปุ่ม AI ช่วยตอบ" มีผลทันทีในเซสชันเดียวกัน
-            aiFetchedRef.current.clear()
-            setAiEnabledByPage({})
+            // บังคับดึงค่าใหม่ → สวิตช์ "เปิดปุ่ม AI ช่วยตอบ" มีผลทันที แม้ยังเปิดแชทเดิมค้างอยู่
+            setSettingsVer(v => v + 1)
           }}
           onSaved={() => { loadConversations(); loadQuickReplies() }}
         />
@@ -1909,6 +1950,72 @@ export default function InboxPage() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* เมนูมือถือ — sidebar ถูกซ่อนที่ ≤820px ถ้าไม่มีอันนี้จะเข้าตั้งค่า/ช่องทาง/ออกจากระบบไม่ได้เลย */}
+      {showMobileMenu && (
+        <div
+          onClick={() => setShowMobileMenu(false)}
+          style={{ position: 'fixed', inset: 0, zIndex: 330, background: 'rgba(15,23,42,0.5)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'flex-end' }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: SURFACE, width: '100%', borderRadius: '20px 20px 0 0',
+              padding: '10px 14px calc(env(safe-area-inset-bottom, 0px) + 18px)',
+              boxShadow: '0 -12px 40px rgba(15,23,42,0.25)',
+            }}
+          >
+            <div style={{ width: 40, height: 4, borderRadius: 999, background: '#cbd5e1', margin: '4px auto 14px' }} />
+            {session?.user && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', background: SURFACE2, borderRadius: 12, marginBottom: 10 }}>
+                <Avatar name={session.user.name || 'U'} src={session.user.image || undefined} size={38} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{session.user.name || 'ผู้ใช้'}</div>
+                  <div style={{ fontSize: 11, color: GREEN, fontWeight: 700 }}>● เชื่อมต่อแล้ว</div>
+                </div>
+              </div>
+            )}
+            <button
+              onClick={() => { setShowMobileMenu(false); setShowSettings(true) }}
+              style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '14px 12px', background: 'transparent', border: 'none', borderBottom: `1px solid ${BORDER}`, cursor: 'pointer', fontFamily: 'inherit', fontSize: 14, fontWeight: 700, color: TEXT, textAlign: 'left' }}
+            >
+              <Settings size={17} color={PRIMARY} /> ตั้งค่าแชท
+            </button>
+            {isOwner && (
+              <Link href="/dashboard/channels" onClick={() => setShowMobileMenu(false)} style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '14px 12px', borderBottom: `1px solid ${BORDER}`, textDecoration: 'none', fontSize: 14, fontWeight: 700, color: TEXT }}>
+                <Share2 size={17} color={PRIMARY} /> ช่องทางแชท
+              </Link>
+            )}
+            {isOwner && (
+              <Link href="/dashboard" onClick={() => setShowMobileMenu(false)} style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '14px 12px', borderBottom: `1px solid ${BORDER}`, textDecoration: 'none', fontSize: 14, fontWeight: 700, color: TEXT }}>
+                <BarChart3 size={17} color={PRIMARY} /> ยิงแอดเพจ
+              </Link>
+            )}
+            <button
+              onClick={() => signOut({ callbackUrl: '/login' })}
+              style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '14px 12px', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 14, fontWeight: 800, color: RED, textAlign: 'left' }}
+            >
+              <LogOut size={17} /> ออกจากระบบ
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* แบนเนอร์ error ตอนอยู่หน้ารายการแชท (ในแชทมีของตัวเองอยู่แล้ว)
+          — ไม่งั้น error ที่เกิดตอนโหลดลิสต์/กด "อ่านทั้งหมด" จะไม่มีใครเห็นเลย */}
+      {errorBanner && !activeConv && (
+        <div style={{
+          position: 'fixed', left: 12, right: 12, zIndex: 310,
+          top: 'calc(env(safe-area-inset-top, 0px) + 60px)',
+          padding: '11px 14px', background: RED_L, border: `1.5px solid ${RED}55`, borderRadius: 12,
+          fontSize: 12.5, color: RED, display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700,
+          boxShadow: '0 10px 30px rgba(15,23,42,0.16)', maxWidth: 620, margin: '0 auto',
+        }}>
+          <AlertCircle size={15} style={{ flexShrink: 0 }} />
+          <div style={{ flex: 1 }}>{errorBanner}</div>
+          <button onClick={() => setErrorBanner(null)} aria-label="ปิดข้อความแจ้งเตือน" title="ปิด" style={{ all: 'unset', cursor: 'pointer', padding: 6, display: 'flex', flexShrink: 0 }}><X size={16} /></button>
         </div>
       )}
 
@@ -2264,30 +2371,44 @@ function ConvItem({ conv, active, onClick }: { conv: any; active: boolean; onCli
 
 // ทำลิงก์/เบอร์โทรในข้อความลูกค้าให้กดได้ (เดิมเป็น text ต้องกดค้าง copy เอง)
 function Linkify({ text, onDark }: { text: string; onDark?: boolean }) {
-  // URL: ไม่กินเครื่องหมายวรรคตอนตัวท้าย / เบอร์: ต้องไม่มีตัวเลขขนาบ (กันตัดเลขบัญชี/เลขพัสดุผิด)
-  const parts = String(text).split(
-    /((?:https?:\/\/|www\.)[^\s]*[^\s.,!?;:)\]}"'…]|(?<!\d)0\d{1,2}[-\s]?\d{3}[-\s]?\d{3,4}(?!\d))/g
-  )
   const linkStyle: any = {
     color: onDark ? '#d6e9ff' : PRIMARY,
     textDecoration: 'underline',
     wordBreak: 'break-all',
   }
-  return (
-    <>
-      {parts.map((p, i) => {
-        if (!p) return null
-        if (/^(https?:\/\/|www\.)/.test(p)) {
-          const href = p.startsWith('http') ? p : `https://${p}`
-          return <a key={i} href={href} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} style={linkStyle}>{p}</a>
-        }
-        if (/^0\d[\d-\s]{6,}$/.test(p)) {
-          return <a key={i} href={`tel:${p.replace(/[-\s]/g, '')}`} onClick={e => e.stopPropagation()} style={linkStyle}>{p}</a>
-        }
-        return <span key={i}>{p}</span>
-      })}
-    </>
-  )
+  const src = String(text ?? '')
+  // ห้ามใช้ lookbehind ((?<!...)) — iOS Safari ต่ำกว่า 16.4 โยน SyntaxError ตอน parse
+  // ทำให้ทั้งหน้าจอขาว → ใช้ exec loop แล้วเช็คอักขระข้างหน้าด้วย JS แทน
+  const re = /(?:https?:\/\/|www\.)[^\s]*[^\s.,!?;:)\]}"'…]|0\d{1,2}[-\s]?\d{3}[-\s]?\d{3,4}/g
+  const nodes: ReactNode[] = []
+  let last = 0
+  let m: RegExpExecArray | null
+  let k = 0
+  while ((m = re.exec(src)) !== null) {
+    const val = m[0]
+    const start = m.index
+    const isUrl = /^(https?:\/\/|www\.)/i.test(val)
+    // เบอร์โทร: ต้องไม่มีตัวเลขขนาบหน้า/หลัง (กันตัดเลขบัญชี/เลขพัสดุยาวๆ ผิด)
+    if (!isUrl) {
+      const before = src[start - 1]
+      const after = src[start + val.length]
+      if ((before && /\d/.test(before)) || (after && /\d/.test(after))) continue
+    }
+    if (start > last) nodes.push(<span key={`t${k++}`}>{src.slice(last, start)}</span>)
+    if (isUrl) {
+      const href = val.startsWith('http') ? val : `https://${val}`
+      nodes.push(
+        <a key={`l${k++}`} href={href} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} style={linkStyle}>{val}</a>
+      )
+    } else {
+      nodes.push(
+        <a key={`p${k++}`} href={`tel:${val.replace(/[-\s]/g, '')}`} onClick={e => e.stopPropagation()} style={linkStyle}>{val}</a>
+      )
+    }
+    last = start + val.length
+  }
+  if (last < src.length) nodes.push(<span key={`t${k++}`}>{src.slice(last)}</span>)
+  return <>{nodes}</>
 }
 
 // รูปในแชท — แตะเพื่อดูเต็มจอ (สลิปโอนเงิน/ที่อยู่ ต้องอ่านออก)
