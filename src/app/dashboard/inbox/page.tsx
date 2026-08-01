@@ -150,6 +150,9 @@ export default function InboxPage() {
   const [markingRead, setMarkingRead] = useState(false)
   const [showChatMenu, setShowChatMenu] = useState(false)
   const [showMobileMenu, setShowMobileMenu] = useState(false)
+  const [listLimit, setListLimit] = useState(50)   // จำนวนแชทที่โหลด — กด "โหลดเพิ่ม" เพื่อขยาย
+  const listLimitRef = useRef(50)
+  listLimitRef.current = listLimit
   const [sessionExpired, setSessionExpired] = useState(false)
   const [toast, setToast] = useState<{ msg: string; undo?: () => void } | null>(null)
   // เก็บ "ลายเซ็นข้อความที่กดส่งซ้ำไปแล้ว" — ใช้ ref ไม่ให้หายตอนสลับแชทกลับมา
@@ -166,11 +169,18 @@ export default function InboxPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const pollRef = useRef<any>(null)
+  const lastFbSyncRef = useRef(Date.now())  // เวลาที่ sync FB ล่าสุด (ไม่รีเซ็ตตอนสลับแชท)
   const openReqRef = useRef<string>('')  // กัน race ตอนเปิดหลายแชทเร็วๆ
   const draftRef = useRef<HTMLTextAreaElement>(null)
   // เก็บไฟล์รูปที่อัปโหลดไม่สำเร็จไว้ เพื่อให้ "ส่งอีกครั้ง" อัปโหลดใหม่ได้จริง
   // (ถ้าส่ง blob: URL ไป server จะตีกลับ 400 ทุกครั้ง)
-  const pendingFilesRef = useRef<Map<string, File>>(new Map())
+  const pendingFilesRef = useRef<Map<string, { file: File; url: string }>>(new Map())
+  // ล้างไฟล์+blob ที่ค้าง (เปลี่ยนแชท/ออกจากหน้า) — ไม่งั้นสะสมกินหน่วยความจำ
+  const clearPendingFiles = () => {
+    pendingFilesRef.current.forEach(v => { try { URL.revokeObjectURL(v.url) } catch {} })
+    pendingFilesRef.current.clear()
+  }
+  useEffect(() => () => clearPendingFiles(), [])
 
   // คอม = Enter ส่ง / มือถือ = Enter ขึ้นบรรทัดใหม่
   const [isDesktop, setIsDesktop] = useState(false)
@@ -198,6 +208,7 @@ export default function InboxPage() {
     if (pageFilter) params.set('pageId', pageFilter)
     if (statusFilter !== 'all') params.set('filter', statusFilter)
     if (debouncedSearch) params.set('q', debouncedSearch)
+    params.set('limit', String(listLimitRef.current))
 
     try {
       const r = await fetch(`/api/inbox/conversations?${params.toString()}`)
@@ -277,6 +288,7 @@ export default function InboxPage() {
     setAiSuggestions([])
     setErrorBanner(null)
     setShowChatMenu(false)
+    clearPendingFiles()   // ไฟล์รูปที่ค้างจากแชทก่อนหน้า ใช้กับแชทนี้ไม่ได้อยู่แล้ว
     setLoadingMessages(true)
     // optimistic: เคลียร์ทั้ง badge ของ row + ตัวเลขรวม (page tile / ชิป "ใหม่" / sidebar) ทันที
     const hadUnread = (conv.unread_count || 0) > 0
@@ -286,8 +298,16 @@ export default function InboxPage() {
       setTotalUnread(t => Math.max(0, t - 1))
     }
     try {
-      const res = await fetch(`/api/inbox/conversations/${convId}`).then(r => r.json())
+      const r = await fetch(`/api/inbox/conversations/${convId}`)
       if (openReqRef.current !== convId) return  // เปิดแชทอื่นไปแล้ว — ทิ้งผลเก่า
+      if (r.status === 401 || r.status === 403) { setSessionExpired(true); return }
+      if (!r.ok) {
+        // ไม่งั้นจะขึ้น "ยังไม่มีข้อความในบทสนทนานี้" เงียบๆ เหมือนประวัติแชทหายไป
+        setErrorBanner('โหลดข้อความไม่สำเร็จ — ลองกดเข้าแชทใหม่อีกครั้ง')
+        return
+      }
+      const res = await r.json()
+      if (openReqRef.current !== convId) return
       if (res.conversation) {
         setActiveConv(res.conversation)
         setMessages(res.messages || [])
@@ -440,12 +460,22 @@ export default function InboxPage() {
       if (pageFilter) params.set('pageId', pageFilter)
       if (statusFilter !== 'all') params.set('filter', statusFilter)
       if (debouncedSearch) params.set('q', debouncedSearch)
+      params.set('limit', String(listLimit))
       setLoadingList(true)
       let res: any = {}
       try {
         const r = await fetch(`/api/inbox/conversations?${params.toString()}`)
         if (r.status === 401 || r.status === 403) { if (!cancelled) { setSessionExpired(true); setLoadingList(false) } ; return }
+        // 500 ฯลฯ — ห้ามล้างลิสต์เป็นค่าว่าง ไม่งั้นจอขึ้น "ยังไม่มีเพจที่เชื่อมต่อ" ให้เข้าใจผิด
+        if (!r.ok) {
+          if (!cancelled) { setErrorBanner('โหลดรายการแชทไม่สำเร็จ — ลองใหม่อีกครั้ง'); setLoadingList(false) }
+          return
+        }
         res = await r.json()
+        if (res.error) {
+          if (!cancelled) { setErrorBanner(friendlyError(res.error)); setLoadingList(false) }
+          return
+        }
       } catch {
         if (!cancelled) { setErrorBanner('เชื่อมต่อไม่ได้ — ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่'); setLoadingList(false) }
         return
@@ -478,16 +508,16 @@ export default function InboxPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [pageFilter, statusFilter, debouncedSearch])
+  }, [pageFilter, statusFilter, debouncedSearch, listLimit])
+
+  // เปลี่ยนเพจ/ตัวกรอง/คำค้น → กลับไปโหลด 50 รายการแรกใหม่
+  useEffect(() => { setListLimit(50) }, [pageFilter, statusFilter, debouncedSearch])
 
   // Poll DB ทุก 7 วิ (poll DB ของเราเอง ไม่กิน rate limit FB) → จออัปเดตเองไม่ต้องรีเฟรช
   // Background sync FB ทุก ~5 นาที (กัน webhook ตก)
   useEffect(() => {
     if (pollRef.current) clearInterval(pollRef.current)
-    let tick = 0
-    const SYNC_EVERY_TICKS = 43  // 43 × 7s ≈ 5 นาที
     pollRef.current = setInterval(() => {
-      tick++
       loadConversations({ silent: true })
       if (activeConv) {
         const convId = activeConv.id
@@ -500,7 +530,10 @@ export default function InboxPage() {
           })
           .catch(() => {})
       }
-      if (tick % SYNC_EVERY_TICKS === 0) {
+      // sync สำรอง (กัน webhook ตก) — ใช้เวลาจริงจาก ref ไม่ใช่ tick ของ interval
+      // เพราะ interval ถูกสร้างใหม่ทุกครั้งที่สลับแชท/เปลี่ยนฟิลเตอร์ → tick รีเซ็ต ไม่เคยถึงรอบ
+      if (Date.now() - lastFbSyncRef.current > 5 * 60 * 1000) {
+        lastFbSyncRef.current = Date.now()
         backgroundSync()
       }
     }, 7000)
@@ -570,6 +603,14 @@ export default function InboxPage() {
       .catch(() => { if (!cancelled) setAiEnabledByPage(prev => ({ ...prev, [pid]: true })) })
     return () => { cancelled = true }
   }, [activeConv?.page_id, settingsVer])
+
+  // หมุนจอ/เปลี่ยนขนาด → ปิดเมนูที่เปิดค้าง (ไม่งั้นปุ่มหายไปตาม breakpoint
+  // แต่ overlay เต็มจอยังอยู่ บล็อกการแตะทั้งหน้า)
+  useEffect(() => {
+    const onResize = () => { setShowChatMenu(false); setShowMobileMenu(false) }
+    window.addEventListener('orientationchange', onResize)
+    return () => window.removeEventListener('orientationchange', onResize)
+  }, [])
 
   // กด Esc = ปิดชั้นบนสุดที่เปิดอยู่ (เมนู → modal) — มาตรฐานที่ผู้ใช้คาดหวัง
   useEffect(() => {
@@ -682,12 +723,13 @@ export default function InboxPage() {
 
     // รูปที่อัปโหลดไม่สำเร็จ (ยังเป็น blob:) → ต้องอัปโหลดใหม่จากไฟล์เดิม ส่ง URL ไปตรงๆ ไม่ได้
     if (imgUrl && String(imgUrl).startsWith('blob:')) {
-      const file = pendingFilesRef.current.get(id)
-      if (!file) { setErrorBanner('ส่งรูปซ้ำไม่ได้ — กรุณาเลือกรูปใหม่อีกครั้ง'); return }
+      const entry = pendingFilesRef.current.get(id)
+      if (!entry) { setErrorBanner('ส่งรูปซ้ำไม่ได้ — กรุณาเลือกรูปใหม่อีกครั้ง'); return }
       markRetried(convId, m)
       setMessages(prev => prev.filter(x => x.id !== m.id))
       pendingFilesRef.current.delete(id)
-      await handleSendImage(file)
+      try { URL.revokeObjectURL(entry.url) } catch {}
+      await handleSendImage(entry.file)
       return
     }
 
@@ -788,7 +830,7 @@ export default function InboxPage() {
       if (isThis()) {
         setErrorBanner(msg)
         // เก็บไฟล์ไว้ให้ "ส่งอีกครั้ง" อัปโหลดใหม่ได้ (blob: URL ส่งตรงไป server ไม่ได้)
-        pendingFilesRef.current.set(tempId, file)
+        pendingFilesRef.current.set(tempId, { file, url: previewUrl })
         setMessages(prev => prev.map(m => m.id === tempId
           ? { ...m, delivery_status: 'failed', error_message: msg, local_only: true } : m))
       }
@@ -1351,7 +1393,13 @@ export default function InboxPage() {
                 <div>{pageSyncing ? 'กำลังดึงแชทจากเพจ...' : 'กำลังโหลด...'}</div>
               </div>
             ) : filteredConvs.length === 0 ? (
-              search.trim() ? (
+              // ระหว่างรอผลค้นหาจาก server อย่าเพิ่งบอกว่า "ไม่พบ" (เดี๋ยวผลโผล่ทีหลัง แอดมินเลิกหาไปแล้ว)
+              searchPending && search.trim() ? (
+                <div style={{ padding: 40, textAlign: 'center', color: MUTED, fontSize: 12.5 }}>
+                  <RefreshCw size={18} style={{ animation: 'spin 1s linear infinite', marginBottom: 8 }} />
+                  <div>กำลังค้นหา "{search.trim()}"...</div>
+                </div>
+              ) : search.trim() ? (
                 <EmptyState
                   icon={<Search size={36} />}
                   title={`ไม่พบ "${search.trim()}"`}
@@ -1373,14 +1421,34 @@ export default function InboxPage() {
                 />
               )
             ) : (
-              filteredConvs.map(c => (
-                <ConvItem
-                  key={c.id}
-                  conv={c}
-                  active={activeConv?.id === c.id}
-                  onClick={() => loadMessages(c)}
-                />
-              ))
+              <>
+                {filteredConvs.map(c => (
+                  <ConvItem
+                    key={c.id}
+                    conv={c}
+                    active={activeConv?.id === c.id}
+                    onClick={() => loadMessages(c)}
+                  />
+                ))}
+                {/* โหลดเพิ่ม — เดิมตันที่ 50 รายการ เลื่อนสุดแล้วจบดื้อๆ หาลูกค้าเก่าไม่เจอ */}
+                {conversations.length >= listLimit && listLimit < 500 && (
+                  <button
+                    onClick={() => setListLimit(n => Math.min(n + 50, 500))}
+                    disabled={loadingList}
+                    style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+                      width: '100%', padding: '16px 12px', minHeight: 52,
+                      background: 'transparent', border: 'none', borderTop: `1px solid ${BORDER}`,
+                      cursor: loadingList ? 'wait' : 'pointer', fontFamily: 'inherit',
+                      fontSize: 13, fontWeight: 800, color: PRIMARY,
+                    }}
+                  >
+                    {loadingList
+                      ? <><RefreshCw size={14} style={{ animation: 'spin 1s linear infinite' }} /> กำลังโหลด...</>
+                      : <>โหลดแชทเก่าเพิ่ม</>}
+                  </button>
+                )}
+              </>
             )}
           </div>
         </section>
@@ -1597,8 +1665,18 @@ export default function InboxPage() {
                   padding: '12px 18px', background: 'linear-gradient(135deg, #eaf2fd, #dcebff)',
                   borderTop: `1px solid ${BORDER2}`,
                 }}>
-                  <div style={{ fontSize: 11, fontWeight: 800, color: PRIMARY, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 5 }}>
-                    <Sparkles size={12} /> AI แนะนำคำตอบ — กดเพื่อใช้
+                  <div style={{ fontSize: 12, fontWeight: 800, color: PRIMARY, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <Sparkles size={13} />
+                    <span style={{ flex: 1 }}>AI แนะนำคำตอบ — กดเพื่อใช้</span>
+                    {/* เดิมปิดไม่ได้ ต้องเลือกสักอันหรือสลับแชทหนี */}
+                    <button
+                      onClick={() => setAiSuggestions([])}
+                      aria-label="ปิดคำแนะนำ AI"
+                      title="ปิดคำแนะนำ"
+                      style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: PRIMARY, display: 'flex', padding: 4, minHeight: 30, minWidth: 30, alignItems: 'center', justifyContent: 'center' }}
+                    >
+                      <X size={15} />
+                    </button>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                     {aiSuggestions.map((s, i) => (
@@ -2123,8 +2201,10 @@ export default function InboxPage() {
           }
           .ib-main { margin-left: 0 !important; padding-top: 0 !important; height: var(--app-height, 100svh) !important; width: 100% !important; }
           .ib-mobile-bar { display: flex !important; }
-          /* หน้าเลือกช่องทาง — เต็มจอบนมือถือ (ครอบ sidebar/mobile bar) */
-          .ib-channel-gate { left: 0 !important; }
+          /* หน้าเลือกช่องทาง — เต็มจอบนมือถือ
+             ต้องดันลงใต้ mobile bar (fixed สูง 52px, z-40) เพราะ gate อยู่ใน <main>
+             ที่มี z-index 1 จึงชนะ mobile bar ด้วย z-index ไม่ได้ */
+          .ib-channel-gate { left: 0 !important; top: 52px !important; }
           /* รายการแชท (ยังไม่เปิดแชท): mobile bar เป็น fixed → ดันเนื้อหาลงมาไม่ให้โดนบัง */
           .ib-root[data-active="0"] .ib-main { padding-top: 52px !important; }
           /* page bar เลื่อนแนวนอนได้ (เฉพาะตัวมันเอง) */
@@ -2211,14 +2291,17 @@ export default function InboxPage() {
         /* แถวเดียวเฉพาะตอนคอลัมน์แชทกว้างพอจริง — ที่ 821-1080px ยังมี sidebar 244 + ลิสต์ 290
            ทำให้เหลือที่ช่องพิมพ์แค่ไม่กี่ px ถ้าบังคับแถวเดียว */
         @media (min-width: 1100px) {
-          .ib-composer { flex-direction: row; align-items: flex-end; gap: 8px; }
+          /* flex-wrap: ถ้าที่ไม่พอ (เช่น 1281-1350px ตอนแผงขวาเปิด) ให้ตกลงมาเป็น 2 แถวเอง
+             ไม่งั้นปุ่ม "ส่ง" ล้นออกนอกคอลัมน์แล้วโดนตัด กดไม่ได้ */
+          .ib-composer { flex-direction: row; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
           .ib-composer-input { flex: 1; min-width: 240px; }
         }
 
         /* toast ต้องไม่ทับแถวช่องพิมพ์ตอนเปิดแชทอยู่บนมือถือ */
         @media (max-width: 820px) {
+          /* 240px = composer 2 แถวตอนช่องพิมพ์ขยายสูงสุด (140px) + ปุ่ม + ระยะขอบ */
           .ib-toast-above-composer {
-            bottom: calc(env(safe-area-inset-bottom, 0px) + 138px) !important;
+            bottom: calc(env(safe-area-inset-bottom, 0px) + 240px) !important;
           }
         }
         /* จอแคบสุด (iPhone SE 320px / in-app browser ที่บีบความกว้าง) */
