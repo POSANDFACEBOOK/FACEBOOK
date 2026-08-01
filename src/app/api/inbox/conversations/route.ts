@@ -66,7 +66,9 @@ export async function GET(req: Request) {
     else query = query.eq('is_archived', false)  // default = active
 
     if (q) {
-      query = query.or(`customer_name.ilike.%${q}%,last_message.ilike.%${q}%`)
+      // ต้อง quote ค่า ไม่งั้นคำที่มีลูกน้ำ/วงเล็บ (เช่น "ข้าวผัด,ต้มยำ") จะทำให้ PostgREST parse ไม่ผ่าน → 500
+      const safe = q.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+      query = query.or(`customer_name.ilike."%${safe}%",last_message.ilike."%${safe}%"`)
     }
 
     const { data: conversations, error } = await query

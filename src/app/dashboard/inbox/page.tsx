@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useRef, useState, ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { useSession, signOut } from 'next-auth/react'
 import Link from 'next/link'
 import {
@@ -50,15 +51,16 @@ const sentimentConfig: Record<string, { label: string; emoji: string; color: str
   negative: { label: 'ไม่พอใจ', emoji: '😡', color: RED },
 }
 
-// สีประจำเพจ — เรียงให้ index ติดกันต่างกันมากที่สุด (เพจ 6 อันแรกจะได้ blue/red/green/amber/violet/teal)
+// สีประจำเพจ — เลี่ยงแดง/ส้ม/เขียวสด ที่ระบบใช้สื่อ "ผิดพลาด / เตือน / สำเร็จ"
+// (เพจสีแดงทำให้แอดมินตกใจคิดว่าแชทมีปัญหา) → ใช้โทนเย็น+ม่วง/ชมพู/เทา แทน
 const PAGE_PALETTE = [
   { bg: '#dbeafe', border: '#2563eb', text: '#1d4ed8', avatar: 'linear-gradient(135deg, #60a5fa, #2563eb)' }, // blue
-  { bg: '#fee2e2', border: '#dc2626', text: '#b91c1c', avatar: 'linear-gradient(135deg, #f87171, #dc2626)' }, // red
-  { bg: '#dcfce7', border: '#16a34a', text: '#15803d', avatar: 'linear-gradient(135deg, #4ade80, #16a34a)' }, // green
-  { bg: '#fef3c7', border: '#d97706', text: '#b45309', avatar: 'linear-gradient(135deg, #fbbf24, #d97706)' }, // amber
   { bg: '#f3e8ff', border: '#7c3aed', text: '#6d28d9', avatar: 'linear-gradient(135deg, #a78bfa, #7c3aed)' }, // violet
   { bg: '#ccfbf1', border: '#0d9488', text: '#0f766e', avatar: 'linear-gradient(135deg, #2dd4bf, #0d9488)' }, // teal
   { bg: '#fce7f3', border: '#db2777', text: '#be185d', avatar: 'linear-gradient(135deg, #f472b6, #db2777)' }, // pink
+  { bg: '#e0e7ff', border: '#4f46e5', text: '#4338ca', avatar: 'linear-gradient(135deg, #818cf8, #4f46e5)' }, // indigo
+  { bg: '#cffafe', border: '#0891b2', text: '#0e7490', avatar: 'linear-gradient(135deg, #22d3ee, #0891b2)' }, // cyan
+  { bg: '#ede9fe', border: '#6d28d9', text: '#5b21b6', avatar: 'linear-gradient(135deg, #c4b5fd, #6d28d9)' }, // purple
   { bg: '#e2e8f0', border: '#475569', text: '#334155', avatar: 'linear-gradient(135deg, #94a3b8, #475569)' }, // slate
 ]
 // แมป page_id → ลำดับ (เรียงตาม id เพื่อให้สีคงที่) → สีไม่ซ้ำกันถ้าเพจ ≤ 8
@@ -88,6 +90,20 @@ function timeAgo(d?: string): string {
   const day = Math.floor(h / 24)
   if (day < 7) return `${day} วัน`
   return new Date(d).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' })
+}
+
+// แปลง error ดิบจาก API/เบราว์เซอร์ → ข้อความที่แอดมินร้านอ่านแล้วรู้ว่าต้องทำอะไรต่อ
+function friendlyError(raw?: string): string {
+  const e = String(raw || '')
+  if (!e) return 'เกิดข้อผิดพลาด ลองใหม่อีกครั้ง'
+  if (/^⚠️/.test(e)) return e  // ข้อความที่เขียนให้ผู้ใช้อยู่แล้ว (กฎ 24 ชม./#551)
+  if (/Unauthorized|401/i.test(e)) return 'เซสชันหมดอายุ — กรุณาเข้าสู่ระบบใหม่'
+  if (/Forbidden|403/i.test(e)) return 'ไม่มีสิทธิ์ในเพจนี้ — ติดต่อเจ้าของเพจให้เพิ่มสิทธิ์'
+  if (/Page token not found|190/i.test(e)) return 'การเชื่อมต่อเพจหมดอายุ — ให้เจ้าของเพจเข้าสู่ระบบด้วย Facebook ใหม่อีกครั้ง'
+  if (/Failed to fetch|NetworkError|network/i.test(e)) return 'เชื่อมต่อไม่ได้ — ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่'
+  if (/not found|404/i.test(e)) return 'ไม่พบข้อมูลนี้แล้ว — ลองรีเฟรชหน้าจอ'
+  if (/timeout|timed out/i.test(e)) return 'ใช้เวลานานเกินไป — ลองใหม่อีกครั้ง'
+  return e
 }
 
 export default function InboxPage() {
@@ -130,30 +146,77 @@ export default function InboxPage() {
   const [unreadByPage, setUnreadByPage] = useState<Record<string, number>>({})
   const [needsReplyByPage, setNeedsReplyByPage] = useState<Record<string, number>>({})
   const [markingRead, setMarkingRead] = useState(false)
+  const [showChatMenu, setShowChatMenu] = useState(false)
+  const [sessionExpired, setSessionExpired] = useState(false)
+  const [toast, setToast] = useState<{ msg: string; undo?: () => void } | null>(null)
+  // ค่าตั้งค่าต่อเพจ (ตอนนี้ใช้เช็คว่าเจ้าของปิดปุ่ม "AI ช่วยตอบ" ไว้ไหม)
+  const [aiEnabledByPage, setAiEnabledByPage] = useState<Record<string, boolean>>({})
   const [errorBanner, setErrorBanner] = useState<string | null>(null)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const pollRef = useRef<any>(null)
   const openReqRef = useRef<string>('')  // กัน race ตอนเปิดหลายแชทเร็วๆ
+  const draftRef = useRef<HTMLTextAreaElement>(null)
+
+  // คอม = Enter ส่ง / มือถือ = Enter ขึ้นบรรทัดใหม่
+  const [isDesktop, setIsDesktop] = useState(false)
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 821px) and (pointer: fine)')
+    const on = () => setIsDesktop(mq.matches)
+    on(); mq.addEventListener('change', on)
+    return () => mq.removeEventListener('change', on)
+  }, [])
+
+  // ช่องพิมพ์ขยายตามจำนวนบรรทัด (สูงสุด 140px) — เดิม rows=1 ตายตัว พิมพ์ยาวแล้วอ่านไม่ออก
+  useEffect(() => {
+    const el = draftRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 140)}px`
+  }, [draft])
 
   // ── Load conversations ──
-  async function loadConversations() {
-    setLoadingList(true)
+  // silent = โหลดเบื้องหลัง (poll/realtime) → ไม่โชว์สปินเนอร์ กันจอกระพริบทุก 7 วิ
+  async function loadConversations(opts?: { silent?: boolean }) {
+    const silent = opts?.silent
+    if (!silent) setLoadingList(true)
     const params = new URLSearchParams()
     if (pageFilter) params.set('pageId', pageFilter)
     if (statusFilter !== 'all') params.set('filter', statusFilter)
-    if (search) params.set('q', search)
+    if (debouncedSearch) params.set('q', debouncedSearch)
 
-    const res = await fetch(`/api/inbox/conversations?${params.toString()}`).then(r => r.json())
-    setConversations(res.conversations || [])
-    registerPageOrder(res.pages || [])  // กำหนดสีประจำเพจ (ไม่ซ้ำ) ก่อน render
-    setPages(res.pages || [])
-    setTotalUnread(res.totalUnread || 0)
-    setTotalNeedsReply(res.totalNeedsReply || 0)
-    setUnreadByPage(res.unreadByPage || {})
-    setNeedsReplyByPage(res.needsReplyByPage || {})
-    setLoadingList(false)
+    try {
+      const r = await fetch(`/api/inbox/conversations?${params.toString()}`)
+      if (r.status === 401 || r.status === 403) { setSessionExpired(true); return }
+      const res = await r.json()
+      if (res.error) { if (!silent) setErrorBanner(friendlyError(res.error)); return }
+      setSessionExpired(false)
+      setConversations(res.conversations || [])
+      registerPageOrder(res.pages || [])  // กำหนดสีประจำเพจ (ไม่ซ้ำ) ก่อน render
+      setPages(res.pages || [])
+      setTotalUnread(res.totalUnread || 0)
+      setTotalNeedsReply(res.totalNeedsReply || 0)
+      setUnreadByPage(res.unreadByPage || {})
+      setNeedsReplyByPage(res.needsReplyByPage || {})
+    } catch {
+      // เน็ตหลุด — ไม่ล้างของเดิมบนจอ รอบถัดไปค่อยลองใหม่
+      if (!silent) setErrorBanner('เชื่อมต่อไม่ได้ — ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่')
+    } finally {
+      if (!silent) setLoadingList(false)
+    }
+  }
+
+  // รวมข้อความจาก server กับข้อความที่ "กำลังส่ง/ส่งไม่สำเร็จเพราะเน็ต" ที่ยังอยู่บนจอ
+  // → กัน poll/realtime ลบฟองข้อความที่ยังส่งไม่จบทิ้งกลางคัน
+  function mergeServerMessages(serverMsgs: any[]) {
+    setMessages(prev => {
+      const keep = prev.filter(m =>
+        typeof m.id === 'string' && m.id.startsWith('temp-') &&
+        (m.delivery_status === 'sending' || m.local_only)
+      )
+      return keep.length ? [...serverMsgs, ...keep] : serverMsgs
+    })
   }
 
   async function loadMessages(conv: any) {
@@ -166,6 +229,7 @@ export default function InboxPage() {
     setDraft('')
     setAiSuggestions([])
     setErrorBanner(null)
+    setShowChatMenu(false)
     setLoadingMessages(true)
     // optimistic: เคลียร์ทั้ง badge ของ row + ตัวเลขรวม (page tile / ชิป "ใหม่" / sidebar) ทันที
     const hadUnread = (conv.unread_count || 0) > 0
@@ -266,6 +330,10 @@ export default function InboxPage() {
         const top = vv ? Math.max(Math.round(vv.offsetTop), 0) : 0
         root.style.setProperty('--app-height', `${h}px`)
         root.style.setProperty('--app-offset', `${top}px`)
+        // คีย์บอร์ดเปิด = viewport หดลงมากกว่า 120px → ตัด safe-area padding ทิ้ง
+        // (ไม่งั้นมีแถบขาวคั่นระหว่างช่องพิมพ์กับคีย์บอร์ด)
+        const kbOpen = window.innerHeight - h > 120
+        root.style.setProperty('--kb-open', kbOpen ? '0' : '1')
       })
     }
     apply()
@@ -307,6 +375,13 @@ export default function InboxPage() {
   // ถ้าเพจนั้นยังไม่มีข้อความใน DB เลย (ไม่เคย sync) → auto-trigger sync
   // throttle ด้วย ref → ไม่ sync ซ้ำเพจเดียวกันบ่อยกว่า 2 นาที
   const lastPageSyncRef = useRef<Record<string, number>>({})
+
+  // หน่วงคำค้น 350ms แล้วค่อยยิง server (เดิมกรองแค่แชทที่โหลดมาแล้ว → ลูกค้าเก่าหาไม่เจอ)
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 350)
+    return () => clearTimeout(t)
+  }, [search])
   useEffect(() => {
     let cancelled = false
     ;(async () => {
@@ -314,32 +389,43 @@ export default function InboxPage() {
       const params = new URLSearchParams()
       if (pageFilter) params.set('pageId', pageFilter)
       if (statusFilter !== 'all') params.set('filter', statusFilter)
-      if (search) params.set('q', search)
+      if (debouncedSearch) params.set('q', debouncedSearch)
       setLoadingList(true)
-      const res = await fetch(`/api/inbox/conversations?${params.toString()}`).then(r => r.json())
+      let res: any = {}
+      try {
+        const r = await fetch(`/api/inbox/conversations?${params.toString()}`)
+        if (r.status === 401 || r.status === 403) { if (!cancelled) { setSessionExpired(true); setLoadingList(false) } ; return }
+        res = await r.json()
+      } catch {
+        if (!cancelled) { setErrorBanner('เชื่อมต่อไม่ได้ — ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่'); setLoadingList(false) }
+        return
+      }
       if (cancelled) return
       setConversations(res.conversations || [])
+      registerPageOrder(res.pages || [])
       setPages(res.pages || [])
       setTotalUnread(res.totalUnread || 0)
+      setTotalNeedsReply(res.totalNeedsReply || 0)
       setUnreadByPage(res.unreadByPage || {})
-    setNeedsReplyByPage(res.needsReplyByPage || {})
+      setNeedsReplyByPage(res.needsReplyByPage || {})
       setLoadingList(false)
 
       // Auto-sync ถ้าเลือกเพจที่ยังไม่มี conv ใน DB + ไม่ได้ sync ใน 2 นาทีล่าสุด
-      if (pageFilter && (res.conversations || []).length === 0) {
+      // (ไม่ทำตอนกำลังค้นหา — ผลว่างเพราะไม่ตรงคำค้น ไม่ใช่เพราะยังไม่ sync)
+      if (pageFilter && !debouncedSearch && (res.conversations || []).length === 0) {
         const now = Date.now()
         const last = lastPageSyncRef.current[pageFilter] || 0
         if (now - last > 2 * 60 * 1000) {
           lastPageSyncRef.current[pageFilter] = now
           setPageSyncing(true)
           await backgroundSync(pageFilter)
-          if (!cancelled) await loadConversations()
+          if (!cancelled) await loadConversations({ silent: true })
           if (!cancelled) setPageSyncing(false)
         }
       }
     })()
     return () => { cancelled = true }
-  }, [pageFilter, statusFilter])
+  }, [pageFilter, statusFilter, debouncedSearch])
 
   // Poll DB ทุก 7 วิ (poll DB ของเราเอง ไม่กิน rate limit FB) → จออัปเดตเองไม่ต้องรีเฟรช
   // Background sync FB ทุก ~5 นาที (กัน webhook ตก)
@@ -349,12 +435,15 @@ export default function InboxPage() {
     const SYNC_EVERY_TICKS = 43  // 43 × 7s ≈ 5 นาที
     pollRef.current = setInterval(() => {
       tick++
-      loadConversations()
+      loadConversations({ silent: true })
       if (activeConv) {
-        fetch(`/api/inbox/conversations/${activeConv.id}`)
+        const convId = activeConv.id
+        fetch(`/api/inbox/conversations/${convId}`)
           .then(r => r.json())
           .then(res => {
-            if (res.messages) setMessages(res.messages)
+            // ต้องยังเปิดแชทเดิมอยู่ ไม่งั้นข้อความลูกค้าคนอื่นจะโผล่ผิดแชท
+            if (openReqRef.current !== convId) return
+            if (res.messages) mergeServerMessages(res.messages)
           })
           .catch(() => {})
       }
@@ -363,7 +452,7 @@ export default function InboxPage() {
       }
     }, 7000)
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
-  }, [activeConv?.id, pageFilter, statusFilter, search])
+  }, [activeConv?.id, pageFilter, statusFilter, debouncedSearch])
 
   // ── Realtime: เด้งทันทีเมื่อมีข้อความ/แชทใหม่ (Supabase Realtime) ──
   // ถ้ายังไม่ได้ตั้ง SUPABASE_JWT_SECRET → endpoint คืน token=null → ใช้ polling 30 วิ แทน
@@ -373,12 +462,16 @@ export default function InboxPage() {
     if (rtTimerRef.current) return  // coalesce burst ของข้อความ
     rtTimerRef.current = setTimeout(() => {
       rtTimerRef.current = null
-      loadConversations()
+      loadConversations({ silent: true })
       const ac = activeConv
       if (ac) {
-        fetch(`/api/inbox/conversations/${ac.id}`)
+        const convId = ac.id
+        fetch(`/api/inbox/conversations/${convId}`)
           .then(r => r.json())
-          .then(res => { if (res.messages) setMessages(res.messages) })
+          .then(res => {
+            if (openReqRef.current !== convId) return  // สลับแชทไปแล้ว — ทิ้งผลเก่า
+            if (res.messages) mergeServerMessages(res.messages)
+          })
           .catch(() => {})
       }
     }, 250)
@@ -405,6 +498,42 @@ export default function InboxPage() {
     return () => { cancelled = true; try { channel?.unsubscribe(); client?.removeAllChannels?.() } catch {} }
   }, [])
 
+  // โหลดค่า "เปิดปุ่ม AI ช่วยตอบ" ของเพจที่กำลังเปิดแชทอยู่ (ไม่งั้นสวิตช์ในตั้งค่าไม่มีผลจริง)
+  useEffect(() => {
+    const pid = activeConv?.page_id
+    if (!pid || pid in aiEnabledByPage) return
+    let cancelled = false
+    fetch(`/api/inbox/settings?pageId=${pid}`)
+      .then(r => r.json())
+      .then(d => {
+        if (cancelled) return
+        const s = d.settings?.[0]
+        setAiEnabledByPage(prev => ({ ...prev, [pid]: s ? s.ai_assist_enabled !== false : true }))
+      })
+      .catch(() => { if (!cancelled) setAiEnabledByPage(prev => ({ ...prev, [pid]: true })) })
+    return () => { cancelled = true }
+  }, [activeConv?.page_id, aiEnabledByPage])
+
+  // กด Esc = ปิดชั้นบนสุดที่เปิดอยู่ (เมนู → modal) — มาตรฐานที่ผู้ใช้คาดหวัง
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (showChatMenu) { setShowChatMenu(false); return }
+      if (renamePage) { setRenamePage(null); return }
+      if (showSavedReplies) { setShowSavedReplies(false); return }
+      if (showSettings) { setShowSettings(false); return }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [showChatMenu, renamePage, showSavedReplies, showSettings])
+
+  // toast หายเองใน 5 วิ
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(null), 5000)
+    return () => clearTimeout(t)
+  }, [toast])
+
   // รีเฟรชทันทีเมื่อกลับมาที่แอป/แท็บ (สลับแอปแล้วกลับมา → เห็นล่าสุดเลย ไม่ต้องรอ poll)
   useEffect(() => {
     const onVisible = () => { if (typeof document === 'undefined' || document.visibilityState === 'visible') rtRefreshRef.current() }
@@ -414,16 +543,19 @@ export default function InboxPage() {
   }, [])
 
   // ── Send message ──
-  async function handleSend() {
-    if (!activeConv || !draft.trim() || sending) return
+  async function handleSend(overrideText?: string) {
+    const text = (overrideText ?? draft).trim()
+    if (!activeConv || !text || sending) return
+    const convId = activeConv.id          // ผูกกับแชทนี้ — สลับแชทระหว่างส่งจะไม่เด้งผิดที่
+    const isThis = () => openReqRef.current === convId
     setSending(true)
     setErrorBanner(null)
-    const text = draft.trim()
-    setDraft('')
+    if (!overrideText) setDraft('')
 
     // optimistic
     const optimistic = {
       id: `temp-${Date.now()}`,
+      conversation_id: convId,
       direction: 'outbound',
       message_text: text,
       sent_by: 'page_user',
@@ -437,21 +569,96 @@ export default function InboxPage() {
       const res = await fetch('/api/inbox/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversationId: activeConv.id, text }),
+        body: JSON.stringify({ conversationId: convId, text }),
       })
-      const data = await res.json()
+      const data = await res.json().catch(() => ({}))
       if (!res.ok || !data.success) {
-        setErrorBanner(data.error || 'ส่งไม่สำเร็จ')
-        setMessages(prev => prev.map(m => m.id === optimistic.id ? { ...m, delivery_status: 'failed', error_message: data.error } : m))
-        if (data.blockCode) setActiveConv((c: any) => c ? { ...c, send_block_code: data.blockCode } : c)
-        loadConversations()
+        const msg = friendlyError(data.error) || 'ส่งไม่สำเร็จ'
+        if (isThis()) {
+          setErrorBanner(msg)
+          setMessages(prev => prev.map(m => m.id === optimistic.id ? { ...m, delivery_status: 'failed', error_message: msg } : m))
+          if (data.blockCode) setActiveConv((c: any) => c ? { ...c, send_block_code: data.blockCode } : c)
+        }
+        loadConversations({ silent: true })
       } else {
-        // replace optimistic with real
-        setMessages(prev => prev.map(m => m.id === optimistic.id ? data.message : m))
-        loadConversations()
+        if (isThis()) setMessages(prev => prev.map(m => m.id === optimistic.id ? data.message : m))
+        loadConversations({ silent: true })
       }
     } catch (e: any) {
-      setErrorBanner(e.message)
+      // เน็ตหลุด — server ไม่มีแถวนี้ → ต้องคง local ไว้ให้กด "ส่งอีกครั้ง" ได้ (local_only)
+      const msg = friendlyError(e?.message)
+      if (isThis()) {
+        setErrorBanner(msg)
+        setMessages(prev => prev.map(m => m.id === optimistic.id
+          ? { ...m, delivery_status: 'failed', error_message: msg, local_only: true } : m))
+      }
+    }
+    setSending(false)
+  }
+
+  // แทรกข้อความสำเร็จรูป/คำแนะนำ AI — ต่อท้ายของที่พิมพ์ค้างไว้ ไม่ทับทิ้ง
+  function insertIntoDraft(text: string) {
+    setDraft(prev => {
+      const cur = prev.trim()
+      return cur ? `${cur}\n${text}` : text
+    })
+    setTimeout(() => { const el = draftRef.current; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length) } }, 30)
+  }
+
+  // ส่งอีกครั้งจากฟองข้อความที่ส่งไม่สำเร็จ (ทั้งข้อความและรูป)
+  async function retryMessage(m: any) {
+    if (sending || uploading) return
+    // เอาฟองเดิมออกก่อน แล้วส่งใหม่ (ถ้าเป็น local_only ไม่มีแถวใน DB จึงลบทิ้งได้เลย)
+    setMessages(prev => prev.filter(x => x.id !== m.id))
+    const imgUrl = (m.attachments || []).find((a: any) => a?.type === 'image' && a.url)?.url
+    if (imgUrl) await sendImageUrl(imgUrl)
+    else if (m.message_text) await handleSend(m.message_text)
+  }
+
+  // ── ส่งรูปที่อัปโหลดแล้ว (ใช้ทั้งตอนส่งครั้งแรกและตอนกด "ส่งอีกครั้ง") ──
+  async function sendImageUrl(imageUrl: string) {
+    if (!activeConv || sending) return
+    const convId = activeConv.id
+    const isThis = () => openReqRef.current === convId
+    setSending(true)
+    setErrorBanner(null)
+    const optimistic = {
+      id: `temp-${Date.now()}`,
+      conversation_id: convId,
+      direction: 'outbound',
+      message_text: null,
+      attachments: [{ type: 'image', url: imageUrl }],
+      sent_by: 'page_user',
+      delivery_status: 'sending',
+      created_at: new Date().toISOString(),
+    }
+    setMessages(prev => [...prev, optimistic])
+    setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
+    try {
+      const res = await fetch('/api/inbox/send', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId: convId, imageUrl }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) {
+        const msg = friendlyError(data.error) || 'ส่งรูปไม่สำเร็จ'
+        if (isThis()) {
+          setErrorBanner(msg)
+          setMessages(prev => prev.map(m => m.id === optimistic.id ? { ...m, delivery_status: 'failed', error_message: msg } : m))
+          if (data.blockCode) setActiveConv((c: any) => c ? { ...c, send_block_code: data.blockCode } : c)
+        }
+        loadConversations({ silent: true })
+      } else {
+        if (isThis()) setMessages(prev => prev.map(m => m.id === optimistic.id ? data.message : m))
+        loadConversations({ silent: true })
+      }
+    } catch (e: any) {
+      const msg = friendlyError(e?.message)
+      if (isThis()) {
+        setErrorBanner(msg)
+        setMessages(prev => prev.map(m => m.id === optimistic.id
+          ? { ...m, delivery_status: 'failed', error_message: msg, local_only: true } : m))
+      }
     }
     setSending(false)
   }
@@ -466,56 +673,41 @@ export default function InboxPage() {
     setUploading(true)
     setErrorBanner(null)
     const convId = activeConv.id
+    const isThis = () => openReqRef.current === convId
     const previewUrl = URL.createObjectURL(file)
-    const optimistic = {
-      id: `temp-${Date.now()}`,
-      direction: 'outbound',
-      message_text: null,
+    const tempId = `temp-${Date.now()}`
+    // โชว์ตัวอย่างรูปทันทีระหว่างอัปโหลด
+    setMessages(prev => [...prev, {
+      id: tempId, conversation_id: convId, direction: 'outbound', message_text: null,
       attachments: [{ type: 'image', url: previewUrl }],
-      sent_by: 'page_user',
-      delivery_status: 'sending',
-      created_at: new Date().toISOString(),
-    }
-    setMessages(prev => [...prev, optimistic])
+      sent_by: 'page_user', delivery_status: 'sending', created_at: new Date().toISOString(),
+    }])
     setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
 
-    let swapped = false
     try {
-      // 1) อัปโหลดขึ้น storage
       const fd = new FormData()
       fd.append('file', file)
       fd.append('conversationId', convId)
       const upRes = await fetch('/api/inbox/upload', { method: 'POST', body: fd })
-      const upData = await upRes.json()
-      if (!upRes.ok || !upData.url) throw new Error(upData.error || 'อัปโหลดไม่สำเร็จ')
+      const upData = await upRes.json().catch(() => ({}))
+      if (!upRes.ok || !upData.url) throw new Error(upData.error || 'อัปโหลดรูปไม่สำเร็จ')
 
-      // แทน blob preview ด้วย URL จริงทันที (กันรูปหายถ้า send ช้า/รีเฟรช) + คืน blob
-      setMessages(prev => prev.map(m => m.id === optimistic.id ? { ...m, attachments: [{ type: 'image', url: upData.url }] } : m))
-      URL.revokeObjectURL(previewUrl); swapped = true
-
-      // 2) ส่งให้ลูกค้า
-      const res = await fetch('/api/inbox/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversationId: convId, imageUrl: upData.url }),
-      })
-      const data = await res.json()
-      if (!res.ok || !data.success) {
-        setErrorBanner(data.error || 'ส่งรูปไม่สำเร็จ')
-        setMessages(prev => prev.map(m => m.id === optimistic.id ? { ...m, delivery_status: 'failed', error_message: data.error } : m))
-        if (data.blockCode) setActiveConv((c: any) => c ? { ...c, send_block_code: data.blockCode } : c)
-        loadConversations()
-      } else {
-        setMessages(prev => prev.map(m => m.id === optimistic.id ? data.message : m))
-        loadConversations()
-      }
-    } catch (e: any) {
-      setErrorBanner(e.message)
-      setMessages(prev => prev.map(m => m.id === optimistic.id ? { ...m, delivery_status: 'failed', error_message: e.message } : m))
-    } finally {
-      if (!swapped) setTimeout(() => URL.revokeObjectURL(previewUrl), 30000)
+      // อัปโหลดเสร็จ → เอาฟองตัวอย่างออก แล้วส่งจริงด้วย URL ถาวร
+      setMessages(prev => prev.filter(m => m.id !== tempId))
+      URL.revokeObjectURL(previewUrl)
       setUploading(false)
+      await sendImageUrl(upData.url)
+      return
+    } catch (e: any) {
+      const msg = friendlyError(e?.message)
+      if (isThis()) {
+        setErrorBanner(msg)
+        setMessages(prev => prev.map(m => m.id === tempId
+          ? { ...m, delivery_status: 'failed', error_message: msg, local_only: true } : m))
+      }
+      setTimeout(() => URL.revokeObjectURL(previewUrl), 30000)
     }
+    setUploading(false)
   }
 
   // ── AI Suggest ──
@@ -534,24 +726,45 @@ export default function InboxPage() {
         setAiSuggestions(data.suggestions)
         setActiveConv((c: any) => c ? { ...c, ai_category: data.category, ai_sentiment: data.sentiment, ai_summary: data.summary } : c)
       } else {
-        setErrorBanner(data.error || 'AI ไม่สามารถสร้างคำแนะนำได้')
+        setErrorBanner(friendlyError(data.error) || 'AI ยังสร้างคำแนะนำไม่ได้ ลองใหม่อีกครั้ง')
       }
     } catch (e: any) {
-      setErrorBanner(e.message)
+      setErrorBanner(friendlyError(e?.message))
     }
     setAiLoading(false)
   }
 
   // ── Conversation actions ──
-  async function patchConv(patch: any) {
+  async function patchConv(patch: any, opts?: { silentToast?: boolean }) {
     if (!activeConv) return
-    await fetch(`/api/inbox/conversations/${activeConv.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    })
-    setActiveConv((c: any) => c ? { ...c, ...patch } : c)
-    loadConversations()
+    const conv = activeConv
+    const before = Object.fromEntries(Object.keys(patch).map(k => [k, (conv as any)[k]]))
+    setActiveConv((c: any) => c ? { ...c, ...patch } : c)   // optimistic
+    try {
+      const res = await fetch(`/api/inbox/conversations/${conv.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        setActiveConv((c: any) => c && c.id === conv.id ? { ...c, ...before } : c)  // rollback
+        setErrorBanner(friendlyError(d.error) || 'บันทึกไม่สำเร็จ')
+        return
+      }
+      // แจ้งผล + ให้เลิกทำได้ (โดยเฉพาะจัดเก็บ ที่ทำให้แชทหายจากลิสต์)
+      if (!opts?.silentToast) {
+        const label = 'is_archived' in patch ? (patch.is_archived ? 'จัดเก็บแชทแล้ว' : 'เอาออกจากที่จัดเก็บแล้ว')
+          : 'is_resolved' in patch ? (patch.is_resolved ? 'จบบทสนทนาแล้ว' : 'เปิดบทสนทนาใหม่แล้ว')
+          : 'is_starred' in patch ? (patch.is_starred ? 'ติดดาวแล้ว' : 'เอาดาวออกแล้ว')
+          : 'บันทึกแล้ว'
+        setToast({ msg: label, undo: () => patchConv(before, { silentToast: true }) })
+      }
+      loadConversations({ silent: true })
+    } catch (e: any) {
+      setActiveConv((c: any) => c && c.id === conv.id ? { ...c, ...before } : c)
+      setErrorBanner(friendlyError(e?.message))
+    }
   }
 
   // ── Render ──
@@ -565,45 +778,80 @@ export default function InboxPage() {
   const channelUnread = sumUnread(channelPages)
   const channelNeedsReply = channelPages.reduce((s, p) => s + (needsReplyByPage[p.id] || 0), 0)
 
-  // อ่านทั้งหมด — เคลียร์ unread ของช่องทางที่เลือก (ใช้ตอนจัดการที่ LINE OA แล้วอยากให้ตัวเลขตรง)
+  // ขอบเขตที่แอดมิน "เห็นอยู่จริง" — เลือกเพจอยู่ = เฉพาะเพจนั้น ไม่ใช่ทั้งช่องทาง
+  const scopedUnread = pageFilter ? (unreadByPage[pageFilter] || 0) : channelUnread
+  const scopedName = pageFilter
+    ? (() => { const p: any = channelPages.find((x: any) => x.id === pageFilter); return p?.nickname || p?.page_name || 'เพจนี้' })()
+    : `ทุกเพจ${channelFilter ? ` ${channelFilter === 'line' ? 'LINE' : 'Facebook'}` : ''}`
+
+  // อ่านทั้งหมด — เคลียร์ unread ตามขอบเขตที่เห็นอยู่ (ใช้ตอนจัดการที่ LINE OA แล้วอยากให้ตัวเลขตรง)
   async function markAllRead() {
-    if (markingRead || channelUnread === 0) return
+    if (markingRead || scopedUnread === 0) return
+    if (!window.confirm(`ทำเครื่องหมายว่าอ่านแล้ว ${scopedUnread} แชท ใน "${scopedName}"?\n\nการกระทำนี้ย้อนกลับไม่ได้`)) return
     setMarkingRead(true)
-    const ids = new Set(channelPages.map((p: any) => p.id))
+    const ids = new Set<string>(pageFilter ? [pageFilter] : channelPages.map((p: any) => p.id))
+    // optimistic
     setConversations(prev => prev.map(c => ids.has(c.page_id) ? { ...c, unread_count: 0 } : c))
-    setUnreadByPage(prev => { const n = { ...prev }; ids.forEach(id => { n[id as string] = 0 }); return n })
-    setTotalUnread(t => Math.max(0, t - channelUnread))
+    setUnreadByPage(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = 0 }); return n })
+    setTotalUnread(t => Math.max(0, t - scopedUnread))
     try {
-      await fetch('/api/inbox/mark-read', {
+      const res = await fetch('/api/inbox/mark-read', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(channelFilter ? { channel: channelFilter } : {}),
+        body: JSON.stringify(pageFilter ? { pageId: pageFilter } : (channelFilter ? { channel: channelFilter } : {})),
       })
-    } catch {}
-    finally { setMarkingRead(false); loadConversations() }
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) setErrorBanner(friendlyError(data.error) || 'ทำเครื่องหมายว่าอ่านแล้วไม่สำเร็จ')
+    } catch (e: any) {
+      setErrorBanner(friendlyError(e?.message))
+    }
+    finally { setMarkingRead(false); loadConversations({ silent: true }) }
   }
   const fbPages = pages.filter(p => channelOf(p) === 'facebook')
   const linePages = pages.filter(p => channelOf(p) === 'line')
 
+  // ล้างสถานะแชทที่เปิดอยู่ทั้งหมด (รวม openReqRef กันผลโหลดเก่าเด้งเปิดเองทีหลัง)
+  const clearOpenChat = () => {
+    openReqRef.current = ''
+    setActiveConv(null); setMessages([]); setDraft('')
+    setAiSuggestions([]); setErrorBanner(null); setShowChatMenu(false)
+  }
   const pickChannel = (ch: 'facebook' | 'line') => {
-    setChannelFilter(ch); setPageFilter(''); setActiveConv(null); setMessages([])
+    setChannelFilter(ch); setPageFilter(''); clearOpenChat()
   }
   // กลับไปหน้าเลือกช่องทาง (Facebook / LINE) ใหม่
   const backToChannels = () => {
-    setChannelFilter(null); setPageFilter(''); setActiveConv(null); setMessages([])
-    setDraft(''); setAiSuggestions([]); setErrorBanner(null)
+    setChannelFilter(null); setPageFilter(''); clearOpenChat()
   }
 
-  // ถ้ามีช่องทางเดียว → เลือกให้อัตโนมัติ (ไม่ต้องโชว์หน้าเลือก)
+  // เลือกช่องทางให้อัตโนมัติเมื่อมีช่องทางเดียว + กันค้างเมื่อเพจของช่องทางที่เลือกหายไป
+  // (เช่น เจ้าของถอนสิทธิ์เพจ / ยกเลิกการเชื่อม LINE) → ไม่งั้นกล่องข้อความว่างและกดออกไม่ได้
   useEffect(() => {
-    if (pages.length === 0 || channelFilter) return
+    if (pages.length === 0) return
     const chans = Array.from(new Set(pages.map(channelOf)))
-    if (chans.length === 1) setChannelFilter(chans[0] as 'facebook' | 'line')
+    if (!channelFilter) {
+      if (chans.length === 1) setChannelFilter(chans[0] as 'facebook' | 'line')
+      return
+    }
+    if (!chans.includes(channelFilter)) {
+      // ช่องทางที่เลือกไม่มีเพจแล้ว → เด้งไปช่องทางที่เหลือ หรือกลับหน้าเลือก
+      if (chans.length === 1) { setChannelFilter(chans[0] as 'facebook' | 'line'); setPageFilter(''); clearOpenChat() }
+      else backToChannels()
+    }
   }, [pages, channelFilter])
 
+  // เพจที่เลือกอยู่หายไป (ถูกถอนสิทธิ์/ปิดใช้งาน) → กลับไป "ทุกเพจ" แทนที่จะค้างว่างเปล่า
+  useEffect(() => {
+    if (!pageFilter || pages.length === 0) return
+    if (!pages.some(p => p.id === pageFilter)) setPageFilter('')
+  }, [pages, pageFilter])
+
+  // server กรองคำค้นให้แล้ว (ค้นทั้งฐานข้อมูล ไม่ใช่แค่ที่โหลดมา) — ที่นี่กรองแค่ช่องทาง
+  // ระหว่างรอ debounce ให้กรองแบบหยาบไปก่อน เพื่อให้จอตอบสนองทันที
+  const searchPending = search.trim() !== debouncedSearch
   const filteredConvs = conversations.filter(c => {
     if (channelFilter && (c.connected_pages?.channel || 'facebook') !== channelFilter) return false
-    if (!search) return true
-    const s = search.toLowerCase()
+    if (!searchPending || !search.trim()) return true
+    const s = search.trim().toLowerCase()
     return (c.customer_name || '').toLowerCase().includes(s)
       || (c.last_message || '').toLowerCase().includes(s)
   })
@@ -716,7 +964,9 @@ export default function InboxPage() {
       <main data-active={activeConv ? '1' : '0'} style={{ marginLeft: 244, height: '100vh', display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 1, overflow: 'hidden' }} className="ib-main">
         {/* เลือกช่องทางก่อน (Facebook / LINE) — โชว์เมื่อมีทั้งสองช่องทางและยังไม่เลือก */}
         {showChannelGate && (
-          <div className="ib-channel-gate" style={{ position: 'fixed', top: 0, right: 0, bottom: 0, left: 244, zIndex: 120, background: BG, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, gap: 20, overflowY: 'auto' }}>
+          <div className="ib-channel-gate" style={{ position: 'fixed', top: 0, right: 0, bottom: 0, left: 244, zIndex: 120, background: BG, display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '28px 24px', overflowY: 'auto' }}>
+            {/* margin auto = จัดกลางเมื่อจอสูงพอ / เลื่อนดูได้เมื่อจอเตี้ย (safe center รองรับไม่ทั่ว) */}
+            <div style={{ margin: 'auto 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20, width: '100%' }}>
             <div style={{ textAlign: 'center' }}>
               <div style={{ fontSize: 22, fontWeight: 900, color: TEXT }}>เลือกช่องทางที่จะตอบ</div>
               <div style={{ fontSize: 13, color: MUTED, fontWeight: 600, marginTop: 4 }}>แยกตอบ Facebook กับ LINE เพื่อไม่ให้สับสน</div>
@@ -744,6 +994,7 @@ export default function InboxPage() {
                   </button>
                 )
               })}
+            </div>
             </div>
           </div>
         )}
@@ -818,50 +1069,57 @@ export default function InboxPage() {
                 const unread = unreadByPage[p.id] || 0
                 const display = p.nickname || p.page_name
                 return (
-                  <button
-                    key={p.id}
-                    className="fbtap"
-                    onClick={() => setPageFilter(p.id)}
-                    title={p.nickname ? `${p.nickname} · ${p.page_name}` : p.page_name}
-                    style={{
-                      position: 'relative', padding: '9px 9px 9px 12px', borderRadius: 12,
-                      border: `2px solid ${pc.border}`,
-                      background: active ? pc.avatar : pc.bg,
-                      color: active ? 'white' : pc.text,
-                      fontSize: 12.5, fontWeight: 900, fontFamily: 'inherit', cursor: 'pointer',
-                      display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left',
-                      boxShadow: active ? `0 5px 16px ${pc.border}66` : `0 2px 8px ${pc.border}22`,
-                    }}
-                  >
-                    <span style={{
-                      width: 10, height: 10, borderRadius: '50%',
-                      background: active ? 'white' : pc.border, flexShrink: 0,
-                      boxShadow: active ? 'none' : `0 0 0 3px ${pc.border}22`,
-                    }} />
-                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {display}
-                    </span>
-                    {unread > 0 && (
-                      <span style={{
-                        background: active ? 'rgba(255,255,255,0.3)' : RED,
-                        color: 'white', fontSize: 10, fontWeight: 800,
-                        padding: '2px 7px', borderRadius: 999, minWidth: 20, textAlign: 'center',
-                        flexShrink: 0,
-                      }}>{unread > 99 ? '99+' : unread}</span>
-                    )}
-                    <span
-                      onClick={(e) => { e.stopPropagation(); openRename(p) }}
-                      title="ตั้งชื่อเล่นเพจ"
+                  // ปุ่มเลือกเพจ + ปุ่มแก้ชื่อ เป็นปุ่มแยกกัน (เดิมซ้อนกันทำให้กดพลาด/คีย์บอร์ดเข้าไม่ถึง)
+                  <div key={p.id} style={{ position: 'relative', display: 'flex', minWidth: 0 }}>
+                    <button
+                      className="fbtap"
+                      onClick={() => setPageFilter(p.id)}
+                      title={p.nickname ? `${p.nickname} · ${p.page_name}` : p.page_name}
+                      aria-pressed={active}
                       style={{
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        width: 22, height: 22, borderRadius: 7, flexShrink: 0, cursor: 'pointer',
-                        background: active ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.75)',
+                        flex: 1, minWidth: 0,
+                        padding: '10px 44px 10px 12px', borderRadius: 12, minHeight: 44,
+                        border: `2px solid ${pc.border}`,
+                        background: active ? pc.avatar : pc.bg,
                         color: active ? 'white' : pc.text,
+                        fontSize: 12.5, fontWeight: 900, fontFamily: 'inherit', cursor: 'pointer',
+                        display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left',
+                        boxShadow: active ? `0 5px 16px ${pc.border}66` : `0 2px 8px ${pc.border}22`,
                       }}
                     >
-                      <Pencil size={12} />
-                    </span>
-                  </button>
+                      <span style={{
+                        width: 10, height: 10, borderRadius: '50%',
+                        background: active ? 'white' : pc.border, flexShrink: 0,
+                        boxShadow: active ? 'none' : `0 0 0 3px ${pc.border}22`,
+                      }} />
+                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {display}
+                      </span>
+                      {unread > 0 && (
+                        <span style={{
+                          background: active ? 'rgba(255,255,255,0.3)' : RED,
+                          color: 'white', fontSize: 11, fontWeight: 800,
+                          padding: '2px 7px', borderRadius: 999, minWidth: 20, textAlign: 'center',
+                          flexShrink: 0,
+                        }}>{unread > 99 ? '99+' : unread}</span>
+                      )}
+                    </button>
+                    <button
+                      onClick={() => openRename(p)}
+                      title="ตั้งชื่อเล่นเพจ"
+                      aria-label={`ตั้งชื่อเล่นเพจ ${display}`}
+                      style={{
+                        position: 'absolute', right: 5, top: '50%', transform: 'translateY(-50%)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        width: 34, height: 34, borderRadius: 9, flexShrink: 0, cursor: 'pointer',
+                        background: active ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.85)',
+                        color: active ? 'white' : pc.text,
+                        border: 'none', fontFamily: 'inherit',
+                      }}
+                    >
+                      <Pencil size={14} />
+                    </button>
+                  </div>
                 )
               })}
             </div>
@@ -898,19 +1156,21 @@ export default function InboxPage() {
                   ซิงค์...
                 </div>
               )}
-              {channelUnread > 0 && (
+              {scopedUnread > 0 && (
                 <button
                   onClick={markAllRead}
                   disabled={markingRead}
-                  title="ทำเครื่องหมายว่าอ่านทั้งหมด (เคลียร์ตัวเลขแจ้งเตือน)"
+                  title={`ทำเครื่องหมายว่าอ่านแล้ว ${scopedUnread} แชท ใน ${scopedName}`}
                   style={{
-                    display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0,
-                    padding: '5px 9px', borderRadius: 8, border: `1.5px solid ${BORDER}`,
-                    background: SURFACE2, color: PRIMARY, fontSize: 11, fontWeight: 800,
+                    display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0,
+                    padding: '8px 12px', minHeight: 38, borderRadius: 10,
+                    border: `1.5px solid ${PRIMARY}`,
+                    background: 'white', color: PRIMARY, fontSize: 12, fontWeight: 800,
                     fontFamily: 'inherit', cursor: markingRead ? 'wait' : 'pointer', whiteSpace: 'nowrap',
                   }}
                 >
-                  <Check size={12} strokeWidth={3} /> อ่านทั้งหมด
+                  <Check size={13} strokeWidth={3} />
+                  {pageFilter ? 'อ่านแล้ว (เพจนี้)' : 'อ่านแล้ว (ทุกเพจ)'}
                 </button>
               )}
             </div>
@@ -949,8 +1209,10 @@ export default function InboxPage() {
                     key={key}
                     onClick={() => setStatusFilter(key as any)}
                     title={key === 'starred' ? 'ติดดาว' : key === 'archived' ? 'จัดเก็บ' : undefined}
+                    aria-pressed={active}
+                    aria-label={key === 'starred' ? 'ติดดาว' : key === 'archived' ? 'จัดเก็บ' : String(label)}
                     style={{
-                      flex: 1, padding: '7px 4px', border: 'none',
+                      flex: 1, padding: '9px 4px', minHeight: 38, border: 'none',
                       borderRadius: 8,
                       // ACTIVE = filled gradient purple → ชัดเจนเด่นมาก
                       background: active
@@ -959,22 +1221,22 @@ export default function InboxPage() {
                       boxShadow: active
                         ? '0 3px 10px rgba(11,95,204,0.35), inset 0 1px 0 rgba(255,255,255,0.2)'
                         : 'none',
-                      fontSize: 11, fontWeight: 800, cursor: 'pointer',
+                      fontSize: 12.5, fontWeight: 800, cursor: 'pointer',
                       fontFamily: 'inherit',
-                      // ACTIVE = white text, INACTIVE = muted
-                      color: active ? 'white' : MUTED,
+                      // INACTIVE ใช้น้ำเงินเข้ม (contrast ≥ 7:1 บนพื้น #dcebff) — เดิมเทาจางอ่านไม่ออกกลางแดด
+                      color: active ? 'white' : '#0b4a9c',
                       whiteSpace: 'nowrap',
                       display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4,
                       transition: 'all 0.18s',
                     }}
                   >
-                    {Icon ? <Icon size={13} /> : label}
+                    {Icon ? <Icon size={15} /> : label}
                     {count !== null && count !== undefined && (
                       <span style={{
-                        background: active ? 'rgba(255,255,255,0.25)' : RED,
+                        background: active ? 'rgba(255,255,255,0.28)' : RED,
                         color: 'white',
-                        fontSize: 9, fontWeight: 800, padding: '1px 5px', borderRadius: 999,
-                        minWidth: 14, textAlign: 'center', lineHeight: 1.4,
+                        fontSize: 10.5, fontWeight: 800, padding: '1px 6px', borderRadius: 999,
+                        minWidth: 16, textAlign: 'center', lineHeight: 1.5,
                       }}>{count > 99 ? '99+' : count}</span>
                     )}
                   </button>
@@ -991,13 +1253,27 @@ export default function InboxPage() {
                 <div>{pageSyncing ? 'กำลังดึงแชทจากเพจ...' : 'กำลังโหลด...'}</div>
               </div>
             ) : filteredConvs.length === 0 ? (
-              <EmptyState
-                icon={<Inbox size={36} />}
-                title={pages.length === 0 ? 'ยังไม่มีเพจที่เชื่อมต่อ' : 'ยังไม่มีข้อความ'}
-                hint={pages.length === 0
-                  ? 'กลับไปหน้ายิงแอดเพจเพื่อเชื่อมต่อเพจก่อน'
-                  : 'เพจนี้ยังไม่มีบทสนทนา หรือลูกค้ายังไม่ได้ทักเข้ามา'}
-              />
+              search.trim() ? (
+                <EmptyState
+                  icon={<Search size={36} />}
+                  title={`ไม่พบ "${search.trim()}"`}
+                  hint="ลองพิมพ์ชื่อลูกค้าหรือข้อความให้สั้นลง หรือเปลี่ยนตัวกรอง/เพจ"
+                />
+              ) : statusFilter !== 'all' ? (
+                <EmptyState
+                  icon={<ListFilter size={36} />}
+                  title="ไม่มีแชทในตัวกรองนี้"
+                  hint="ลองกด 'ทั้งหมด' เพื่อดูแชททุกรายการ"
+                />
+              ) : (
+                <EmptyState
+                  icon={<Inbox size={36} />}
+                  title={pages.length === 0 ? 'ยังไม่มีเพจที่เชื่อมต่อ' : 'ยังไม่มีข้อความ'}
+                  hint={pages.length === 0
+                    ? (isOwner ? 'ไปที่เมนู "ช่องทางแชท" เพื่อเชื่อมต่อเพจหรือ LINE OA' : 'ให้เจ้าของเพจมอบสิทธิ์เพจให้คุณก่อน')
+                    : 'เพจนี้ยังไม่มีบทสนทนา หรือลูกค้ายังไม่ได้ทักเข้ามา'}
+                />
+              )
             ) : (
               filteredConvs.map(c => (
                 <ConvItem
@@ -1025,18 +1301,20 @@ export default function InboxPage() {
             <>
               {/* Chat header — page-colored top stripe so admin always knows which page they're replying from */}
               <div style={{
-                padding: '14px 18px', background: SURFACE,
+                padding: '12px 14px', background: SURFACE,
                 borderBottom: `1.5px solid ${BORDER}`,
                 borderTop: `4px solid ${pageColor(activeConv.page_id).border}`,
-                display: 'flex', alignItems: 'center', gap: 12, boxShadow: SHADOW_SM,
+                display: 'flex', alignItems: 'center', gap: 10, boxShadow: SHADOW_SM,
+                position: 'relative',
               }}>
                 <button
-                  onClick={() => { openReqRef.current = ''; setActiveConv(null); setMessages([]); setDraft(''); setAiSuggestions([]); setErrorBanner(null) }}
+                  onClick={clearOpenChat}
                   className="ib-back"
                   title="กลับไปเลือกแชทอื่น"
+                  aria-label="กลับไปเลือกแชทอื่น"
                   style={{
                     display: 'none', alignItems: 'center', justifyContent: 'center',
-                    width: 38, height: 38, flexShrink: 0, borderRadius: 11,
+                    width: 40, height: 40, flexShrink: 0, borderRadius: 11,
                     background: pageColor(activeConv.page_id).bg,
                     color: pageColor(activeConv.page_id).text,
                     border: `1.5px solid ${pageColor(activeConv.page_id).border}`,
@@ -1045,30 +1323,15 @@ export default function InboxPage() {
                 >
                   <ChevronLeft size={22} strokeWidth={2.6} />
                 </button>
-                {bothChannels && (
-                  <button
-                    onClick={backToChannels}
-                    className="ib-chan-back"
-                    title="เปลี่ยนช่องทาง"
-                    style={{
-                      display: 'none', alignItems: 'center', justifyContent: 'center', gap: 4,
-                      height: 38, flexShrink: 0, padding: '0 11px', borderRadius: 11,
-                      border: `1.5px solid ${channelFilter === 'line' ? '#06c755' : '#1877f2'}`,
-                      background: channelFilter === 'line' ? '#e9faf1' : '#eaf2fd',
-                      color: channelFilter === 'line' ? '#06804a' : '#1877f2',
-                      fontSize: 11.5, fontWeight: 800, fontFamily: 'inherit', cursor: 'pointer',
-                    }}
-                  >
-                    ⇄ {channelFilter === 'line' ? 'LINE' : 'Facebook'}
-                  </button>
-                )}
-                <Avatar name={activeConv.customer_name} src={activeConv.customer_picture} size={42} ringColor={pageColor(activeConv.page_id).border} />
+                <Avatar name={activeConv.customer_name} src={activeConv.customer_picture} size={40} ringColor={pageColor(activeConv.page_id).border} />
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 15.5, fontWeight: 900, color: TEXT, display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {activeConv.customer_name || 'ลูกค้า'}
+                  <div style={{ fontSize: 15.5, fontWeight: 900, color: TEXT, display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+                      {activeConv.customer_name || 'ลูกค้า'}
+                    </span>
                     {activeConv.is_starred && <Star size={13} fill={YELLOW} color={YELLOW} style={{ flexShrink: 0 }} />}
                   </div>
-                  <div style={{ marginTop: 3 }}>
+                  <div style={{ marginTop: 3, display: 'flex' }}>
                     <span style={{
                       display: 'inline-flex', alignItems: 'center', gap: 5,
                       padding: '3px 10px', borderRadius: 999,
@@ -1078,29 +1341,38 @@ export default function InboxPage() {
                       border: `1.5px solid ${pageColor(activeConv.page_id).border}`,
                       maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     }}>
-                      <span style={{ width: 7, height: 7, borderRadius: '50%', background: pageColor(activeConv.page_id).border, flexShrink: 0 }} />
+                      {activeConv.connected_pages?.channel === 'line' ? (
+                        <span style={{ fontSize: 8, fontWeight: 900, color: 'white', background: '#06c755', borderRadius: 3, padding: '1px 3px', flexShrink: 0 }}>LINE</span>
+                      ) : (
+                        <span style={{ width: 7, height: 7, borderRadius: '50%', background: pageColor(activeConv.page_id).border, flexShrink: 0 }} />
+                      )}
                       {activeConv.connected_pages?.nickname || activeConv.connected_pages?.page_name || 'เพจ'}
                     </span>
                   </div>
                 </div>
-                <div className="ib-chat-actions" style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+
+                {/* จอใหญ่: ปุ่มเรียงให้เห็นเลย */}
+                <div className="ib-chat-actions ib-hide-mobile" style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                   <button
                     onClick={() => patchConv({ is_starred: !activeConv.is_starred })}
-                    title={activeConv.is_starred ? 'เลิก star' : 'Star'}
+                    title={activeConv.is_starred ? 'เลิกติดดาว' : 'ติดดาว'}
+                    aria-label={activeConv.is_starred ? 'เลิกติดดาว' : 'ติดดาว'}
                     style={{ ...btnGhost, padding: 8 }}
                   >
                     <Star size={14} fill={activeConv.is_starred ? YELLOW : 'transparent'} color={activeConv.is_starred ? YELLOW : MUTED} />
                   </button>
                   <button
                     onClick={() => patchConv({ is_resolved: !activeConv.is_resolved })}
-                    title={activeConv.is_resolved ? 'เปิดใหม่' : 'จบบทสนทนา'}
+                    title={activeConv.is_resolved ? 'เปิดบทสนทนาใหม่' : 'จบบทสนทนา'}
+                    aria-label={activeConv.is_resolved ? 'เปิดบทสนทนาใหม่' : 'จบบทสนทนา'}
                     style={{ ...btnGhost, padding: 8, color: activeConv.is_resolved ? GREEN : MUTED }}
                   >
                     <CheckCircle2 size={14} />
                   </button>
                   <button
                     onClick={() => patchConv({ is_archived: !activeConv.is_archived })}
-                    title="Archive"
+                    title="จัดเก็บ"
+                    aria-label="จัดเก็บ"
                     style={{ ...btnGhost, padding: 8 }}
                   >
                     <Archive size={14} />
@@ -1108,13 +1380,84 @@ export default function InboxPage() {
                   <button
                     onClick={() => setShowRightPanel(!showRightPanel)}
                     title="ข้อมูลลูกค้า"
-                    className="ib-toggle-right ib-hide-mobile"
+                    aria-label="ข้อมูลลูกค้า"
+                    className="ib-toggle-right"
                     style={{ ...btnGhost, padding: 8 }}
                   >
                     <MoreVertical size={14} />
                   </button>
                 </div>
+
+                {/* มือถือ: รวมปุ่มรองไว้ในเมนู ⋯ → ชื่อลูกค้าได้พื้นที่เต็ม */}
+                <button
+                  onClick={() => setShowChatMenu(v => !v)}
+                  className="ib-only-mobile-flex"
+                  title="ตัวเลือกเพิ่มเติม"
+                  aria-label="ตัวเลือกเพิ่มเติม"
+                  aria-expanded={showChatMenu}
+                  style={{
+                    display: 'none', alignItems: 'center', justifyContent: 'center',
+                    width: 40, height: 40, flexShrink: 0, borderRadius: 11,
+                    background: showChatMenu ? PRIMARY_LIGHT : SURFACE2,
+                    color: showChatMenu ? PRIMARY : MUTED,
+                    border: `1.5px solid ${BORDER}`, cursor: 'pointer', fontFamily: 'inherit',
+                  }}
+                >
+                  <MoreVertical size={18} />
+                </button>
               </div>
+
+              {/* เมนูตัวเลือกบนมือถือ */}
+              {showChatMenu && (
+                <>
+                  <div
+                    onClick={() => setShowChatMenu(false)}
+                    style={{ position: 'fixed', inset: 0, zIndex: 90 }}
+                  />
+                  <div style={{
+                    position: 'absolute', top: 62, right: 12, zIndex: 100,
+                    background: SURFACE, borderRadius: 14, border: `1.5px solid ${BORDER}`,
+                    boxShadow: '0 12px 40px rgba(15,23,42,0.18)', overflow: 'hidden', minWidth: 210,
+                  }}>
+                    {[
+                      {
+                        label: activeConv.is_starred ? 'เลิกติดดาว' : 'ติดดาว',
+                        icon: <Star size={16} fill={activeConv.is_starred ? YELLOW : 'transparent'} color={activeConv.is_starred ? YELLOW : MUTED} />,
+                        onClick: () => patchConv({ is_starred: !activeConv.is_starred }),
+                      },
+                      {
+                        label: activeConv.is_resolved ? 'เปิดบทสนทนาใหม่' : 'จบบทสนทนา',
+                        icon: <CheckCircle2 size={16} color={activeConv.is_resolved ? GREEN : MUTED} />,
+                        onClick: () => patchConv({ is_resolved: !activeConv.is_resolved }),
+                      },
+                      {
+                        label: activeConv.is_archived ? 'เอาออกจากที่จัดเก็บ' : 'จัดเก็บแชทนี้',
+                        icon: <Archive size={16} color={MUTED} />,
+                        onClick: () => patchConv({ is_archived: !activeConv.is_archived }),
+                      },
+                      ...(bothChannels ? [{
+                        label: `เปลี่ยนช่องทาง (${channelFilter === 'line' ? 'LINE' : 'Facebook'})`,
+                        icon: <Share2 size={16} color={channelFilter === 'line' ? '#06804a' : PRIMARY} />,
+                        onClick: backToChannels,
+                      }] : []),
+                    ].map((item, i) => (
+                      <button
+                        key={i}
+                        onClick={() => { setShowChatMenu(false); item.onClick() }}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 11, width: '100%',
+                          padding: '13px 16px', background: 'transparent', border: 'none',
+                          borderBottom: `1px solid ${BORDER}`, cursor: 'pointer',
+                          fontFamily: 'inherit', fontSize: 13.5, fontWeight: 700, color: TEXT,
+                          textAlign: 'left',
+                        }}
+                      >
+                        {item.icon}{item.label}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
 
               {/* Error banner */}
               {errorBanner && (
@@ -1124,7 +1467,7 @@ export default function InboxPage() {
                 }}>
                   <AlertCircle size={14} />
                   <div style={{ flex: 1 }}>{errorBanner}</div>
-                  <button onClick={() => setErrorBanner(null)} style={{ all: 'unset', cursor: 'pointer' }}><X size={14} /></button>
+                  <button onClick={() => setErrorBanner(null)} aria-label="ปิดข้อความแจ้งเตือน" title="ปิด" style={{ all: 'unset', cursor: 'pointer', padding: 6, display: 'flex' }}><X size={16} /></button>
                 </div>
               )}
 
@@ -1144,6 +1487,7 @@ export default function InboxPage() {
                     message={m}
                     customerName={activeConv.customer_name}
                     customerPic={activeConv.customer_picture}
+                    onRetry={retryMessage}
                   />
                 ))}
                 <div ref={messagesEndRef} />
@@ -1162,7 +1506,7 @@ export default function InboxPage() {
                     {aiSuggestions.map((s, i) => (
                       <button
                         key={i}
-                        onClick={() => { setDraft(s); setAiSuggestions([]) }}
+                        onClick={() => { insertIntoDraft(s); setAiSuggestions([]) }}
                         style={{
                           textAlign: 'left', padding: '10px 12px', borderRadius: 10,
                           border: `1.5px solid ${BORDER2}`, background: 'white',
@@ -1198,89 +1542,105 @@ export default function InboxPage() {
               )}
 
               {/* Composer */}
-              <div style={{ padding: '12px 18px 16px', background: SURFACE, borderTop: `1.5px solid ${BORDER}` }}>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/jpeg,image/png,image/gif,image/webp"
-                    style={{ display: 'none' }}
-                    onChange={e => { const f = e.target.files?.[0]; if (f) handleSendImage(f); e.target.value = '' }}
-                  />
-                  {/* ปุ่ม + : ข้อความตอบกลับที่บันทึกไว้ (saved replies) */}
-                  <button
-                    onClick={() => setShowSavedReplies(true)}
-                    title="ข้อความตอบกลับที่บันทึกไว้"
-                    style={{
-                      padding: '11px 12px', borderRadius: 12, border: 'none', flexShrink: 0,
-                      background: 'linear-gradient(135deg, #1877f2, #2e89ff)', color: 'white',
-                      cursor: 'pointer', display: 'flex', alignItems: 'center',
-                      boxShadow: '0 4px 12px rgba(24,119,242,0.32)',
-                    }}
-                  >
-                    <Plus size={18} strokeWidth={2.8} />
-                  </button>
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={uploading || sending}
-                    title="แนบรูปภาพ"
-                    style={{
-                      padding: '11px 12px', borderRadius: 12, border: `1.5px solid ${BORDER}`,
-                      background: SURFACE2, color: PRIMARY, flexShrink: 0,
-                      cursor: uploading ? 'wait' : 'pointer', display: 'flex', alignItems: 'center',
-                    }}
-                  >
-                    {uploading ? <RefreshCw size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <ImagePlus size={16} />}
-                  </button>
-                  <button
-                    onClick={() => handleAiSuggest()}
-                    disabled={aiLoading}
-                    title="ให้ AI ช่วยร่างคำตอบ"
-                    style={{
-                      padding: '11px 14px', borderRadius: 12, border: 'none',
-                      background: aiLoading ? '#dcebff' : 'linear-gradient(135deg, #8b5cf6, #2e89ff)',
-                      color: 'white', cursor: aiLoading ? 'wait' : 'pointer',
-                      display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 800,
-                      fontFamily: 'inherit', boxShadow: '0 4px 14px rgba(139,92,246,0.35)',
-                    }}
-                  >
-                    {aiLoading ? <RefreshCw size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Sparkles size={14} />}
-                    AI ช่วยตอบ
-                  </button>
+              <div style={{ padding: '10px 14px 14px', background: SURFACE, borderTop: `1.5px solid ${BORDER}` }}>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/gif,image/webp"
+                  style={{ display: 'none' }}
+                  onChange={e => { const f = e.target.files?.[0]; if (f) handleSendImage(f); e.target.value = '' }}
+                />
+                {/* 2 แถวบนมือถือ (ช่องพิมพ์ได้พื้นที่เต็ม) → แถวเดียวบนจอใหญ่ */}
+                <div className="ib-composer">
+                  <div className="ib-composer-actions">
+                    {/* ข้อความตอบกลับที่บันทึกไว้ (saved replies) */}
+                    <button
+                      onClick={() => setShowSavedReplies(true)}
+                      title="ข้อความตอบกลับที่บันทึกไว้"
+                      aria-label="ข้อความตอบกลับที่บันทึกไว้"
+                      style={{
+                        padding: '10px 12px', borderRadius: 12, border: 'none', flexShrink: 0,
+                        background: 'linear-gradient(135deg, #1877f2, #2e89ff)', color: 'white',
+                        cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5,
+                        fontSize: 12.5, fontWeight: 800, fontFamily: 'inherit',
+                        boxShadow: '0 4px 12px rgba(24,119,242,0.32)', minHeight: 42,
+                      }}
+                    >
+                      <Plus size={17} strokeWidth={2.8} />
+                      <span className="ib-only-mobile">ข้อความบันทึก</span>
+                    </button>
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploading || sending}
+                      title="แนบรูปภาพ"
+                      aria-label="แนบรูปภาพ"
+                      style={{
+                        padding: '10px 12px', borderRadius: 12, border: `1.5px solid ${BORDER}`,
+                        background: SURFACE2, color: PRIMARY, flexShrink: 0,
+                        cursor: uploading ? 'wait' : 'pointer', display: 'flex', alignItems: 'center',
+                        minHeight: 42,
+                      }}
+                    >
+                      {uploading ? <RefreshCw size={17} style={{ animation: 'spin 1s linear infinite' }} /> : <ImagePlus size={17} />}
+                    </button>
+                    {aiEnabledByPage[activeConv.page_id] !== false && (
+                    <button
+                      onClick={() => handleAiSuggest()}
+                      disabled={aiLoading}
+                      title="ให้ AI ช่วยร่างคำตอบ"
+                      style={{
+                        padding: '10px 13px', borderRadius: 12, border: 'none', flexShrink: 0,
+                        background: aiLoading ? '#dcebff' : 'linear-gradient(135deg, #8b5cf6, #2e89ff)',
+                        color: aiLoading ? PRIMARY : 'white', cursor: aiLoading ? 'wait' : 'pointer',
+                        display: 'flex', alignItems: 'center', gap: 5, fontSize: 12.5, fontWeight: 800,
+                        fontFamily: 'inherit', boxShadow: '0 4px 14px rgba(139,92,246,0.3)', minHeight: 42,
+                      }}
+                    >
+                      {aiLoading ? <RefreshCw size={15} style={{ animation: 'spin 1s linear infinite' }} /> : <Sparkles size={15} />}
+                      AI ช่วยตอบ
+                    </button>
+                    )}
+                  </div>
 
-                  <textarea
-                    value={draft}
-                    onChange={e => setDraft(e.target.value)}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault()
-                        handleSend()
-                      }
-                    }}
-                    onFocus={() => { setTimeout(() => messagesEndRef.current?.scrollIntoView({ block: 'end' }), 350) }}
-                    placeholder="พิมพ์ข้อความ..."
-                    rows={1}
-                    className="ib-chat-input"
-                    style={{
-                      flex: 1, padding: '11px 14px', borderRadius: 12,
-                      border: `1.5px solid ${BORDER}`, background: SURFACE2,
-                      fontSize: 16, fontFamily: 'inherit', resize: 'none', outline: 'none',
-                      maxHeight: 140, color: TEXT,
-                    }}
-                  />
-
-                  <button
-                    onClick={handleSend}
-                    disabled={!draft.trim() || sending}
-                    style={{
-                      ...btnPrimary, padding: '11px 16px', display: 'flex', alignItems: 'center', gap: 6,
-                      fontSize: 13, opacity: !draft.trim() || sending ? 0.5 : 1,
-                      cursor: !draft.trim() || sending ? 'not-allowed' : 'pointer',
-                    }}
-                  >
-                    {sending ? <RefreshCw size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={14} />}
-                    ส่ง
-                  </button>
+                  <div className="ib-composer-input">
+                    <textarea
+                      ref={draftRef}
+                      value={draft}
+                      onChange={e => setDraft(e.target.value)}
+                      onKeyDown={e => {
+                        // Enter = ส่ง เฉพาะบนคอม (มีเมาส์/คีย์บอร์ดจริง)
+                        // บนมือถือ Enter = ขึ้นบรรทัดใหม่ (ไม่งั้นพิมพ์หลายบรรทัดไม่ได้)
+                        if (e.key === 'Enter' && !e.shiftKey && isDesktop) {
+                          e.preventDefault()
+                          handleSend()
+                        }
+                      }}
+                      onFocus={() => { setTimeout(() => messagesEndRef.current?.scrollIntoView({ block: 'end' }), 350) }}
+                      placeholder="พิมพ์ข้อความ..."
+                      rows={1}
+                      aria-label="ช่องพิมพ์ข้อความตอบลูกค้า"
+                      className="ib-chat-input"
+                      style={{
+                        flex: 1, minWidth: 0, padding: '11px 14px', borderRadius: 12,
+                        border: `1.5px solid ${BORDER}`, background: SURFACE2,
+                        fontSize: 16, fontFamily: 'inherit', resize: 'none', outline: 'none',
+                        maxHeight: 140, overflowY: 'auto', color: TEXT, lineHeight: 1.5,
+                      }}
+                    />
+                    <button
+                      onClick={() => handleSend()}
+                      disabled={!draft.trim() || sending}
+                      style={{
+                        ...btnPrimary, padding: '11px 18px', display: 'flex', alignItems: 'center', gap: 6,
+                        fontSize: 13.5, flexShrink: 0, minHeight: 44,
+                        opacity: !draft.trim() || sending ? 0.5 : 1,
+                        cursor: !draft.trim() || sending ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {sending ? <RefreshCw size={15} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={15} />}
+                      ส่ง
+                    </button>
+                  </div>
                 </div>
               </div>
             </>
@@ -1406,7 +1766,7 @@ export default function InboxPage() {
               ) : quickReplies.map(qr => (
                 <button
                   key={qr.id}
-                  onClick={() => { setDraft(qr.message); setShowSavedReplies(false) }}
+                  onClick={() => { insertIntoDraft(qr.message); setShowSavedReplies(false) }}
                   style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', padding: '13px 18px', background: 'transparent', border: 'none', borderBottom: `1px solid ${BORDER}`, cursor: 'pointer', fontFamily: 'inherit' }}
                 >
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -1488,6 +1848,60 @@ export default function InboxPage() {
         </div>
       )}
 
+      {/* เซสชันหมดอายุ — บอกให้ล็อกอินใหม่ แทนที่จะขึ้นว่า "ยังไม่มีเพจ" ให้เข้าใจผิด */}
+      {sessionExpired && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 350, background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(6px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+        }}>
+          <div style={{ background: SURFACE, borderRadius: 20, padding: 26, width: '100%', maxWidth: 380, textAlign: 'center', boxShadow: '0 24px 70px rgba(15,23,42,0.3)' }}>
+            <div style={{ fontSize: 40, marginBottom: 8 }}>🔒</div>
+            <div style={{ fontSize: 17, fontWeight: 900, color: TEXT, marginBottom: 6 }}>เซสชันหมดอายุ</div>
+            <p style={{ fontSize: 13, color: MUTED, lineHeight: 1.7, margin: '0 0 18px' }}>
+              ระบบออกจากระบบให้อัตโนมัติเพื่อความปลอดภัย<br />กรุณาเข้าสู่ระบบใหม่เพื่อตอบแชทต่อ
+            </p>
+            <button
+              onClick={() => signOut({ callbackUrl: '/login?callbackUrl=/dashboard/inbox' })}
+              style={{
+                width: '100%', padding: '13px', fontSize: 14, fontWeight: 900, minHeight: 46,
+                background: 'linear-gradient(135deg, #1877f2, #2e89ff)', color: 'white',
+                border: 'none', borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit',
+              }}
+            >
+              เข้าสู่ระบบใหม่
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Toast + เลิกทำ */}
+      {toast && (
+        <div style={{
+          position: 'fixed', left: '50%', transform: 'translateX(-50%)',
+          bottom: 'calc(env(safe-area-inset-bottom, 0px) + 22px)', zIndex: 320,
+          background: '#1a1f3c', color: 'white', borderRadius: 14,
+          padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 14,
+          boxShadow: '0 14px 40px rgba(15,23,42,0.35)', maxWidth: 'calc(100vw - 32px)',
+        }}>
+          <span style={{ fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{toast.msg}</span>
+          {toast.undo && (
+            <button
+              onClick={() => { const u = toast.undo!; setToast(null); u() }}
+              style={{
+                background: 'transparent', border: 'none', color: '#7fb8ff',
+                fontSize: 13, fontWeight: 900, cursor: 'pointer', fontFamily: 'inherit',
+                padding: '4px 2px', flexShrink: 0, minHeight: 32,
+              }}
+            >
+              เลิกทำ
+            </button>
+          )}
+          <button onClick={() => setToast(null)} aria-label="ปิด" style={{ background: 'transparent', border: 'none', color: 'rgba(255,255,255,0.6)', cursor: 'pointer', display: 'flex', flexShrink: 0 }}>
+            <X size={15} />
+          </button>
+        </div>
+      )}
+
       {/* Responsive CSS — เหมือน Messenger บนมือถือ */}
       <style jsx global>{`
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -1505,9 +1919,10 @@ export default function InboxPage() {
         }
         .ib-main, .ib-pagebar, .ib-col1, .ib-col2, .ib-col3 { max-width: 100%; min-width: 0; }
 
-        /* Tablet — hide right panel */
+        /* Tablet — hide right panel + ซ่อนปุ่มเปิดแผงขวาด้วย (ไม่งั้นกดแล้วไม่มีอะไรเกิดขึ้น) */
         @media (max-width: 1280px) {
           .ib-col3 { display: none !important; }
+          .ib-toggle-right { display: none !important; }
         }
 
         /* Narrow tablet — narrower col1 + page tiles 2 cols */
@@ -1554,7 +1969,7 @@ export default function InboxPage() {
           /* เปิดแชท → ซ่อน mobile bar (sibling ของ .ib-main จึงใช้ .ib-root) + โชว์ปุ่มกลับ */
           .ib-root[data-active="1"] .ib-mobile-bar { display: none !important; }
           .ib-back { display: flex !important; }
-          .ib-chan-back { display: flex !important; }
+          .ib-only-mobile-flex { display: flex !important; }
 
           /* Page bar — แนวนอน scroll (เหมือน stories) เห็นทุกเพจ */
           .ib-pagebar { padding: 8px 10px !important; }
@@ -1568,10 +1983,12 @@ export default function InboxPage() {
             scrollbar-width: none;
           }
           .ib-pagebar > div::-webkit-scrollbar { display: none; }
-          .ib-pagebar > div > button {
+          /* ครอบทั้งปุ่ม "ทุกเพจ" และ wrapper ของไทล์เพจ (ที่มีปุ่มแก้ชื่อแยก) */
+          .ib-pagebar > div > button,
+          .ib-pagebar > div > div {
             scroll-snap-align: start;
             flex-shrink: 0 !important;
-            max-width: 200px;
+            max-width: 220px;
           }
 
           /* ซ่อน page bar + mobile bar เมื่อเปิดแชท → เห็นแชทเต็มจอ
@@ -1589,10 +2006,12 @@ export default function InboxPage() {
           .ib-col1 button, .ib-col1 a { min-height: 36px; }
         }
 
-        /* iOS safe area — กัน input ทับ home bar */
+        /* iOS safe area — กัน composer ทับแถบ home
+           ใช้ --kb-open (ตั้งจาก visualViewport) → คีย์บอร์ดเปิดแล้วตัด padding ทิ้ง
+           ไม่งั้นจะมีช่องว่างขาวคั่นระหว่างช่องพิมพ์กับคีย์บอร์ด */
         @supports (padding: env(safe-area-inset-bottom)) {
           @media (max-width: 820px) {
-            .ib-main { padding-bottom: env(safe-area-inset-bottom) !important; }
+            .ib-main { padding-bottom: calc(env(safe-area-inset-bottom) * var(--kb-open, 1)) !important; }
           }
         }
 
@@ -1604,6 +2023,24 @@ export default function InboxPage() {
           /* ซ่อนปุ่มที่ไม่จำเป็นบนมือถือ (right panel ใช้ไม่ได้อยู่แล้ว) */
           .ib-hide-mobile { display: none !important; }
         }
+        /* ── Composer ──
+           มือถือ: 2 แถว (ปุ่มแถวบน / ช่องพิมพ์+ส่ง แถวล่าง) → ช่องพิมพ์ได้พื้นที่เต็ม
+           จอใหญ่: แถวเดียวเหมือนเดิม */
+        .ib-composer { display: flex; flex-direction: column; gap: 8px; }
+        .ib-composer-actions { display: flex; gap: 8px; align-items: center; }
+        .ib-composer-input { display: flex; gap: 8px; align-items: flex-end; }
+        .ib-only-mobile { display: none; }
+        @media (max-width: 820px) {
+          .ib-only-mobile { display: inline; }
+          /* ปุ่ม action กระจายเต็มแถว กดง่ายด้วยนิ้วโป้ง */
+          .ib-composer-actions > button:first-child { flex: 1; justify-content: center; }
+          .ib-composer-actions > button:last-child { flex: 1; justify-content: center; }
+        }
+        @media (min-width: 821px) {
+          .ib-composer { flex-direction: row; align-items: flex-end; gap: 8px; }
+          .ib-composer-input { flex: 1; min-width: 0; }
+        }
+
         /* จอแคบมาก — ย่อปุ่ม action ในหัวแชท กันล้น/โดนตัด */
         @media (max-width: 430px) {
           .ib-chat-actions { gap: 3px !important; }
@@ -1642,8 +2079,11 @@ function NavItem({ icon, label, active, badge }: { icon: ReactNode; label: strin
 
 function Avatar({ name, src, size = 40, ringColor }: { name?: string; src?: string; size?: number; ringColor?: string }) {
   const ring = ringColor ? `2px solid ${ringColor}` : '1.5px solid white'
-  if (src) {
-    return <img src={src} alt="" style={{ width: size, height: size, borderRadius: '50%', objectFit: 'cover', flexShrink: 0, border: ring, boxShadow: SHADOW_SM }} onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
+  // URL รูปโปรไฟล์ FB หมดอายุบ่อย → ถ้าโหลดไม่ขึ้นต้องตกไปใช้ตัวอักษรย่อ ไม่ใช่ปล่อยว่าง
+  const [broken, setBroken] = useState(false)
+  useEffect(() => { setBroken(false) }, [src])
+  if (src && !broken) {
+    return <img src={src} alt="" style={{ width: size, height: size, borderRadius: '50%', objectFit: 'cover', flexShrink: 0, border: ring, boxShadow: SHADOW_SM }} onError={() => setBroken(true)} />
   }
   return (
     <div style={{
@@ -1661,117 +2101,191 @@ function Avatar({ name, src, size = 40, ringColor }: { name?: string; src?: stri
 function ConvItem({ conv, active, onClick }: { conv: any; active: boolean; onClick: () => void }) {
   const unread = conv.unread_count > 0
   const pc = pageColor(conv.page_id)
+  const isLine = conv.connected_pages?.channel === 'line'
+  const pageName = conv.connected_pages?.nickname || conv.connected_pages?.page_name
+  const bgFor = () => active ? PRIMARY_LIGHT : (unread ? `linear-gradient(90deg, ${pc.bg} 0%, ${pc.bg}55 40%, white 100%)` : 'white')
   return (
-    <div
+    <button
       onClick={onClick}
+      aria-current={active ? 'true' : undefined}
+      aria-label={`แชทกับ ${conv.customer_name || 'ลูกค้า'} เพจ ${pageName || ''}${unread ? ` ยังไม่อ่าน ${conv.unread_count} ข้อความ` : ''}`}
       style={{
-        display: 'flex', gap: 10, padding: '12px 14px', cursor: 'pointer',
+        display: 'flex', gap: 11, padding: '13px 14px', cursor: 'pointer',
+        width: '100%', textAlign: 'left', fontFamily: 'inherit',
+        borderTop: 'none', borderRight: 'none',
         borderBottom: `1px solid ${BORDER}`,
-        background: active
-          ? PRIMARY_LIGHT
-          : (unread ? `linear-gradient(90deg, ${pc.bg} 0%, ${pc.bg}55 40%, white 100%)` : 'white'),
+        background: bgFor(),
         borderLeft: `4px solid ${active ? PRIMARY : pc.border}`,
         transition: 'background 0.15s',
       }}
       onMouseEnter={e => { if (!active) e.currentTarget.style.background = SURFACE2 }}
-      onMouseLeave={e => {
-        if (!active) e.currentTarget.style.background = unread
-          ? `linear-gradient(90deg, ${pc.bg} 0%, ${pc.bg}55 40%, white 100%)`
-          : 'white'
-      }}
+      onMouseLeave={e => { if (!active) e.currentTarget.style.background = bgFor() }}
     >
-      <Avatar name={conv.customer_name} src={conv.customer_picture} size={40} ringColor={pc.border} />
+      <Avatar name={conv.customer_name} src={conv.customer_picture} size={44} ringColor={pc.border} />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, marginBottom: 2 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 3 }}>
           <div style={{
-            fontSize: 13, fontWeight: unread ? 800 : 700, color: TEXT,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            fontSize: 14.5, fontWeight: unread ? 900 : 700, color: TEXT,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
           }}>
             {conv.customer_name || 'ลูกค้า'}
-            {conv.is_starred && <Star size={11} fill={YELLOW} color={YELLOW} style={{ marginLeft: 4, display: 'inline' }} />}
+            {conv.is_starred && <Star size={12} fill={YELLOW} color={YELLOW} style={{ marginLeft: 5, display: 'inline', verticalAlign: 'middle' }} />}
           </div>
-          <div style={{ fontSize: 10, color: unread ? PRIMARY : MUTED, flexShrink: 0, fontWeight: unread ? 800 : 600 }}>
+          <div style={{ fontSize: 11.5, color: unread ? PRIMARY : MUTED, flexShrink: 0, fontWeight: unread ? 800 : 600 }}>
             {timeAgo(conv.last_message_at)}
           </div>
         </div>
-        <div style={{ marginBottom: 4 }}>
+
+        {/* ป้ายเพจ + สถานะ — รวมไว้แถวเดียว ลดความรก */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 4, flexWrap: 'wrap' }}>
           <span style={{
-            display: 'inline-flex', alignItems: 'center', gap: 4,
-            padding: '2px 8px', borderRadius: 999,
+            display: 'inline-flex', alignItems: 'center', gap: 5,
+            padding: '3px 9px', borderRadius: 999,
             background: pc.bg, color: pc.text,
-            fontSize: 10, fontWeight: 800,
+            fontSize: 11.5, fontWeight: 800,
             border: `1px solid ${pc.border}33`,
             maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
-            {conv.connected_pages?.channel === 'line' ? (
-              <span style={{ fontSize: 8, fontWeight: 900, color: 'white', background: '#06c755', borderRadius: 3, padding: '1px 3px', flexShrink: 0, letterSpacing: 0.3 }}>LINE</span>
+            {isLine ? (
+              <span style={{ fontSize: 9.5, fontWeight: 900, color: 'white', background: '#06804a', borderRadius: 4, padding: '1px 4px', flexShrink: 0, letterSpacing: 0.3 }}>LINE</span>
             ) : (
-              <span style={{ width: 6, height: 6, borderRadius: '50%', background: pc.border, flexShrink: 0 }} />
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: pc.border, flexShrink: 0 }} />
             )}
-            {conv.connected_pages?.nickname || conv.connected_pages?.page_name}
+            {pageName}
           </span>
-        </div>
-        {conv.send_block_code && (
-          <div style={{ marginBottom: 4 }}>
+          {conv.send_block_code && (
             <span style={{
               display: 'inline-flex', alignItems: 'center', gap: 3,
-              padding: '2px 8px', borderRadius: 999,
-              background: '#fff4e5', color: '#b45309',
-              fontSize: 10, fontWeight: 800, border: '1px solid rgba(245,158,11,0.3)',
+              padding: '3px 9px', borderRadius: 999,
+              background: '#fff4e5', color: '#92400e',
+              fontSize: 11.5, fontWeight: 800, border: '1px solid rgba(245,158,11,0.45)',
             }}>
-              ⚠️ {conv.send_block_code === 551 ? 'ลูกค้ายังไม่เปิดแชท' : 'เกิน 24 ชม.'} — รอลูกค้าทัก
+              ⚠️ รอลูกค้าทัก
             </span>
-          </div>
-        )}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
           <div style={{
-            fontSize: 12, color: unread ? TEXT : MUTED, fontWeight: unread ? 700 : 500,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
+            fontSize: 13, color: unread ? TEXT : MUTED, fontWeight: unread ? 700 : 500,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0,
           }}>
             {conv.last_sender === 'page' && <span style={{ color: MUTED }}>คุณ: </span>}
             {conv.last_message || '(ไม่มีข้อความ)'}
           </div>
           {unread && (
-            <span style={{ background: PRIMARY, color: 'white', fontSize: 10, fontWeight: 800, padding: '1px 6px', borderRadius: 999, minWidth: 18, textAlign: 'center', flexShrink: 0 }}>
+            // แดงให้ตรงกับตัวเลขบนไทล์เพจ/หน้าเลือกช่องทาง (เดิมน้ำเงิน = สีเดียวกับ "กำลังเลือก" ทำให้สับสน)
+            <span style={{ background: RED, color: 'white', fontSize: 11.5, fontWeight: 800, padding: '2px 7px', borderRadius: 999, minWidth: 20, textAlign: 'center', flexShrink: 0 }}>
               {conv.unread_count > 99 ? '99+' : conv.unread_count}
             </span>
           )}
         </div>
-        {conv.ai_category && (
-          <div style={{ marginTop: 5 }}>
-            <span style={{
-              display: 'inline-block', padding: '2px 7px', borderRadius: 999,
-              background: categoryConfig[conv.ai_category]?.bg || '#f1f5f9',
-              color: categoryConfig[conv.ai_category]?.color || MUTED,
-              fontSize: 9, fontWeight: 800,
-            }}>
-              {categoryConfig[conv.ai_category]?.label || conv.ai_category}
-            </span>
-          </div>
-        )}
       </div>
-    </div>
+    </button>
   )
 }
 
-// รูปในแชท — ถ้าโหลดไม่ขึ้น (เช่น URL สติ๊กเกอร์ LINE ไม่ทางการ) → fallback เป็นข้อความ
+// ทำลิงก์/เบอร์โทรในข้อความลูกค้าให้กดได้ (เดิมเป็น text ต้องกดค้าง copy เอง)
+function Linkify({ text, onDark }: { text: string; onDark?: boolean }) {
+  const parts = String(text).split(/(https?:\/\/[^\s]+|www\.[^\s]+|0\d{1,2}[-\s]?\d{3}[-\s]?\d{3,4})/g)
+  const linkStyle: any = {
+    color: onDark ? '#d6e9ff' : PRIMARY,
+    textDecoration: 'underline',
+    wordBreak: 'break-all',
+  }
+  return (
+    <>
+      {parts.map((p, i) => {
+        if (!p) return null
+        if (/^(https?:\/\/|www\.)/.test(p)) {
+          const href = p.startsWith('http') ? p : `https://${p}`
+          return <a key={i} href={href} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} style={linkStyle}>{p}</a>
+        }
+        if (/^0\d{1,2}[-\s]?\d{3}[-\s]?\d{3,4}$/.test(p)) {
+          return <a key={i} href={`tel:${p.replace(/[-\s]/g, '')}`} onClick={e => e.stopPropagation()} style={linkStyle}>{p}</a>
+        }
+        return <span key={i}>{p}</span>
+      })}
+    </>
+  )
+}
+
+// รูปในแชท — แตะเพื่อดูเต็มจอ (สลิปโอนเงิน/ที่อยู่ ต้องอ่านออก)
+// ถ้าโหลดไม่ขึ้น (เช่น URL สติ๊กเกอร์ LINE ไม่ทางการ) → fallback เป็นข้อความ
 function MsgImage({ url, name, withText }: { url: string; name?: string; withText?: boolean }) {
   const [err, setErr] = useState(false)
+  const [open, setOpen] = useState(false)
   const isSticker = name === 'sticker'
+
+  // ปิดด้วยปุ่ม Esc
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [open])
+
   if (err) {
     return <div style={{ fontSize: 13, marginTop: withText ? 6 : 0, fontWeight: 600 }}>{isSticker ? '😊 [สติกเกอร์]' : '🖼️ [รูปภาพ]'}</div>
   }
   return (
-    <img
-      src={url}
-      onError={() => setErr(true)}
-      style={{ maxWidth: isSticker ? 130 : 200, marginTop: withText ? 6 : 0, borderRadius: 8, display: 'block' }}
-      alt=""
-    />
+    <>
+      <img
+        src={url}
+        onError={() => setErr(true)}
+        onClick={() => { if (!isSticker) setOpen(true) }}
+        style={{
+          maxWidth: isSticker ? 130 : 240, width: '100%',
+          marginTop: withText ? 6 : 0, borderRadius: 10, display: 'block',
+          cursor: isSticker ? 'default' : 'zoom-in',
+        }}
+        alt={isSticker ? 'สติกเกอร์' : 'รูปภาพในแชท (แตะเพื่อดูเต็มจอ)'}
+      />
+      {open && typeof document !== 'undefined' && createPortal(
+        <div
+          onClick={() => setOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="ดูรูปภาพเต็มจอ"
+          style={{
+            position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,0.93)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12,
+            overflow: 'auto', touchAction: 'pinch-zoom',
+          }}
+        >
+          <img src={url} alt="รูปภาพขนาดเต็ม" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+          <button
+            onClick={(e) => { e.stopPropagation(); setOpen(false) }}
+            aria-label="ปิด"
+            style={{
+              position: 'fixed', top: 'calc(env(safe-area-inset-top, 0px) + 14px)', right: 14,
+              width: 44, height: 44, borderRadius: '50%', border: 'none',
+              background: 'rgba(255,255,255,0.22)', color: 'white',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+            }}
+          >
+            <X size={22} />
+          </button>
+          <a
+            href={url} target="_blank" rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: 'fixed', bottom: 'calc(env(safe-area-inset-bottom, 0px) + 18px)', left: '50%',
+              transform: 'translateX(-50%)', padding: '10px 20px', borderRadius: 999,
+              background: 'rgba(255,255,255,0.94)', color: '#1a1f3c', fontSize: 13, fontWeight: 800,
+              textDecoration: 'none', whiteSpace: 'nowrap',
+            }}
+          >
+            เปิดรูปเต็มขนาด
+          </a>
+        </div>,
+        document.body,
+      )}
+    </>
   )
 }
 
-function MessageBubble({ message: m, customerName, customerPic }: { message: any; customerName?: string; customerPic?: string }) {
+function MessageBubble({ message: m, customerName, customerPic, onRetry }: { message: any; customerName?: string; customerPic?: string; onRetry?: (m: any) => void }) {
   const out = m.direction === 'outbound'
   const failed = m.delivery_status === 'failed'
   const sending = m.delivery_status === 'sending'
@@ -1799,7 +2313,7 @@ function MessageBubble({ message: m, customerName, customerPic }: { message: any
           borderTopRightRadius: out ? 4 : 16,
           borderTopLeftRadius: out ? 16 : 4,
         }}>
-          {m.message_text && <div style={{ whiteSpace: 'pre-wrap' }}>{m.message_text}</div>}
+          {m.message_text && <div style={{ whiteSpace: 'pre-wrap' }}><Linkify text={m.message_text} onDark={out && !failed} /></div>}
           {(() => {
             // dedupe ตาม url (FB ส่ง sticker ผ่านทั้ง field sticker + attachments url เดียวกัน → ซ้ำ)
             const seen = new Set<string>()
@@ -1830,9 +2344,26 @@ function MessageBubble({ message: m, customerName, customerPic }: { message: any
             </span>
           )}
         </div>
-        <div style={{ fontSize: 10, color: MUTED, padding: '0 4px' }}>
+        <div style={{ fontSize: 11, color: MUTED, padding: '0 4px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: out ? 'flex-end' : 'flex-start' }}>
           {sending && '⏳ กำลังส่ง...'}
-          {failed && <span style={{ color: RED, fontWeight: 700 }}>❌ ส่งไม่สำเร็จ {m.error_message ? `(${m.error_message})` : ''}</span>}
+          {failed && (
+            <>
+              <span style={{ color: RED, fontWeight: 700 }}>❌ ส่งไม่สำเร็จ {m.error_message ? `(${m.error_message})` : ''}</span>
+              {onRetry && (
+                <button
+                  onClick={() => onRetry(m)}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 4,
+                    padding: '4px 10px', borderRadius: 8, border: `1.5px solid ${RED}`,
+                    background: 'white', color: RED, fontSize: 11.5, fontWeight: 800,
+                    fontFamily: 'inherit', cursor: 'pointer',
+                  }}
+                >
+                  <RefreshCw size={11} /> ส่งอีกครั้ง
+                </button>
+              )}
+            </>
+          )}
           {!sending && !failed && timeAgo(m.created_at)}
         </div>
       </div>
@@ -2104,22 +2635,28 @@ function SettingsModal({ pages, onClose, onSaved }: { pages: any[]; onClose: () 
 }
 
 function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+  // ปุ่มจริง + role="switch" → กดด้วยคีย์บอร์ดได้ และ screen reader บอกว่าเปิด/ปิดอยู่
   return (
-    <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, cursor: 'pointer', padding: '8px 0' }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '8px 0' }}>
       <div style={{ fontSize: 13, fontWeight: 700, color: TEXT }}>{label}</div>
-      <div
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={label}
         onClick={() => onChange(!checked)}
         style={{
-          width: 42, height: 24, background: checked ? PRIMARY : '#cbd5e1', borderRadius: 999,
+          width: 46, height: 28, background: checked ? PRIMARY : '#94a3b8', borderRadius: 999,
           position: 'relative', transition: 'all 0.2s', flexShrink: 0,
+          border: 'none', cursor: 'pointer', padding: 0, fontFamily: 'inherit',
         }}
       >
-        <div style={{
-          width: 18, height: 18, background: 'white', borderRadius: '50%',
+        <span style={{
+          display: 'block', width: 22, height: 22, background: 'white', borderRadius: '50%',
           position: 'absolute', top: 3, left: checked ? 21 : 3,
           transition: 'all 0.2s', boxShadow: SHADOW_SM,
         }} />
-      </div>
-    </label>
+      </button>
+    </div>
   )
 }
