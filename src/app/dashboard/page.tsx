@@ -335,7 +335,15 @@ export default function Dashboard() {
             <div style={{ position: 'absolute', left: 'calc(100% + 8px)', top: 0, width: 328, background: SURFACE, border: `1.5px solid ${BORDER}`, borderRadius: 18, zIndex: 100, boxShadow: SHADOW_LG, overflow: 'hidden' }}>
               <div style={{ padding: '13px 18px', borderBottom: `1px solid ${BORDER}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontWeight: 800, fontSize: 13 }}>🔔 การแจ้งเตือน</span>
-                {unreadCount > 0 && <span style={{ fontSize: 11, color: PRIMARY, cursor: 'pointer', fontWeight: 700 }} onClick={markAllRead}>อ่านทั้งหมด</span>}
+                {unreadCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={markAllRead}
+                    style={{ fontSize: 12, color: PRIMARY, cursor: 'pointer', fontWeight: 800, background: 'transparent', border: 'none', padding: '6px 8px', fontFamily: 'inherit', minHeight: 32 }}
+                  >
+                    อ่านทั้งหมด
+                  </button>
+                )}
               </div>
               {notifications.length === 0 ? (
                 <div style={{ padding: 28, textAlign: 'center', color: MUTED, fontSize: 13 }}>ยังไม่มีการแจ้งเตือน</div>

@@ -123,7 +123,7 @@ function LoginInner() {
                   style={{
                     padding: '9px 12px', fontSize: 12, fontWeight: 800,
                     background: mode === 'owner' ? 'white' : 'transparent',
-                    color: mode === 'owner' ? '#1877f2' : '#6b7280',
+                    color: mode === 'owner' ? '#1877f2' : '#475569',
                     border: 'none', borderRadius: 9, cursor: 'pointer', fontFamily: 'inherit',
                     boxShadow: mode === 'owner' ? '0 2px 6px rgba(0,0,0,0.06)' : 'none',
                     transition: 'all 0.18s',
@@ -136,7 +136,7 @@ function LoginInner() {
                   style={{
                     padding: '9px 12px', fontSize: 12, fontWeight: 800,
                     background: mode === 'agent' ? 'white' : 'transparent',
-                    color: mode === 'agent' ? '#1877f2' : '#6b7280',
+                    color: mode === 'agent' ? '#1877f2' : '#475569',
                     border: 'none', borderRadius: 9, cursor: 'pointer', fontFamily: 'inherit',
                     boxShadow: mode === 'agent' ? '0 2px 6px rgba(0,0,0,0.06)' : 'none',
                     transition: 'all 0.18s',
@@ -264,7 +264,7 @@ function LoginInner() {
           )}
         </div>
 
-        <p style={{ fontSize: 11, color: '#94a3b8', marginTop: 18, fontWeight: 500 }}>
+        <p style={{ fontSize: 12, color: '#475569', marginTop: 18, fontWeight: 600 }}>
           🔒 ปลอดภัยด้วย OAuth 2.0 / bcrypt
         </p>
       </div>
