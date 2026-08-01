@@ -34,11 +34,13 @@ export async function POST(req: Request) {
     }
     if (pageIds.length === 0) return NextResponse.json({ success: true, cleared: 0 })
 
+    // ไม่แตะแชทที่จัดเก็บไว้ — ให้ตรงกับตัวเลขที่ UI นับ (นับเฉพาะ is_archived=false)
     const { error } = await sb
       .from('conversations')
       .update({ unread_count: 0 })
       .in('page_id', pageIds)
       .gt('unread_count', 0)
+      .eq('is_archived', false)
     if (error) throw error
 
     return NextResponse.json({ success: true })
