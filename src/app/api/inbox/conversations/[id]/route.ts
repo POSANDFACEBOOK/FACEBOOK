@@ -32,12 +32,15 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       return NextResponse.json({ error: 'Not found' }, { status: 404 })
     }
 
-    const { data: messages } = await sb
+    // ต้องเอา "200 อันล่าสุด" ไม่ใช่ 200 อันแรก — ไม่งั้นแชทที่คุยกันยาว
+    // แอดมินจะเห็นแต่ข้อความเก่าสุด และข้อความที่เพิ่งตอบจะไม่โผล่เลย
+    const { data: latest } = await sb
       .from('inbox_messages')
       .select('*')
       .eq('conversation_id', params.id)
-      .order('created_at', { ascending: true })
+      .order('created_at', { ascending: false })
       .limit(200)
+    const messages = (latest || []).slice().reverse()  // กลับเป็นเก่า→ใหม่ เพื่อแสดงผล
 
     // Fallback: แชทเก่าที่มี last_message แต่ message row หาย (webhook freeze ก่อน fix)
     // → สร้าง message สังเคราะห์จาก last_message ให้แอดมินเห็นว่าลูกค้าพิมพ์อะไร
