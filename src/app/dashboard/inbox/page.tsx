@@ -915,6 +915,7 @@ export default function InboxPage() {
 
   // ขอบเขตที่แอดมิน "เห็นอยู่จริง" — เลือกเพจอยู่ = เฉพาะเพจนั้น ไม่ใช่ทั้งช่องทาง
   const scopedUnread = pageFilter ? (unreadByPage[pageFilter] || 0) : channelUnread
+  const scopedNeedsReply = pageFilter ? (needsReplyByPage[pageFilter] || 0) : channelNeedsReply
   const scopedName = pageFilter
     ? (() => { const p: any = channelPages.find((x: any) => x.id === pageFilter); return p?.nickname || p?.page_name || 'เพจนี้' })()
     : `ทุกเพจ${channelFilter ? ` ${channelFilter === 'line' ? 'LINE' : 'Facebook'}` : ''}`
@@ -1338,8 +1339,10 @@ export default function InboxPage() {
             }}>
               {([
                 ['all', 'ทั้งหมด', null, null],
-                ['unread', 'ใหม่', null, channelUnread > 0 ? channelUnread : null],
-                ['needs_reply', 'ยังไม่ตอบ', null, channelNeedsReply > 0 ? channelNeedsReply : null],
+                // ต้องเป็นตัวเลขของ "ขอบเขตที่กำลังดูอยู่" (เลือกเพจไหน = เฉพาะเพจนั้น)
+                // ไม่งั้นชิปบอก 20 แต่ในลิสต์มี 2 รายการ
+                ['unread', 'ใหม่', null, scopedUnread > 0 ? scopedUnread : null],
+                ['needs_reply', 'ยังไม่ตอบ', null, scopedNeedsReply > 0 ? scopedNeedsReply : null],
                 ['starred', null, Star, null],
                 ['archived', null, Archive, null],
               ] as const).map(([key, label, Icon, count]) => {
