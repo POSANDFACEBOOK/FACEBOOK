@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, Plus, Trash2, Copy, Check, X, Link2, MessageSquare } from 'lucide-react'
+import { ArrowLeft, Plus, Trash2, Copy, Check, X, Link2, MessageSquare, RefreshCw } from 'lucide-react'
 
 const BG = '#eaf2fd', SURFACE = '#ffffff', SURFACE2 = '#f0f6ff'
 const BORDER = 'rgba(24,119,242,0.13)'
@@ -12,6 +12,7 @@ const RED = '#dc2626', RED_L = '#fee2e2'
 const LINE_GREEN = '#06c755'
 
 type Channel = { id: string; page_id: string; page_name: string; page_picture: string | null; channel: 'facebook' | 'line' }
+type FbManagedPage = { id: string; name: string; picture: string | null; category: string | null; canConnect: boolean }
 
 export default function ChannelsPage() {
   const [loading, setLoading] = useState(true)
@@ -21,6 +22,12 @@ export default function ChannelsPage() {
   const [showAdd, setShowAdd] = useState(false)
   const [checking, setChecking] = useState(false)
   const [health, setHealth] = useState<any[] | null>(null)
+  const [isOwner, setIsOwner] = useState(false)
+  const [fbLoggedIn, setFbLoggedIn] = useState(false)
+  const [fbManaged, setFbManaged] = useState<FbManagedPage[] | null>(null)  // null = กำลังโหลด
+  const [fbTokenExpired, setFbTokenExpired] = useState(false)
+  const [connectingId, setConnectingId] = useState<string | null>(null)
+  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
 
   async function runHealthCheck() {
     setChecking(true)
@@ -39,26 +46,74 @@ export default function ChannelsPage() {
     load()
   }, [])
 
-  async function load() {
-    setLoading(true)
+  // silent = โหลดข้อมูลใหม่หลังเชื่อม/ยกเลิก โดยไม่เปลี่ยนทั้งจอเป็น "กำลังโหลด..."
+  async function load(silent = false) {
+    if (!silent) setLoading(true)
     try {
-      const me = await fetch('/api/me').then(r => r.json())
-      if (!me?.role?.isOwner) { setForbidden(true); return }
-      const res = await fetch('/api/team/pages').then(r => r.json())
+      const me = await fetch('/api/me').then(r => r.json()).catch(() => null)
+      const owner = !!me?.role?.isOwner
+      const fb = !!me?.user?.facebookId
+      const agentOnly = !!me?.role?.isAgentOnly
+      // เข้าได้: เจ้าของเพจ หรือเจ้าของร้านที่ล็อกอินด้วย Facebook แต่ยังไม่เคยเชื่อมช่องทาง
+      // ลูกทีม (ทั้งแบบอีเมลและแบบ Facebook) จัดการช่องทางไม่ได้
+      if (!owner && !(fb && !agentOnly)) { setForbidden(true); return }
+      setIsOwner(owner)
+      setFbLoggedIn(fb)
+      const res = await fetch('/api/team/pages').then(r => r.json()).catch(() => ({ pages: [] }))
       setChannels(res.pages || [])
+      if (fb && !silent) loadFbPages()
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
+    }
+  }
+
+  async function loadFbPages() {
+    try {
+      const res = await fetch('/api/pages').then(r => r.json())
+      setFbManaged(res.pages || [])
+      setFbTokenExpired(!!res.tokenExpired || !!res.needsFacebookLogin)
+    } catch {
+      setFbManaged([])
+    }
+  }
+
+  async function connectFbPage(page: FbManagedPage) {
+    if (connectingId) return
+    setConnectingId(page.id)
+    setNotice(null)
+    try {
+      const res = await fetch('/api/pages/connect', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pageId: page.id }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) {
+        setNotice({ ok: false, text: `เชื่อม "${page.name}" ไม่สำเร็จ: ${data.error || 'ลองใหม่อีกครั้ง'}` })
+        return
+      }
+      setNotice({
+        ok: true,
+        text: data.webhookSubscribed
+          ? `เชื่อม "${page.name}" แล้ว — ข้อความใหม่จะเด้งเข้ากล่องข้อความทันที`
+          : `เชื่อม "${page.name}" แล้ว — แต่ยังเปิดรับข้อความแบบทันทีไม่สำเร็จ ระบบจะดึงข้อความให้ทุกไม่กี่นาทีแทน`,
+      })
+      const r2 = await fetch('/api/team/pages').then(r => r.json()).catch(() => null)
+      if (r2?.pages) setChannels(r2.pages)
+      setIsOwner(true)
+    } finally {
+      setConnectingId(null)
     }
   }
 
   async function disconnectLine(id: string, name: string) {
-    if (!confirm(`ยกเลิกการเชื่อม LINE "${name}"?`)) return
+    if (!confirm(`ยกเลิกการเชื่อม LINE "${name}"?\n\n⚠️ ประวัติแชททั้งหมดของ LINE นี้จะถูกลบออกจากระบบ และลูกทีมจะตอบแชทช่องทางนี้ไม่ได้อีก`)) return
     const res = await fetch(`/api/line/connect?id=${id}`, { method: 'DELETE' })
     if (!res.ok) { const d = await res.json(); alert('ยกเลิกไม่สำเร็จ: ' + (d.error || '')); return }
-    load()
+    load(true)
   }
 
   const fbPages = channels.filter(c => c.channel !== 'line')
+  const connectedFbIds = new Set(fbPages.map(c => c.page_id))
   const lineChannels = channels.filter(c => c.channel === 'line')
 
   if (forbidden) {
@@ -67,7 +122,8 @@ export default function ChannelsPage() {
         <div style={{ maxWidth: 460, margin: '60px auto', background: SURFACE, borderRadius: 22, padding: 36, textAlign: 'center', border: `1.5px solid ${BORDER}` }}>
           <div style={{ fontSize: 48, marginBottom: 12 }}>🔒</div>
           <h1 style={{ fontSize: 20, fontWeight: 900, color: TEXT, margin: '0 0 8px' }}>เฉพาะเจ้าของเพจ</h1>
-          <Link href="/dashboard" style={{ color: PRIMARY, fontWeight: 800, textDecoration: 'none' }}>← กลับ Dashboard</Link>
+          <p style={{ color: MUTED, fontSize: 13, margin: '0 0 14px', lineHeight: 1.6 }}>การเชื่อมเพจ/LINE ต้องเข้าสู่ระบบด้วย Facebook ของเจ้าของเพจ</p>
+          <Link href="/dashboard/inbox" style={{ color: PRIMARY, fontWeight: 800, textDecoration: 'none' }}>← กลับกล่องข้อความ</Link>
         </div>
       </div>
     )
@@ -78,11 +134,19 @@ export default function ChannelsPage() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: BG, color: TEXT, fontFamily: "'Sarabun', sans-serif", padding: '24px 20px 60px' }}>
+    <div className="ch-page" style={{ minHeight: '100vh', background: BG, color: TEXT, fontFamily: "'Sarabun', sans-serif", padding: '24px 20px 60px' }}>
+      {/* มือถือจอแคบ: ลดขอบ ให้ชื่อเพจมีที่แสดง */}
+      <style>{`
+        @media (max-width: 480px) {
+          .ch-page { padding: 16px 10px 48px !important; }
+          .ch-section { padding: 14px !important; }
+          .ch-row { padding: 10px !important; gap: 10px !important; }
+        }
+      `}</style>
       <div style={{ maxWidth: 760, margin: '0 auto' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
-          <Link href="/dashboard" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, color: MUTED, textDecoration: 'none', fontSize: 13, fontWeight: 700 }}>
-            <ArrowLeft size={15} /> Dashboard
+          <Link href="/dashboard/inbox" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, color: MUTED, textDecoration: 'none', fontSize: 13, fontWeight: 700 }}>
+            <ArrowLeft size={15} /> กล่องข้อความ
           </Link>
           <button
             className="fbtap"
@@ -98,10 +162,98 @@ export default function ChannelsPage() {
         </h1>
         <p style={{ color: MUTED, fontSize: 13, fontWeight: 600, margin: '0 0 22px' }}>
           รวมทุกช่องทางมาตอบในระบบเดียว — Facebook + LINE
+          {isOwner && <> · <Link href="/dashboard/team" style={{ color: PRIMARY, fontWeight: 800, textDecoration: 'none' }}>จัดการทีมแอดมิน →</Link></>}
         </p>
 
+        {notice && (
+          <div role="status" style={{ marginBottom: 16, padding: '11px 14px', borderRadius: 12, fontSize: 13, fontWeight: 700, lineHeight: 1.5, display: 'flex', alignItems: 'flex-start', gap: 8, background: notice.ok ? '#f0fdf4' : RED_L, color: notice.ok ? '#065f46' : RED, border: `1.5px solid ${notice.ok ? 'rgba(5,150,105,0.3)' : 'rgba(220,38,38,0.25)'}` }}>
+            <span style={{ flex: 1 }}>{notice.ok ? '✅ ' : '⚠️ '}{notice.text}</span>
+            <button onClick={() => setNotice(null)} aria-label="ปิด" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'inherit', display: 'flex', padding: 0 }}><X size={16} /></button>
+          </div>
+        )}
+
+        {/* Facebook — เลือกเพจที่ดูแลอยู่มาเชื่อมเข้ากล่องข้อความ */}
+        <section className="ch-section" style={{ background: SURFACE, borderRadius: 18, padding: 22, border: `1.5px solid ${BORDER}`, marginBottom: 18 }}>
+          <h2 style={{ fontSize: 15, fontWeight: 900, margin: '0 0 4px', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ width: 22, height: 22, borderRadius: 6, background: '#1877f2', color: 'white', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 900 }}>f</span>
+            Facebook Pages (เชื่อมแล้ว {fbPages.length})
+          </h2>
+          <p style={{ fontSize: 12, color: MUTED, margin: '0 0 14px', lineHeight: 1.6 }}>
+            กด “เชื่อมเพจ” ที่เพจที่ต้องการตอบแชท — ข้อความลูกค้าจะเข้ามาในระบบทันที
+          </p>
+
+          {!fbLoggedIn ? (
+            <>
+              {fbPages.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+                  {fbPages.map(p => (
+                    <span key={p.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, background: SURFACE2, border: `1px solid ${BORDER}`, padding: '6px 11px', borderRadius: 999, color: TEXT, fontWeight: 700 }}>
+                      {p.page_picture ? <img src={p.page_picture} alt="" style={{ width: 18, height: 18, borderRadius: '50%' }} /> : '📄'}
+                      {p.page_name}
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div style={{ padding: 14, textAlign: 'center', color: MUTED, fontSize: 12, background: SURFACE2, borderRadius: 12 }}>
+                การเชื่อมเพจใหม่ต้องเข้าสู่ระบบด้วย Facebook ของผู้ดูแลเพจ
+              </div>
+            </>
+          ) : fbManaged === null ? (
+            <div style={{ padding: 18, textAlign: 'center', color: MUTED, fontSize: 12.5, fontWeight: 700 }}>กำลังดึงรายชื่อเพจจาก Facebook...</div>
+          ) : fbManaged.length === 0 ? (
+            <div style={{ padding: 16, textAlign: 'center', color: MUTED, fontSize: 12.5, lineHeight: 1.7, background: SURFACE2, borderRadius: 12 }}>
+              {fbTokenExpired
+                ? <>สิทธิ์ Facebook หมดอายุ — <strong>ออกจากระบบแล้วเข้าสู่ระบบด้วย Facebook ใหม่</strong> เพื่อดึงรายชื่อเพจ</>
+                : <>ไม่พบเพจที่คุณเป็นผู้ดูแล — ตอนเข้าสู่ระบบ Facebook ต้องกดอนุญาตให้เข้าถึงเพจด้วย<br /><button onClick={() => { setFbManaged(null); loadFbPages() }} style={{ marginTop: 8, padding: '7px 14px', fontSize: 12, fontWeight: 800, background: PRIMARY_LIGHT, color: PRIMARY, border: `1.5px solid ${BORDER}`, borderRadius: 10, cursor: 'pointer', fontFamily: 'inherit' }}>ลองดึงอีกครั้ง</button></>}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {fbManaged.map(p => {
+                const connected = connectedFbIds.has(p.id)
+                const busy = connectingId === p.id
+                return (
+                  <div key={p.id} className="ch-row" style={{ display: 'flex', alignItems: 'center', gap: 12, background: SURFACE2, border: `1px solid ${connected ? 'rgba(5,150,105,0.3)' : BORDER}`, borderRadius: 14, padding: '11px 13px' }}>
+                    {p.picture ? (
+                      <img src={p.picture} alt="" style={{ width: 42, height: 42, borderRadius: '50%', objectFit: 'cover', border: '2px solid #1877f2', flexShrink: 0 }} />
+                    ) : (
+                      <div style={{ width: 42, height: 42, borderRadius: '50%', background: '#1877f2', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 900, fontSize: 16, flexShrink: 0 }}>f</div>
+                    )}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 800, fontSize: 14, color: TEXT, lineHeight: 1.35, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', wordBreak: 'break-word' }}>{p.name}</div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: connected ? GREEN : MUTED }}>
+                        {connected ? '● เชื่อมแล้ว' : !p.canConnect ? 'บทบาทในเพจไม่พอให้ตอบแชท' : (p.category || 'ยังไม่ได้เชื่อม')}
+                      </div>
+                    </div>
+                    {connected ? (
+                      // เชื่อมใหม่ = ดึงสิทธิ์เพจล่าสุด + เปิดรับข้อความทันทีอีกรอบ (ใช้ตอนแชทเพจนี้ไม่เข้า/ส่งไม่ได้)
+                      <button
+                        className="fbtap"
+                        onClick={() => connectFbPage(p)}
+                        disabled={!!connectingId}
+                        title="เชื่อมใหม่ — ใช้เมื่อข้อความเพจนี้ไม่เข้าหรือส่งไม่ได้"
+                        style={{ padding: '8px 11px', fontSize: 11.5, fontWeight: 800, background: SURFACE, color: (connectingId && !busy) ? '#94a3b8' : PRIMARY, border: `1.5px solid ${BORDER}`, borderRadius: 10, cursor: connectingId ? 'not-allowed' : 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap', minHeight: 38, flexShrink: 0 }}
+                      >
+                        <RefreshCw size={13} /> {busy ? 'กำลังเชื่อม...' : 'เชื่อมใหม่'}
+                      </button>
+                    ) : (
+                      <button
+                        className="fbtap"
+                        onClick={() => connectFbPage(p)}
+                        disabled={!p.canConnect || !!connectingId}
+                        style={{ padding: '9px 13px', fontSize: 12.5, fontWeight: 900, background: (!p.canConnect || (connectingId && !busy)) ? '#94a3b8' : PRIMARY, color: 'white', border: 'none', borderRadius: 10, cursor: (!p.canConnect || connectingId) ? 'not-allowed' : 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap', minHeight: 38, flexShrink: 0 }}
+                      >
+                        <Link2 size={14} /> {busy ? 'กำลังเชื่อม...' : 'เชื่อมเพจ'}
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </section>
+
         {/* LINE */}
-        <section style={{ background: SURFACE, borderRadius: 18, padding: 22, border: `1.5px solid ${BORDER}`, marginBottom: 18 }}>
+        <section className="ch-section" style={{ background: SURFACE, borderRadius: 18, padding: 22, border: `1.5px solid ${BORDER}`, marginBottom: 18 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
             <h2 style={{ fontSize: 15, fontWeight: 900, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ width: 22, height: 22, borderRadius: 6, background: LINE_GREEN, color: 'white', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 900 }}>L</span>
@@ -184,28 +336,9 @@ export default function ChannelsPage() {
           )}
         </section>
 
-        {/* Facebook (read-only) */}
-        <section style={{ background: SURFACE, borderRadius: 18, padding: 22, border: `1.5px solid ${BORDER}` }}>
-          <h2 style={{ fontSize: 15, fontWeight: 900, margin: '0 0 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ width: 22, height: 22, borderRadius: 6, background: '#1877f2', color: 'white', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 900 }}>f</span>
-            Facebook Pages ({fbPages.length})
-          </h2>
-          {fbPages.length === 0 ? (
-            <div style={{ padding: 18, textAlign: 'center', color: MUTED, fontSize: 12 }}>เชื่อมเพจ Facebook ผ่านการ login ด้วย Facebook</div>
-          ) : (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {fbPages.map(p => (
-                <span key={p.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, background: SURFACE2, border: `1px solid ${BORDER}`, padding: '6px 11px', borderRadius: 999, color: TEXT, fontWeight: 700 }}>
-                  {p.page_picture ? <img src={p.page_picture} alt="" style={{ width: 18, height: 18, borderRadius: '50%' }} /> : '📄'}
-                  {p.page_name}
-                </span>
-              ))}
-            </div>
-          )}
-        </section>
       </div>
 
-      {showAdd && <AddLineModal origin={origin} onClose={() => { setShowAdd(false); load() }} />}
+      {showAdd && <AddLineModal origin={origin} onClose={() => { setShowAdd(false); load(true) }} />}
     </div>
   )
 }

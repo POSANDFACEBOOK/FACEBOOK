@@ -2,15 +2,15 @@ export default function PrivacyPolicy() {
   return (
     <div style={{ maxWidth: 700, margin: '40px auto', padding: '20px 24px', fontFamily: 'sans-serif', lineHeight: 1.8, color: '#333' }}>
       <h1>Privacy Policy</h1>
-      <p><strong>Last updated:</strong> April 14, 2026</p>
+      <p><strong>Last updated:</strong> September 14, 2026</p>
 
       <h2>Information We Collect</h2>
-      <p>We collect information you provide when using our Facebook Ads management service, including your Facebook profile information (name, email) and Facebook Page data necessary to manage your advertising campaigns.</p>
+      <p>We collect information you provide when using our customer chat inbox service, including your Facebook profile information (name, email), the list of Facebook Pages you manage, and the messages exchanged between your Pages (or LINE Official Accounts) and your customers so that your team can read and reply to them.</p>
 
       <h2>How We Use Your Information</h2>
       <ul>
-        <li>To create and manage Facebook advertising campaigns on your behalf</li>
-        <li>To analyze ad performance and provide recommendations</li>
+        <li>To display customer conversations from your connected Pages and LINE Official Accounts</li>
+        <li>To send the replies you or your team write back to your customers</li>
         <li>To authenticate your identity via Facebook Login</li>
       </ul>
 

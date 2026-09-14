@@ -3,7 +3,7 @@
 import { getServerSession } from 'next-auth'
 import { NextResponse } from 'next/server'
 import { authOptions } from '@/lib/auth'
-import { supabaseAdmin } from '@/lib/supabase'
+import { supabaseAdmin, ensureFbUser } from '@/lib/supabase'
 import { getCurrentUserContext } from '@/lib/team'
 
 export const dynamic = 'force-dynamic'
@@ -15,7 +15,11 @@ export async function GET() {
       return NextResponse.json({ authenticated: false }, { status: 401 })
     }
 
-    const ctx = await getCurrentUserContext(session)
+    let ctx = await getCurrentUserContext(session)
+    // ล็อกอิน Facebook ครั้งแรกยังไม่มีบัญชีในระบบ → สร้างให้ เพื่อให้เข้าไปเชื่อมเพจแรกได้
+    if (!ctx && (session as any).accessToken && await ensureFbUser(session)) {
+      ctx = await getCurrentUserContext(session)
+    }
     if (!ctx) return NextResponse.json({ authenticated: false }, { status: 401 })
 
     const sb = supabaseAdmin()

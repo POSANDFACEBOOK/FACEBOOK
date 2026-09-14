@@ -121,7 +121,7 @@ export async function POST(_req: Request, { params }: { params: { token: string 
     return NextResponse.json({
       success: true,
       pageCount: memberRows.length,
-      redirect: '/dashboard',
+      redirect: '/dashboard/inbox',
     })
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 })

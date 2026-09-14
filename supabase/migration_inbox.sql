@@ -1,7 +1,6 @@
 -- ============================================
--- FB Ads AI Manager — Inbox Feature Migration
+-- FACEBOOK CHAT — Inbox Feature Migration
 -- รัน SQL นี้ใน Supabase SQL Editor (เพิ่มต่อจาก schema.sql เดิม)
--- ไม่กระทบ tables เดิม (ad_campaigns ฯลฯ)
 -- ============================================
 
 -- ────────────────────────────────────────────

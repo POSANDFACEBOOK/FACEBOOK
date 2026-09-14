@@ -1,5 +1,5 @@
 -- ============================================
--- FB Ads AI Manager — LINE Official Account channel
+-- FACEBOOK CHAT — LINE Official Account channel
 -- รัน SQL นี้ใน Supabase SQL Editor — รันซ้ำได้
 -- ใช้สถาปัตยกรรมเดิม: LINE OA = แถวใน connected_pages (channel='line')
 --   → inbox / สิทธิ์ (page_members) / AI / quick replies ทำงานต่อได้เลย

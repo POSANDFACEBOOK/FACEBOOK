@@ -6,7 +6,7 @@ import Link from 'next/link'
 import {
   ArrowLeft, Send, Sparkles, RefreshCw, Search, Star, Archive, CheckCircle2,
   MessageSquare, Inbox, Settings, Zap, X, ChevronLeft, MoreVertical, Bot,
-  AlertCircle, BarChart3, Bell, Plus, LogOut, ListFilter, MailOpen, MailQuestion,
+  AlertCircle, Users, Bell, Plus, LogOut, ListFilter, MailOpen, MailQuestion,
   Pencil, Check, Copy, Share2, ImagePlus, Menu,
 } from 'lucide-react'
 
@@ -113,6 +113,8 @@ export default function InboxPage() {
 
   // Data
   const [isOwner, setIsOwner] = useState<boolean | null>(null)  // null = ยังไม่รู้ → ซ่อนเมนู owner ไว้ก่อน
+  // จัดการช่องทางได้ = เจ้าของเพจ หรือเจ้าของร้านที่ล็อกอินด้วย Facebook แต่ยังไม่เคยเชื่อมช่องทางแรก
+  const [canManageChannels, setCanManageChannels] = useState(false)
   const [pages, setPages] = useState<any[]>([])
   const [conversations, setConversations] = useState<any[]>([])
   const [activeConv, setActiveConv] = useState<any | null>(null)
@@ -419,8 +421,12 @@ export default function InboxPage() {
 
   // ── Initial load + auto-sync on mount (with throttle) ──
   useEffect(() => {
-    // รู้ว่าเป็น owner หรือ agent → ซ่อนเมนู "ยิงแอดเพจ" สำหรับ agent
-    fetch('/api/me').then(r => r.json()).then(d => setIsOwner(!!d?.role?.isOwner)).catch(() => setIsOwner(false))
+    // รู้ว่าเป็น owner หรือ agent → ซ่อนเมนู "ช่องทางแชท" / "จัดการทีม" สำหรับลูกทีม
+    fetch('/api/me').then(r => r.json()).then(d => {
+      setIsOwner(!!d?.role?.isOwner)
+      // ลูกทีมที่เข้าด้วย Facebook ก็ไม่เห็นเมนูนี้ — เฉพาะเจ้าของร้านที่ยังไม่มีช่องทางแรก
+      setCanManageChannels(!!d?.role?.isOwner || (!!d?.user?.facebookId && !d?.role?.isAgentOnly))
+    }).catch(() => setIsOwner(false))
     // ไม่เรียก loadConversations ที่นี่ — effect [pageFilter, statusFilter, debouncedSearch]
     // ยิงให้อยู่แล้วตอน mount (เดิมยิงซ้ำ 2 ครั้งพร้อมกัน ทำให้ลิสต์กระตุก/สีเพจเปลี่ยนเอง)
     loadQuickReplies()
@@ -1037,18 +1043,18 @@ export default function InboxPage() {
 
         <div style={{ fontSize: 10, color: MUTED, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.8, padding: '6px 10px 4px' }}>เมนูหลัก</div>
 
-        {isOwner && (
-          <Link href="/dashboard" style={{ textDecoration: 'none' }}>
-            <NavItem icon={<BarChart3 size={15} />} label="ยิงแอดเพจ" />
-          </Link>
-        )}
         <NavItem icon={<MessageSquare size={15} />} label="กล่องข้อความ" active badge={channelUnread} />
         <button onClick={() => setShowSettings(true)} style={{ all: 'unset', display: 'block', cursor: 'pointer' }}>
           <NavItem icon={<Settings size={15} />} label="ตั้งค่าแชท" />
         </button>
-        {isOwner && (
+        {canManageChannels && (
           <Link href="/dashboard/channels" style={{ textDecoration: 'none' }}>
             <NavItem icon={<Share2 size={15} />} label="ช่องทางแชท" />
+          </Link>
+        )}
+        {isOwner && (
+          <Link href="/dashboard/team" style={{ textDecoration: 'none' }}>
+            <NavItem icon={<Users size={15} />} label="จัดการทีม" />
           </Link>
         )}
 
@@ -1069,17 +1075,12 @@ export default function InboxPage() {
         borderBottom: `1.5px solid ${BORDER}`, padding: '10px 14px',
         alignItems: 'center', gap: 10, height: 52, boxSizing: 'border-box',
       }}>
-        <Link href={isOwner ? '/dashboard' : '/dashboard/inbox'} style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexShrink: 1 }}>
+        <Link href="/dashboard/inbox" style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexShrink: 1 }}>
           <div style={{ width: 32, height: 32, flexShrink: 0, background: 'linear-gradient(135deg, #1877f2, #5fa3ff)', borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15 }}>⚡</div>
           <div className="ib-hide-narrow" style={{ fontWeight: 900, fontSize: 12.5, color: TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>FACEBOOK CHAT</div>
         </Link>
         <div style={{ flex: 1 }} />
         {/* ตัวสลับช่องทางอยู่ที่แท็บใน page bar ที่เดียว (เดิมมี pill ตรงนี้ซ้ำ ดูเป็นคนละฟีเจอร์) */}
-        {isOwner && (
-          <Link href="/dashboard" style={{ ...btnGhost, padding: '8px 12px', fontSize: 11.5, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5, textDecoration: 'none', color: MUTED, whiteSpace: 'nowrap', flexShrink: 0, minHeight: 36 } as any}>
-            <BarChart3 size={14} /> ยิงแอดเพจ
-          </Link>
-        )}
         {/* เมนูบนมือถือ — sidebar ถูกซ่อน จึงเป็นทางเดียวที่เข้าถึงตั้งค่า/ช่องทาง/ออกจากระบบได้ */}
         <button
           onClick={() => setShowMobileMenu(true)}
@@ -1419,7 +1420,7 @@ export default function InboxPage() {
                   icon={<Inbox size={36} />}
                   title={pages.length === 0 ? 'ยังไม่มีเพจที่เชื่อมต่อ' : 'ยังไม่มีข้อความ'}
                   hint={pages.length === 0
-                    ? (isOwner ? 'ไปที่เมนู "ช่องทางแชท" เพื่อเชื่อมต่อเพจหรือ LINE OA' : 'ให้เจ้าของเพจมอบสิทธิ์เพจให้คุณก่อน')
+                    ? (canManageChannels ? 'ไปที่เมนู "ช่องทางแชท" เพื่อเชื่อมต่อเพจหรือ LINE OA' : 'ให้เจ้าของเพจมอบสิทธิ์เพจให้คุณก่อน')
                     : 'เพจนี้ยังไม่มีบทสนทนา หรือลูกค้ายังไม่ได้ทักเข้ามา'}
                 />
               )
@@ -2064,14 +2065,14 @@ export default function InboxPage() {
             >
               <Settings size={17} color={PRIMARY} /> ตั้งค่าแชท
             </button>
-            {isOwner && (
+            {canManageChannels && (
               <Link href="/dashboard/channels" onClick={() => setShowMobileMenu(false)} style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '14px 12px', borderBottom: `1px solid ${BORDER}`, textDecoration: 'none', fontSize: 14, fontWeight: 700, color: TEXT }}>
                 <Share2 size={17} color={PRIMARY} /> ช่องทางแชท
               </Link>
             )}
             {isOwner && (
-              <Link href="/dashboard" onClick={() => setShowMobileMenu(false)} style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '14px 12px', borderBottom: `1px solid ${BORDER}`, textDecoration: 'none', fontSize: 14, fontWeight: 700, color: TEXT }}>
-                <BarChart3 size={17} color={PRIMARY} /> ยิงแอดเพจ
+              <Link href="/dashboard/team" onClick={() => setShowMobileMenu(false)} style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '14px 12px', borderBottom: `1px solid ${BORDER}`, textDecoration: 'none', fontSize: 14, fontWeight: 700, color: TEXT }}>
+                <Users size={17} color={PRIMARY} /> จัดการทีม
               </Link>
             )}
             <button

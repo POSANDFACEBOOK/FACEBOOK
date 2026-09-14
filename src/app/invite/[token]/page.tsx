@@ -54,7 +54,7 @@ export default function InviteAcceptPage() {
         setAccepting(false)
         return
       }
-      router.push(data.redirect || '/dashboard')
+      router.push(data.redirect || '/dashboard/inbox')
     } catch (e: any) {
       alert('เกิดข้อผิดพลาด: ' + e.message)
       setAccepting(false)
@@ -193,7 +193,7 @@ export default function InviteAcceptPage() {
             padding: '11px 14px', marginBottom: 22, fontSize: 12, color: '#065f46', lineHeight: 1.7,
           }}>
             <strong>สิทธิ์ของคุณ:</strong> ตอบแชทลูกค้า · ขอ AI ช่วยตอบ · ใช้ quick replies
-            <br /><strong style={{ color: MUTED }}>ไม่สามารถ:</strong> ยิงแอด · ดูค่าใช้จ่าย · จัดการทีม
+            <br /><strong style={{ color: MUTED }}>ไม่สามารถ:</strong> เชื่อม/ยกเลิกช่องทาง · จัดการทีม
           </div>
 
           {/* Actions */}

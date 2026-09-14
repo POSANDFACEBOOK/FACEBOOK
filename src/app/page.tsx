@@ -15,11 +15,11 @@ export default function Home() {
     <html lang="th">
       <head>
         <title>FACEBOOK CHAT NAIWANSOOK</title>
-        <meta name="description" content="AI-powered Facebook Ads Manager" />
+        <meta name="description" content="ระบบรวมแชทลูกค้าจาก Facebook Page และ LINE OA ไว้ตอบในที่เดียว" />
       </head>
       <body style={{ fontFamily: 'sans-serif', padding: '40px', textAlign: 'center' }}>
         <h1>FACEBOOK CHAT NAIWANSOOK</h1>
-        <p>AI-powered Facebook Ads Management Platform</p>
+        <p>Unified customer chat inbox for Facebook Pages and LINE Official Accounts</p>
       </body>
     </html>
   )

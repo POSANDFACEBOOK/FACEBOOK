@@ -1,5 +1,5 @@
 -- ============================================
--- FB Ads AI Manager — Email + Password Auth for Agents
+-- FACEBOOK CHAT — Email + Password Auth for Agents
 -- รัน SQL นี้ใน Supabase SQL Editor (เพิ่มต่อจาก migration_team_roles.sql)
 -- Backward-compatible: ผู้ใช้ FB OAuth เดิมไม่กระทบ
 -- รันซ้ำได้ (idempotent)
