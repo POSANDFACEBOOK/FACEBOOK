@@ -13,6 +13,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { supabaseAdmin, getUserIdFromFbToken } from './supabase'
+import { LINE_ENABLED } from './features'
 
 export type Role = 'owner' | 'agent'
 
@@ -20,6 +21,7 @@ export interface Membership {
   pageId: string         // connected_pages.id
   role: Role
   ownerUserId: string    // เจ้าของเพจ (connected_pages.user_id)
+  channel: 'facebook' | 'line'
 }
 
 export interface UserContext {
@@ -34,6 +36,8 @@ export interface UserContext {
   ownedPageIds: Set<string>
   /** Set page_id ทั้งหมดที่ user เข้าถึงได้ (owner + agent) */
   accessiblePageIds: Set<string>
+  /** เพจที่เป็น owner รวมช่องทางที่ถูกซ่อน (LINE) — ใช้ตอน "ถอดแอดมินออกจากทีมทั้งหมด" เท่านั้น ห้ามใช้อ่าน/แสดงข้อมูล */
+  allOwnedPageIds: Set<string>
   /** เป็น owner ของอย่างน้อย 1 เพจ */
   isOwner: boolean
   /** มี membership แต่ไม่ได้เป็น owner ของเพจไหนเลย */
@@ -68,14 +72,19 @@ export async function getCurrentUserContext(session: any): Promise<UserContext |
   const sb = supabaseAdmin()
   const { data } = await sb
     .from('page_members')
-    .select('page_id, role, connected_pages!inner(user_id)')
+    .select('page_id, role, connected_pages!inner(user_id, channel)')
     .eq('user_id', userId)
 
-  const memberships: Membership[] = (data || []).map((r: any) => ({
+  const allMemberships: Membership[] = (data || []).map((r: any) => ({
     pageId: r.page_id,
     role: r.role as Role,
     ownerUserId: r.connected_pages?.user_id || '',
+    channel: r.connected_pages?.channel === 'line' ? 'line' : 'facebook',
   }))
+
+  // ช่องทาง LINE ถูกซ่อน (lib/features.ts) → ทุก route ที่ใช้ context นี้มองไม่เห็นเพจ LINE
+  // (ไม่ลบข้อมูล/สิทธิ์ใน DB — เปิดสวิตช์กลับแล้วกลับมาเหมือนเดิม)
+  const memberships = LINE_ENABLED ? allMemberships : allMemberships.filter(m => m.channel !== 'line')
 
   const ownedPageIds = new Set(memberships.filter(m => m.role === 'owner').map(m => m.pageId))
   const accessiblePageIds = new Set(memberships.map(m => m.pageId))
@@ -87,8 +96,10 @@ export async function getCurrentUserContext(session: any): Promise<UserContext |
     memberships,
     ownedPageIds,
     accessiblePageIds,
+    allOwnedPageIds: new Set(allMemberships.filter(m => m.role === 'owner').map(m => m.pageId)),
     isOwner: ownedPageIds.size > 0,
-    isAgentOnly: memberships.length > 0 && ownedPageIds.size === 0,
+    // นับจากสิทธิ์ทั้งหมด (รวม LINE ที่ซ่อนอยู่) — ลูกทีมที่ดูแลแค่ LINE ก็ยังเป็นลูกทีม ไม่ใช่เจ้าของร้านใหม่
+    isAgentOnly: allMemberships.length > 0 && !allMemberships.some(m => m.role === 'owner'),
   }
 }
 

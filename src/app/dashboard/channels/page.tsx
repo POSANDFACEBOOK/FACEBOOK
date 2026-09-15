@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { LINE_ENABLED } from '@/lib/features'
 import { ArrowLeft, Plus, Trash2, Copy, Check, X, Link2, MessageSquare, RefreshCw } from 'lucide-react'
 
 const BG = '#eaf2fd', SURFACE = '#ffffff', SURFACE2 = '#f0f6ff'
@@ -122,7 +123,7 @@ export default function ChannelsPage() {
         <div style={{ maxWidth: 460, margin: '60px auto', background: SURFACE, borderRadius: 22, padding: 36, textAlign: 'center', border: `1.5px solid ${BORDER}` }}>
           <div style={{ fontSize: 48, marginBottom: 12 }}>🔒</div>
           <h1 style={{ fontSize: 20, fontWeight: 900, color: TEXT, margin: '0 0 8px' }}>เฉพาะเจ้าของเพจ</h1>
-          <p style={{ color: MUTED, fontSize: 13, margin: '0 0 14px', lineHeight: 1.6 }}>การเชื่อมเพจ/LINE ต้องเข้าสู่ระบบด้วย Facebook ของเจ้าของเพจ</p>
+          <p style={{ color: MUTED, fontSize: 13, margin: '0 0 14px', lineHeight: 1.6 }}>{LINE_ENABLED ? 'การเชื่อมเพจ/LINE' : 'การเชื่อมเพจ'} ต้องเข้าสู่ระบบด้วย Facebook ของเจ้าของเพจ</p>
           <Link href="/dashboard/inbox" style={{ color: PRIMARY, fontWeight: 800, textDecoration: 'none' }}>← กลับกล่องข้อความ</Link>
         </div>
       </div>
@@ -148,20 +149,20 @@ export default function ChannelsPage() {
           <Link href="/dashboard/inbox" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, color: MUTED, textDecoration: 'none', fontSize: 13, fontWeight: 700 }}>
             <ArrowLeft size={15} /> กล่องข้อความ
           </Link>
-          <button
+          {LINE_ENABLED && <button
             className="fbtap"
             onClick={() => setShowAdd(true)}
             style={{ padding: '12px 22px', fontSize: 13.5, fontWeight: 900, background: LINE_GREEN, color: 'white', border: 'none', borderRadius: 13, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 6px 18px rgba(6,199,85,0.4)' }}
           >
             <Plus size={16} /> เชื่อม LINE OA
-          </button>
+          </button>}
         </div>
 
         <h1 style={{ fontSize: 26, fontWeight: 900, margin: '0 0 4px', letterSpacing: '-0.5px', display: 'flex', alignItems: 'center', gap: 10 }}>
           <MessageSquare size={26} color={PRIMARY} /> ช่องทางแชท
         </h1>
         <p style={{ color: MUTED, fontSize: 13, fontWeight: 600, margin: '0 0 22px' }}>
-          รวมทุกช่องทางมาตอบในระบบเดียว — Facebook + LINE
+          {LINE_ENABLED ? 'รวมทุกช่องทางมาตอบในระบบเดียว — Facebook + LINE' : 'เชื่อมเพจ Facebook เข้ากล่องข้อความ'}
           {isOwner && <> · <Link href="/dashboard/team" style={{ color: PRIMARY, fontWeight: 800, textDecoration: 'none' }}>จัดการทีมแอดมิน →</Link></>}
         </p>
 
@@ -252,7 +253,8 @@ export default function ChannelsPage() {
           )}
         </section>
 
-        {/* LINE */}
+        {/* LINE — ซ่อนไว้ก่อน เปิดด้วย NEXT_PUBLIC_ENABLE_LINE (lib/features.ts) */}
+        {LINE_ENABLED && (
         <section className="ch-section" style={{ background: SURFACE, borderRadius: 18, padding: 22, border: `1.5px solid ${BORDER}`, marginBottom: 18 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
             <h2 style={{ fontSize: 15, fontWeight: 900, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -335,10 +337,11 @@ export default function ChannelsPage() {
             </div>
           )}
         </section>
+        )}
 
       </div>
 
-      {showAdd && <AddLineModal origin={origin} onClose={() => { setShowAdd(false); load(true) }} />}
+      {LINE_ENABLED && showAdd && <AddLineModal origin={origin} onClose={() => { setShowAdd(false); load(true) }} />}
     </div>
   )
 }

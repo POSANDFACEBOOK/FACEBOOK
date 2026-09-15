@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import Link from 'next/link'
+import { LINE_ENABLED } from '@/lib/features'
 import { ArrowLeft, UserPlus, Trash2, Copy, Check, Users, X, ExternalLink, Link2, Clock, Mail, Key, RefreshCw } from 'lucide-react'
 
 const BG = '#eaf2fd', SURFACE = '#ffffff', SURFACE2 = '#f0f6ff'
@@ -348,7 +349,7 @@ function EditAccessModal({ member, pages, onClose }: { member: Member; pages: Pa
           <h2 style={{ fontSize: 17, fontWeight: 900, margin: 0 }}>จัดการเพจของ {member.name}</h2>
           <button onClick={onClose} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: MUTED, display: 'flex' }}><X size={20} /></button>
         </div>
-        <p style={{ fontSize: 12, color: MUTED, fontWeight: 600, margin: '0 0 14px' }}>เลือกเพจ Facebook และ LINE OA ที่ให้แอดมินคนนี้ตอบแชท</p>
+        <p style={{ fontSize: 12, color: MUTED, fontWeight: 600, margin: '0 0 14px' }}>{LINE_ENABLED ? 'เลือกเพจ Facebook และ LINE OA ที่ให้แอดมินคนนี้ตอบแชท' : 'เลือกเพจ Facebook ที่ให้แอดมินคนนี้ตอบแชท'}</p>
 
         {line.length > 0 && (
           <>

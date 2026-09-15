@@ -1,6 +1,7 @@
 # 💬 FACEBOOK CHAT NAIWANSOOK
 
-ระบบรวมแชทลูกค้าจาก **Facebook Page** และ **LINE Official Account** ไว้ตอบในที่เดียว
+ระบบตอบแชทลูกค้าจาก **Facebook Page** ในที่เดียว
+(รองรับ **LINE Official Account** ด้วย แต่ตอนนี้ซ่อนไว้ก่อน — เปิดได้ด้วย env `NEXT_PUBLIC_ENABLE_LINE=true` แล้ว Redeploy)
 ออกแบบให้แอดมินร้านใช้บนมือถือเป็นหลัก — เจ้าของเพจเชื่อมช่องทางและเพิ่มทีม แอดมินเข้ามาตอบแชทอย่างเดียว
 
 ## ฟีเจอร์

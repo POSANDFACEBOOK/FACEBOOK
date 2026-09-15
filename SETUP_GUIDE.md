@@ -45,6 +45,8 @@ FACEBOOK_CLIENT_ID, FACEBOOK_CLIENT_SECRET, FB_WEBHOOK_VERIFY_TOKEN
 NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_JWT_SECRET
 ANTHROPIC_API_KEY
 NEXTAUTH_URL, NEXTAUTH_SECRET
+# (ไม่บังคับ) เปิดช่องทาง LINE OA — ไม่ตั้ง = ซ่อน LINE ทั้งระบบ · เปลี่ยนค่าแล้วต้อง Redeploy
+NEXT_PUBLIC_ENABLE_LINE=true
 ```
 
 ## 4) Deploy
@@ -55,7 +57,7 @@ push เข้า `main` → GitHub Actions deploy ขึ้น Vercel อัต
 1. เจ้าของเพจเข้า `/login` → **เข้าสู่ระบบด้วย Facebook** (กดอนุญาตให้เข้าถึงเพจ)
 2. เมนู **ช่องทางแชท**
    - Facebook: กด **เชื่อมเพจ** ที่เพจที่ต้องการ
-   - LINE: กด **เชื่อม LINE OA** → ใส่ Channel access token + Channel secret → นำ Webhook URL
+   - LINE (ต้องตั้ง `NEXT_PUBLIC_ENABLE_LINE=true` ก่อน): กด **เชื่อม LINE OA** → ใส่ Channel access token + Channel secret → นำ Webhook URL
      `https://your-app.vercel.app/api/webhooks/line` ไปใส่ใน LINE Developers และเปิด **Use webhook**
    - กด **ตรวจสอบการเชื่อมต่อทั้งหมด** เพื่อเช็ค LINE ทุก OA ในครั้งเดียว
 3. เมนู **จัดการทีม** → เพิ่มแอดมิน (อีเมล+รหัสผ่าน หรือส่งลิงก์เชิญ) และเลือกเพจที่ให้ตอบ

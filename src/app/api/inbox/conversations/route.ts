@@ -29,11 +29,6 @@ export async function GET(req: Request) {
     const q = (searchParams.get('q') || '').trim()
     const limit = Math.min(Number(searchParams.get('limit') || 50), 500)
 
-    // ถ้า client filter ด้วย pageId ต้องเป็นเพจที่เข้าถึงได้
-    if (pageId && !ctx.accessiblePageIds.has(pageId)) {
-      return NextResponse.json({ conversations: [], pages: [], totalUnread: 0, totalNeedsReply: 0, unreadByPage: {} })
-    }
-
     const sb = supabaseAdmin()
 
     // ดึง pages ที่ user เข้าถึงได้ (สำหรับ filter dropdown)
@@ -42,6 +37,12 @@ export async function GET(req: Request) {
       .select('id, page_id, page_name, page_picture, nickname, channel')
       .in('id', accessible)
       .eq('is_active', true)
+
+    // client ขอเพจที่เข้าไม่ได้แล้ว (ถูกถอนสิทธิ์ / ช่องทางถูกซ่อน เช่น LINE) → ส่งรายชื่อเพจที่เข้าได้กลับไป
+    // หน้าเว็บจะล้างตัวเลือกเพจเก่าแล้วกลับไป "ทุกเพจ" เอง (ถ้าส่ง pages ว่าง หน้าจะค้างว่า "ยังไม่มีเพจ")
+    if (pageId && !ctx.accessiblePageIds.has(pageId)) {
+      return NextResponse.json({ conversations: [], pages: pages || [], totalUnread: 0, totalNeedsReply: 0, unreadByPage: {}, needsReplyByPage: {} })
+    }
 
     let query = sb
       .from('conversations')
