@@ -34,6 +34,8 @@ src/lib/team.ts                         getCurrentUserContext — ใช้ใ�
 src/lib/features.ts                     สวิตช์ฟีเจอร์ (LINE_ENABLED)
 src/lib/supabase.ts                     supabaseAdmin(), ensureFbUser()
 src/lib/fb-pages.ts                     fetchManagedPages(), canConnectPage() — เพจที่ผู้ใช้ดูแล + บทบาทที่ตอบแชทได้
+src/lib/app-badge.ts                    ตัวเลขแชทใหม่บนชื่อแท็บ/favicon/ไอคอนแอป (Badging API)
+public/icon.svg + icons/ + favicon.ico   ไอคอนแอป "ตัว N" (ต้นฉบับ = icon.svg; PNG/ICO สร้างจากไฟล์นี้) · manifest.webmanifest = ติดตั้งเป็นแอปได้
 src/lib/{messenger,line,media}.ts       helpers ของแต่ละช่องทาง
 supabase/*.sql                          ลำดับการรันอยู่ใน SETUP_GUIDE.md
 ```
