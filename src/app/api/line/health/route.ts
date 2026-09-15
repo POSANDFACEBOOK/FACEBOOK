@@ -6,6 +6,7 @@ import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase'
 import { getCurrentUserContext, assertOwner } from '@/lib/team'
 import { getLineBotInfo, getLineWebhookEndpoint, testLineWebhook } from '@/lib/line'
+import { LINE_ENABLED } from '@/lib/features'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -13,6 +14,8 @@ export const maxDuration = 30
 
 export async function GET(req: Request) {
   try {
+    // ช่องทาง LINE ซ่อนอยู่ (lib/features.ts)
+    if (!LINE_ENABLED) return NextResponse.json({ error: 'ช่องทาง LINE ปิดใช้งานชั่วคราว', disabled: true }, { status: 403 })
     const session = await getServerSession(authOptions)
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const ctx = await getCurrentUserContext(session)

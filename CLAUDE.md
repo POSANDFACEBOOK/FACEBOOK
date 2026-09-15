@@ -1,7 +1,12 @@
 # CLAUDE.md — FACEBOOK CHAT NAIWANSOOK
 
-ระบบ **ตอบแชทลูกค้าอย่างเดียว** — รวม Facebook Page + LINE OA ไว้ในกล่องข้อความเดียว
+ระบบ **ตอบแชทลูกค้าอย่างเดียว** — ตอนนี้เน้น **Facebook Page** อย่างเดียว
 (ระบบยิงแอด/วิเคราะห์แอดเดิมถูกตัดออกทั้งหมดแล้ว อย่าเพิ่มกลับโดยไม่ได้รับคำสั่ง)
+
+> **LINE OA ถูกซ่อนไว้ก่อน (ไม่ได้ลบโค้ด)** — สวิตช์ `LINE_ENABLED` ใน `src/lib/features.ts`
+> อ่านจาก env `NEXT_PUBLIC_ENABLE_LINE` (ไม่ตั้ง = ปิด) กรองเพจ LINE ออกที่ `getCurrentUserContext` จุดเดียว
+> + ซ่อน UI ในหน้าช่องทาง/ทีม/กล่องข้อความ + API `line/connect`, `line/health` ตอบ 403
+> webhook LINE ยังรับข้อความเก็บไว้ · เปิดกลับ = ตั้ง env เป็น `true` ใน Vercel แล้ว Redeploy
 ผู้ใช้หลักคือแอดมินร้านอาหารที่ใช้ **มือถือ** — ข้อความใน UI เป็นภาษาไทยที่อ่านแล้วรู้ว่าต้องทำอะไรต่อ
 
 ## 🏗️ Architecture
@@ -25,7 +30,8 @@ src/app/api/pages/connect/route.ts      เชื่อมเพจ FB — ด�
 src/app/api/line/{connect,health}       เชื่อม/ตรวจ LINE OA
 src/app/api/webhooks/{messenger,line}   รับข้อความ (await ให้เสร็จก่อนตอบ, rehost รูปผ่าน lib/media.ts)
 src/app/api/realtime/token              มินต์ Supabase JWT (SUPABASE_JWT_SECRET)
-src/lib/team.ts                         getCurrentUserContext — ใช้ในทุก API route
+src/lib/team.ts                         getCurrentUserContext — ใช้ในทุก API route (กรองเพจ LINE เมื่อปิดสวิตช์)
+src/lib/features.ts                     สวิตช์ฟีเจอร์ (LINE_ENABLED)
 src/lib/supabase.ts                     supabaseAdmin(), ensureFbUser()
 src/lib/fb-pages.ts                     fetchManagedPages(), canConnectPage() — เพจที่ผู้ใช้ดูแล + บทบาทที่ตอบแชทได้
 src/lib/{messenger,line,media}.ts       helpers ของแต่ละช่องทาง

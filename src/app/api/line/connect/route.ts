@@ -7,11 +7,14 @@ import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase'
 import { getCurrentUserContext, assertOwner } from '@/lib/team'
 import { getLineBotInfo } from '@/lib/line'
+import { LINE_ENABLED } from '@/lib/features'
 
 export const dynamic = 'force-dynamic'
 
 export async function POST(req: Request) {
   try {
+    // ช่องทาง LINE ซ่อนอยู่ (lib/features.ts)
+    if (!LINE_ENABLED) return NextResponse.json({ error: 'ช่องทาง LINE ปิดใช้งานชั่วคราว', disabled: true }, { status: 403 })
     const session = await getServerSession(authOptions)
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const ctx = await getCurrentUserContext(session)
@@ -83,6 +86,8 @@ export async function POST(req: Request) {
 
 export async function DELETE(req: Request) {
   try {
+    // ช่องทาง LINE ซ่อนอยู่ (lib/features.ts)
+    if (!LINE_ENABLED) return NextResponse.json({ error: 'ช่องทาง LINE ปิดใช้งานชั่วคราว', disabled: true }, { status: 403 })
     const session = await getServerSession(authOptions)
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const ctx = await getCurrentUserContext(session)

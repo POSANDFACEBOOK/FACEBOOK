@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useSession, signOut } from 'next-auth/react'
 import Link from 'next/link'
+import { LINE_ENABLED } from '@/lib/features'
 import {
   ArrowLeft, Send, Sparkles, RefreshCw, Search, Star, Archive, CheckCircle2,
   MessageSquare, Inbox, Settings, Zap, X, ChevronLeft, MoreVertical, Bot,
@@ -550,6 +551,18 @@ export default function InboxPage() {
   // ถ้ายังไม่ได้ตั้ง SUPABASE_JWT_SECRET → endpoint คืน token=null → ใช้ polling 30 วิ แทน
   const rtTimerRef = useRef<any>(null)
   const rtRefreshRef = useRef<() => void>(() => {})
+  // ช่องทาง LINE ถูกซ่อน แต่ webhook LINE ยังเขียนข้อมูลอยู่ → ข้าม event ของแชทที่ไม่อยู่ในเพจที่เห็น
+  // ไม่งั้นทุกข้อความ LINE จะสั่งโหลดรายการใหม่บนมือถือแอดมินโดยไม่มีอะไรเปลี่ยน (poll 7 วิ ยังเป็นตัวสำรอง)
+  const rtIgnoreRef = useRef<(table: string, row: any) => boolean>(() => false)
+  rtIgnoreRef.current = (table, row) => {
+    if (LINE_ENABLED || !row) return false
+    if (table === 'conversations') {
+      const pid = row.page_id
+      return !!pid && pages.length > 0 && !pages.some((p: any) => p.id === pid)
+    }
+    const cid = row.conversation_id
+    return !!cid && pages.length > 0 && activeConv?.id !== cid && !conversations.some((c: any) => c.id === cid)
+  }
   rtRefreshRef.current = () => {
     if (rtTimerRef.current) return  // coalesce burst ของข้อความ
     rtTimerRef.current = setTimeout(() => {
@@ -581,9 +594,9 @@ export default function InboxPage() {
         client = createClient(url, anon, { realtime: { params: { eventsPerSecond: 10 } } })
         await client.realtime.setAuth(res.token)
         channel = client.channel('inbox-rt')
-          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'inbox_messages' }, () => rtRefreshRef.current())
-          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'conversations' }, () => rtRefreshRef.current())
-          .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'conversations' }, () => rtRefreshRef.current())
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'inbox_messages' }, (e: any) => { if (!rtIgnoreRef.current('inbox_messages', e?.new)) rtRefreshRef.current() })
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'conversations' }, (e: any) => { if (!rtIgnoreRef.current('conversations', e?.new)) rtRefreshRef.current() })
+          .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'conversations' }, (e: any) => { if (!rtIgnoreRef.current('conversations', e?.new)) rtRefreshRef.current() })
           .subscribe()
       } catch {}
     })()
@@ -1420,7 +1433,7 @@ export default function InboxPage() {
                   icon={<Inbox size={36} />}
                   title={pages.length === 0 ? 'ยังไม่มีเพจที่เชื่อมต่อ' : 'ยังไม่มีข้อความ'}
                   hint={pages.length === 0
-                    ? (canManageChannels ? 'ไปที่เมนู "ช่องทางแชท" เพื่อเชื่อมต่อเพจหรือ LINE OA' : 'ให้เจ้าของเพจมอบสิทธิ์เพจให้คุณก่อน')
+                    ? (canManageChannels ? (LINE_ENABLED ? 'ไปที่เมนู "ช่องทางแชท" เพื่อเชื่อมต่อเพจหรือ LINE OA' : 'ไปที่เมนู "ช่องทางแชท" เพื่อเชื่อมเพจ Facebook') : 'ให้เจ้าของเพจมอบสิทธิ์เพจให้คุณก่อน')
                     : 'เพจนี้ยังไม่มีบทสนทนา หรือลูกค้ายังไม่ได้ทักเข้ามา'}
                 />
               )

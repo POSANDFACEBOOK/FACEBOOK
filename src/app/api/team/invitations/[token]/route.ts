@@ -2,6 +2,7 @@
 // คืนข้อมูล non-sensitive สำหรับหน้า /invite/[token] ก่อน accept
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
+import { LINE_ENABLED } from '@/lib/features'
 
 export const dynamic = 'force-dynamic'
 
@@ -35,7 +36,7 @@ export async function GET(_req: Request, { params }: { params: { token: string }
     // ดึง owner name + pages preview
     const [{ data: owner }, { data: pages }] = await Promise.all([
       sb.from('users').select('name, image').eq('id', inv.owner_user_id).single(),
-      sb.from('connected_pages').select('page_name, page_picture').in('id', inv.page_ids || []),
+      sb.from('connected_pages').select('page_name, page_picture, channel').in('id', inv.page_ids || []),
     ])
 
     return NextResponse.json({
@@ -44,7 +45,10 @@ export async function GET(_req: Request, { params }: { params: { token: string }
       ownerName: owner?.name || 'เจ้าของเพจ',
       ownerImage: owner?.image || null,
       note: inv.note,
-      pages: pages || [],
+      // ช่องทาง LINE ถูกซ่อน → ไม่บอกผู้รับคำเชิญว่าจะได้ดูแล LINE OA (รับแล้วก็ไม่เห็นอยู่ดี)
+      pages: (pages || [])
+        .filter((p: any) => LINE_ENABLED || p.channel !== 'line')
+        .map((p: any) => ({ page_name: p.page_name, page_picture: p.page_picture })),
       expiresAt: inv.expires_at,
     })
   } catch (err: any) {

@@ -93,11 +93,14 @@ export async function PATCH(req: Request) {
 
     const sb = supabaseAdmin()
     // ลบสิทธิ์เดิม (เฉพาะเพจของ owner, ไม่แตะ row owner)
+    // ติ๊กออกหมด (ส่งรายการว่าง) = ถอดออกจากทีม → ลบสิทธิ์ช่องทางที่ถูกซ่อน (LINE) ด้วย
+    // ยังเลือกเพจไว้ = แก้แค่เพจที่เห็น ปล่อยสิทธิ์ LINE ที่ซ่อนไว้ตามเดิม
+    const scope = (pageIds as string[]).length === 0 ? Array.from(ctx.allOwnedPageIds) : ownedIds
     const { error: delErr } = await sb
       .from('page_members')
       .delete()
       .eq('user_id', userId)
-      .in('page_id', ownedIds)
+      .in('page_id', scope)
       .neq('role', 'owner')
     if (delErr) throw delErr
 
@@ -137,13 +140,15 @@ export async function DELETE(req: Request) {
     }
 
     const sb = supabaseAdmin()
-    const ownedIds = Array.from(ctx.ownedPageIds)
+    // ถอดออกจากทีมทั้งหมด (ไม่ระบุเพจ) → รวมสิทธิ์ช่องทางที่ถูกซ่อน (LINE) ด้วย
+    // ไม่งั้นพอเปิด LINE กลับ คนที่ถูกถอดไปแล้วจะเห็นแชท LINE ของร้านได้อีก
+    const scopeIds = Array.from(pageId ? ctx.ownedPageIds : ctx.allOwnedPageIds)
 
     let q = sb
       .from('page_members')
       .delete()
       .eq('user_id', memberUserId)
-      .in('page_id', ownedIds)
+      .in('page_id', scopeIds)
       .neq('role', 'owner')  // ห้ามลบ owner row
 
     if (pageId) q = q.eq('page_id', pageId)

@@ -5,6 +5,7 @@ import { NextResponse } from 'next/server'
 import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase'
 import { getCurrentUserContext, assertOwner } from '@/lib/team'
+import { LINE_ENABLED } from '@/lib/features'
 
 export const dynamic = 'force-dynamic'
 
@@ -30,9 +31,12 @@ export async function GET() {
     // join page names
     const allPageIds = Array.from(new Set((invitations || []).flatMap(i => i.page_ids || [])))
     const { data: pages } = allPageIds.length > 0
-      ? await sb.from('connected_pages').select('id, page_name, page_picture').in('id', allPageIds)
+      ? await sb.from('connected_pages').select('id, page_name, page_picture, channel').in('id', allPageIds)
       : { data: [] }
-    const pageMap = new Map((pages || []).map(p => [p.id, p]))
+    // ช่องทาง LINE ถูกซ่อน → ไม่แสดงชื่อ/รูป LINE OA ในคำเชิญเก่า (คำเชิญยังอยู่ ยกเลิกได้ตามปกติ)
+    const pageMap = new Map((pages || [])
+      .filter((p: any) => LINE_ENABLED || p.channel !== 'line')
+      .map(({ channel: _c, ...p }: any) => [p.id, p]))
 
     // join accepted_by user
     const acceptedIds = Array.from(new Set((invitations || []).map(i => i.accepted_by).filter(Boolean)))
