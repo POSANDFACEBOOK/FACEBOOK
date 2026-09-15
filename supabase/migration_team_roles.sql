@@ -1,5 +1,5 @@
 -- ============================================
--- FB Ads AI Manager — Team / Roles Migration
+-- FACEBOOK CHAT — Team / Roles Migration
 -- รัน SQL นี้ใน Supabase SQL Editor (เพิ่มต่อจาก migration_inbox.sql)
 -- Backward-compatible: existing single-user accounts ยังทำงานเดิม
 -- รันซ้ำได้ (idempotent ทุกขั้น)
@@ -155,8 +155,7 @@ CREATE POLICY "qr_member_access" ON quick_replies FOR ALL USING (
   ))
 );
 
--- ad_campaigns / ad_performance / ai_analyses / ab_test_groups / notifications: owner-only
--- นโยบายเดิม (user_id = auth.uid()) ใช้งานได้เลย — agent's auth.uid() ไม่ตรงกับ owner's user_id
+-- (ตารางระบบแอดเดิมถูกตัดออกแล้ว — ดู optional_drop_ads_tables.sql)
 
 -- ────────────────────────────────────────────
 -- 7) Realtime publication (idempotent)

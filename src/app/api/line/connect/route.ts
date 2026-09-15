@@ -16,8 +16,11 @@ export async function POST(req: Request) {
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const ctx = await getCurrentUserContext(session)
     if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    // เจ้าของเพจเชื่อม LINE ได้ + เจ้าของร้านที่ล็อกอินด้วย Facebook แต่ยังไม่มีช่องทางแรก
+    // ลูกทีม (มีสิทธิ์ในเพจคนอื่นแต่ไม่ได้เป็นเจ้าของ) เชื่อมไม่ได้
     const g = assertOwner(ctx)
-    if (!g.ok) return NextResponse.json({ error: g.error }, { status: g.status })
+    const firstChannelOwner = ctx.authMethod === 'facebook' && ctx.memberships.length === 0
+    if (!g.ok && !firstChannelOwner) return NextResponse.json({ error: g.error }, { status: g.status })
 
     const { accessToken, channelSecret } = await req.json()
     const token = typeof accessToken === 'string' ? accessToken.trim() : ''
@@ -33,6 +36,19 @@ export async function POST(req: Request) {
     }
 
     const sb = supabaseAdmin()
+
+    // OA นี้ถูกเชื่อมโดยบัญชีอื่นอยู่แล้ว → ห้ามสร้างซ้ำ
+    // (webhook หา OA ด้วย bot userId แบบแถวเดียว ถ้ามี 2 แถว ข้อความ LINE ของ OA นี้จะหายทั้งหมด)
+    const { data: sameBot, error: dupErr } = await sb
+      .from('connected_pages')
+      .select('id, user_id')
+      .eq('page_id', bot.info.userId)
+      .eq('channel', 'line')
+    if (dupErr) throw dupErr
+    if ((sameBot || []).some((r: any) => r.user_id !== ctx.userId)) {
+      return NextResponse.json({ error: 'LINE OA นี้ถูกเชื่อมโดยบัญชีอื่นอยู่แล้ว — ให้เจ้าของเดิมเพิ่มคุณเป็นทีมในเมนู "จัดการทีม" แทน' }, { status: 409 })
+    }
+
     // upsert ตาม (user_id, page_id) — page_id = LINE bot userId
     const { data, error } = await sb
       .from('connected_pages')
@@ -45,7 +61,6 @@ export async function POST(req: Request) {
           page_picture: bot.info.pictureUrl || null,
           page_access_token: token,
           line_channel_secret: secret,
-          currency: 'THB',
           is_active: true,
         },
         { onConflict: 'user_id,page_id' },

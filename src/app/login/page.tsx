@@ -15,7 +15,7 @@ function LoginInner() {
   const { data: session, status } = useSession()
   const searchParams = useSearchParams()
   const router = useRouter()
-  const callbackUrl = searchParams.get('callbackUrl') || '/dashboard'
+  const callbackUrl = searchParams.get('callbackUrl') || '/dashboard/inbox'
 
   // login อยู่แล้ว → ข้ามหน้านี้ เข้าหน้าปลายทางเลย (เช่น ลิงก์แชท /dashboard/inbox)
   useEffect(() => {
@@ -53,7 +53,7 @@ function LoginInner() {
     }
   }
 
-  // กำลัง login อยู่แล้ว → แสดง loader สั้นๆ ระหว่าง redirect (ไม่โชว์การ์ด "ไปที่ Dashboard")
+  // กำลัง login อยู่แล้ว → แสดง loader สั้นๆ ระหว่าง redirect (ไม่โชว์การ์ดค้างไว้)
   if (status === 'authenticated') {
     return (
       <div style={{ minHeight: '100vh', background: '#eaf2fd', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: "'Sarabun', sans-serif" }}>

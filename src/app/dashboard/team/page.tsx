@@ -105,7 +105,7 @@ export default function TeamPage() {
           <div style={{ fontSize: 48, marginBottom: 12 }}>🔒</div>
           <h1 style={{ fontSize: 20, fontWeight: 900, color: TEXT, margin: '0 0 8px' }}>ไม่มีสิทธิ์เข้าหน้านี้</h1>
           <p style={{ color: MUTED, fontSize: 13, marginBottom: 22 }}>เฉพาะเจ้าของเพจเท่านั้น</p>
-          <Link href="/dashboard" style={{ color: PRIMARY, fontWeight: 800, textDecoration: 'none', fontSize: 14 }}>← กลับ Dashboard</Link>
+          <Link href="/dashboard/inbox" style={{ color: PRIMARY, fontWeight: 800, textDecoration: 'none', fontSize: 14 }}>← กลับกล่องข้อความ</Link>
         </div>
       </div>
     )
@@ -125,8 +125,8 @@ export default function TeamPage() {
 
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 22, flexWrap: 'wrap', gap: 12 }}>
-          <Link href="/dashboard" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, color: MUTED, textDecoration: 'none', fontSize: 13, fontWeight: 700 }}>
-            <ArrowLeft size={15} /> Dashboard
+          <Link href="/dashboard/inbox" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, color: MUTED, textDecoration: 'none', fontSize: 13, fontWeight: 700 }}>
+            <ArrowLeft size={15} /> กล่องข้อความ
           </Link>
           <button
             className="fbtap"

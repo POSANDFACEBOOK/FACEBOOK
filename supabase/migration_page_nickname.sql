@@ -1,5 +1,5 @@
 -- ============================================
--- FB Ads AI Manager — Page nickname (ชื่อเล่นเพจ)
+-- FACEBOOK CHAT — Page nickname (ชื่อเล่นเพจ)
 -- รันใน Supabase SQL Editor — รันซ้ำได้
 -- ============================================
 

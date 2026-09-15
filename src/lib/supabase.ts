@@ -56,3 +56,37 @@ export async function getUserIdFromFbToken(
     .single()
   return user?.id || null
 }
+
+/** สร้าง/อัปเดตแถว users ของผู้ที่ล็อกอินด้วย Facebook แล้วคืน user UUID
+ * เดิมแถวนี้ถูกสร้างตอน "ยิงแอด" เท่านั้น — พอตัดระบบแอดออก เจ้าของเพจที่เพิ่งล็อกอินครั้งแรก
+ * จะไม่มีบัญชีในระบบเลย (เชื่อมเพจไม่ได้) จึงต้องสร้างให้ตรงนี้ */
+export async function ensureFbUser(session: any): Promise<string | null> {
+  const accessToken = session?.accessToken as string | undefined
+  if (!accessToken) return null
+  const fbId = (session?.fbUserId as string | undefined) || await getFbUserIdFromToken(accessToken)
+  if (!fbId) return null
+
+  const sb = supabaseAdmin()
+  const u = session?.user || {}
+  const { data: existing } = await sb.from('users').select('id').eq('facebook_id', fbId).maybeSingle()
+  if (existing?.id) {
+    const patch: Record<string, any> = { access_token: accessToken }
+    if (u.name) patch.name = u.name
+    if (u.image) patch.image = u.image
+    await sb.from('users').update(patch).eq('id', existing.id)
+    return existing.id
+  }
+
+  const { data: created, error } = await sb
+    .from('users')
+    .insert({ facebook_id: fbId, name: u.name || null, email: u.email || null, image: u.image || null, access_token: accessToken })
+    .select('id')
+    .single()
+  if (created?.id) return created.id
+  // ชนกันพร้อมกัน 2 request (unique facebook_id) → อ่านซ้ำ
+  if (error) {
+    const { data: again } = await sb.from('users').select('id').eq('facebook_id', fbId).maybeSingle()
+    return again?.id || null
+  }
+  return null
+}

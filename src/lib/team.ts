@@ -4,7 +4,7 @@
 // แทนการใช้ getUserIdFromFbToken + .eq('user_id', userId) แบบเดี่ยวๆ
 //
 // page_members.role: 'owner' | 'agent'
-// - owner = เจ้าของ workspace (เชื่อมเพจ, ยิงแอด, จัดการทีม, ตอบแชท)
+// - owner = เจ้าของ workspace (เชื่อมเพจ/LINE, จัดการทีม, ตอบแชท)
 // - agent = ลูกทีม (เฉพาะตอบแชท + ใช้ AI/quick replies ของ owner)
 //
 // Auth methods รองรับ 2 แบบ:
