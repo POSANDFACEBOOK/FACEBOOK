@@ -18,28 +18,30 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
     const sb = supabaseAdmin()
 
-    const { data: conversation } = await sb
-      .from('conversations')
-      .select(`
-        *,
-        connected_pages!inner(id, page_id, page_name, page_picture, nickname, channel)
-      `)
-      .eq('id', params.id)
-      .single()
+    // ดึงแชท + ข้อความพร้อมกัน (เปิดแชทเร็วขึ้น) — ข้อความจะส่งกลับหลังเช็คสิทธิ์ผ่านแล้วเท่านั้น
+    // ต้องเอา "200 อันล่าสุด" ไม่ใช่ 200 อันแรก — ไม่งั้นแชทที่คุยกันยาว
+    // แอดมินจะเห็นแต่ข้อความเก่าสุด และข้อความที่เพิ่งตอบจะไม่โผล่เลย
+    const [{ data: conversation }, { data: latest }] = await Promise.all([
+      sb
+        .from('conversations')
+        .select(`
+          *,
+          connected_pages!inner(id, page_id, page_name, page_picture, nickname, channel)
+        `)
+        .eq('id', params.id)
+        .single(),
+      sb
+        .from('inbox_messages')
+        .select('*')
+        .eq('conversation_id', params.id)
+        .order('created_at', { ascending: false })
+        .limit(200),
+    ])
 
     if (!conversation) return NextResponse.json({ error: 'Not found' }, { status: 404 })
     if (!ctx.accessiblePageIds.has(conversation.page_id)) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 })
     }
-
-    // ต้องเอา "200 อันล่าสุด" ไม่ใช่ 200 อันแรก — ไม่งั้นแชทที่คุยกันยาว
-    // แอดมินจะเห็นแต่ข้อความเก่าสุด และข้อความที่เพิ่งตอบจะไม่โผล่เลย
-    const { data: latest } = await sb
-      .from('inbox_messages')
-      .select('*')
-      .eq('conversation_id', params.id)
-      .order('created_at', { ascending: false })
-      .limit(200)
     const messages = (latest || []).slice().reverse()  // กลับเป็นเก่า→ใหม่ เพื่อแสดงผล
 
     // Fallback: แชทเก่าที่มี last_message แต่ message row หาย (webhook freeze ก่อน fix)

@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useRef, useState, ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useSession, signOut } from 'next-auth/react'
 import Link from 'next/link'
@@ -207,14 +207,65 @@ export default function InboxPage() {
   }, [draft])
 
   // ── Load conversations ──
+  // สลับเพจให้เร็ว + ไม่แสดงแชทผิดเพจ:
+  // - ทุก request มีลำดับ (seq) + key (เพจ|ตัวกรอง|คำค้น) — ผลที่กลับมาช้าของ key เก่า ห้ามทับรายการที่แอดมินเลือกอยู่
+  //   (เดิม poll ที่ยิงก่อนสลับเพจ ตอบกลับทีหลังแล้วเอาแชทเพจเก่ามาทับ)
+  // - เก็บผลแต่ละ key ไว้ (แคช) → กดกลับไปเพจเดิมขึ้นทันที แล้วค่อยอัปเดตเบื้องหลัง
+  const listKeyOf = (pf: string, sf: string, q: string) => `${pf}|${sf}|${q}`
+  const listFilterRef = useRef({ pageFilter: '', statusFilter: 'all', q: '' })
+  const listSeqRef = useRef(0)            // เพิ่มทุกครั้งที่ยิง request รายการแชท
+  const appliedListSeqRef = useRef(0)     // request ล่าสุดที่เอารายการไปแสดงแล้ว
+  const appliedCountsSeqRef = useRef(0)   // request ล่าสุดที่เอาตัวเลข/รายชื่อเพจไปแสดงแล้ว
+  const loadingSeqRef = useRef(0)         // request แบบโชว์สปินเนอร์ตัวล่าสุด
+  const listCacheRef = useRef<Map<string, { seq: number; conversations: any[] }>>(new Map())
+
+  // เอาผลรายการแชทจาก server ไปใช้ — คืน true ถ้าได้แสดงบนจอ
+  function applyListResponse(res: any, key: string, seq: number): boolean {
+    const convs = res.conversations || []
+    const cache = listCacheRef.current
+    const prev = cache.get(key)
+    if (!prev || seq >= prev.seq) {
+      cache.delete(key)  // ย้ายไปท้าย = ใช้ล่าสุด
+      cache.set(key, { seq, conversations: convs })
+      if (cache.size > 40) {
+        const oldest = cache.keys().next().value
+        if (oldest !== undefined) cache.delete(oldest)
+      }
+    }
+    // ตัวเลขแจ้งเตือน + รายชื่อเพจ ไม่ขึ้นกับเพจ/ตัวกรองที่เลือก → ใช้ผลที่ใหม่กว่าเสมอ
+    if (seq > appliedCountsSeqRef.current) {
+      appliedCountsSeqRef.current = seq
+      registerPageOrder(res.pages || [])  // กำหนดสีประจำเพจ (ไม่ซ้ำ) ก่อน render
+      setPages(res.pages || [])
+      setTotalUnread(res.totalUnread || 0)
+      setTotalNeedsReply(res.totalNeedsReply || 0)
+      setUnreadByPage(res.unreadByPage || {})
+      setNeedsReplyByPage(res.needsReplyByPage || {})
+    }
+    const f = listFilterRef.current
+    if (key !== listKeyOf(f.pageFilter, f.statusFilter, f.q) || seq < appliedListSeqRef.current) return false
+    appliedListSeqRef.current = seq
+    setConversations(convs)
+    return true
+  }
+
+  // แก้แชทในแคชทุก key ให้ตรงกับที่แก้บนจอ (เช่น อ่านแล้ว) — สลับเพจแล้วจุดแดงจะไม่เด้งกลับมา
+  function patchCachedConvs(fn: (c: any) => any) {
+    listCacheRef.current.forEach(entry => { entry.conversations = entry.conversations.map(fn) })
+  }
+
   // silent = โหลดเบื้องหลัง (poll/realtime) → ไม่โชว์สปินเนอร์ กันจอกระพริบทุก 7 วิ
+  // ใช้ตัวกรองปัจจุบันจาก ref เสมอ (callback จาก interval/sync เก่าจะได้ไม่ยิงด้วยเพจเก่า)
   async function loadConversations(opts?: { silent?: boolean }) {
     const silent = opts?.silent
-    if (!silent) setLoadingList(true)
+    const f = listFilterRef.current
+    const key = listKeyOf(f.pageFilter, f.statusFilter, f.q)
+    const seq = ++listSeqRef.current
+    if (!silent) { loadingSeqRef.current = seq; setLoadingList(true) }
     const params = new URLSearchParams()
-    if (pageFilter) params.set('pageId', pageFilter)
-    if (statusFilter !== 'all') params.set('filter', statusFilter)
-    if (debouncedSearch) params.set('q', debouncedSearch)
+    if (f.pageFilter) params.set('pageId', f.pageFilter)
+    if (f.statusFilter !== 'all') params.set('filter', f.statusFilter)
+    if (f.q) params.set('q', f.q)
     params.set('limit', String(listLimitRef.current))
 
     try {
@@ -223,18 +274,12 @@ export default function InboxPage() {
       const res = await r.json()
       if (res.error) { if (!silent) setErrorBanner(friendlyError(res.error)); return }
       setSessionExpired(false)
-      setConversations(res.conversations || [])
-      registerPageOrder(res.pages || [])  // กำหนดสีประจำเพจ (ไม่ซ้ำ) ก่อน render
-      setPages(res.pages || [])
-      setTotalUnread(res.totalUnread || 0)
-      setTotalNeedsReply(res.totalNeedsReply || 0)
-      setUnreadByPage(res.unreadByPage || {})
-      setNeedsReplyByPage(res.needsReplyByPage || {})
+      applyListResponse(res, key, seq)
     } catch {
       // เน็ตหลุด — ไม่ล้างของเดิมบนจอ รอบถัดไปค่อยลองใหม่
       if (!silent) setErrorBanner('เชื่อมต่อไม่ได้ — ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่')
     } finally {
-      if (!silent) setLoadingList(false)
+      if (!silent && loadingSeqRef.current === seq) setLoadingList(false)
     }
   }
 
@@ -300,6 +345,7 @@ export default function InboxPage() {
     // optimistic: เคลียร์ทั้ง badge ของ row + ตัวเลขรวม (page tile / ชิป "ใหม่" / sidebar) ทันที
     const hadUnread = (conv.unread_count || 0) > 0
     setConversations(prev => prev.map(c => c.id === convId ? { ...c, unread_count: 0 } : c))
+    patchCachedConvs(c => c.id === convId ? { ...c, unread_count: 0 } : c)
     if (hadUnread && conv.page_id) {
       setUnreadByPage(prev => ({ ...prev, [conv.page_id]: Math.max(0, (prev[conv.page_id] || 0) - 1) }))
       setTotalUnread(t => Math.max(0, t - 1))
@@ -463,7 +509,32 @@ export default function InboxPage() {
     const t = setTimeout(() => setDebouncedSearch(search.trim()), 350)
     return () => clearTimeout(t)
   }, [search])
-  useEffect(() => {
+  // ตัวกรองปัจจุบัน — อัปเดตทุก render ก่อน effect ทำงาน (loadConversations/แคชอ่านจากตรงนี้)
+  listFilterRef.current = { pageFilter, statusFilter, q: debouncedSearch }
+
+  const prevListFilterRef = useRef<{ pageFilter: string; statusFilter: string; q: string } | null>(null)
+  // layout effect: สลับรายการ/สปินเนอร์ให้เสร็จก่อนจอวาด — ไม่งั้นกดเพจแล้วจะแว้บขึ้น "ยังไม่มีข้อความ" 1 เฟรม
+  useLayoutEffect(() => {
+    const key = listKeyOf(pageFilter, statusFilter, debouncedSearch)
+    const prevF = prevListFilterRef.current
+    const changed = !!prevF && listKeyOf(prevF.pageFilter, prevF.statusFilter, prevF.q) !== key
+    prevListFilterRef.current = { pageFilter, statusFilter, q: debouncedSearch }
+
+    if (changed) {
+      // แสดงผลทันทีโดยไม่รอ server: แคชของ key นี้ → หรือตัดจากรายการ "ทุกเพจ" ที่โหลดไว้แล้ว
+      const cached = listCacheRef.current.get(key)
+      const all = listCacheRef.current.get(listKeyOf('', 'all', ''))
+      if (cached) setConversations(cached.conversations)
+      else if (pageFilter && statusFilter === 'all' && !debouncedSearch && all) {
+        setConversations(all.conversations.filter((c: any) => c.page_id === pageFilter))
+      } else if (prevF && (prevF.pageFilter !== pageFilter || prevF.statusFilter !== statusFilter)) {
+        // ไม่มีข้อมูลของเพจ/ตัวกรองนี้เลย → ขึ้น "กำลังโหลด" ดีกว่าโชว์แชทของเพจ/ตัวกรองเดิมค้างไว้
+        setConversations([])
+      }
+      // กลับไปโหลด 50 รายการแรก — effect จะวิ่งใหม่เองอีกรอบเดียว (ไม่ยิง request ซ้ำ 2 ครั้ง)
+      if (listLimit !== 50) { setLoadingList(true); setListLimit(50); return }
+    }
+
     let cancelled = false
     ;(async () => {
       // Fetch ก่อน เช็ค response ตรงๆ (ไม่พึ่ง state ที่ยังไม่ re-render)
@@ -472,34 +543,35 @@ export default function InboxPage() {
       if (statusFilter !== 'all') params.set('filter', statusFilter)
       if (debouncedSearch) params.set('q', debouncedSearch)
       params.set('limit', String(listLimit))
+      const seq = ++listSeqRef.current
+      loadingSeqRef.current = seq
+      const stopLoading = () => { if (loadingSeqRef.current === seq) setLoadingList(false) }
       setLoadingList(true)
       let res: any = {}
       try {
         const r = await fetch(`/api/inbox/conversations?${params.toString()}`)
-        if (r.status === 401 || r.status === 403) { if (!cancelled) { setSessionExpired(true); setLoadingList(false) } ; return }
+        if (r.status === 401 || r.status === 403) { if (!cancelled) setSessionExpired(true); stopLoading(); return }
         // 500 ฯลฯ — ห้ามล้างลิสต์เป็นค่าว่าง ไม่งั้นจอขึ้น "ยังไม่มีเพจที่เชื่อมต่อ" ให้เข้าใจผิด
         if (!r.ok) {
-          if (!cancelled) { setErrorBanner('โหลดรายการแชทไม่สำเร็จ — ลองใหม่อีกครั้ง'); setLoadingList(false) }
+          if (!cancelled) setErrorBanner('โหลดรายการแชทไม่สำเร็จ — ลองใหม่อีกครั้ง')
+          stopLoading()
           return
         }
         res = await r.json()
         if (res.error) {
-          if (!cancelled) { setErrorBanner(friendlyError(res.error)); setLoadingList(false) }
+          if (!cancelled) setErrorBanner(friendlyError(res.error))
+          stopLoading()
           return
         }
       } catch {
-        if (!cancelled) { setErrorBanner('เชื่อมต่อไม่ได้ — ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่'); setLoadingList(false) }
+        if (!cancelled) setErrorBanner('เชื่อมต่อไม่ได้ — ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่')
+        stopLoading()
         return
       }
+      // ถึงจะสลับไปเพจอื่นแล้ว ผลนี้ก็ยังเก็บเข้าแคชได้ (applyListResponse ไม่เอาไปแสดงผิดเพจ)
+      applyListResponse(res, key, seq)
+      stopLoading()
       if (cancelled) return
-      setConversations(res.conversations || [])
-      registerPageOrder(res.pages || [])
-      setPages(res.pages || [])
-      setTotalUnread(res.totalUnread || 0)
-      setTotalNeedsReply(res.totalNeedsReply || 0)
-      setUnreadByPage(res.unreadByPage || {})
-      setNeedsReplyByPage(res.needsReplyByPage || {})
-      setLoadingList(false)
 
       // Auto-sync ถ้าเลือกเพจที่ยังไม่มี conv ใน DB + ไม่ได้ sync ใน 2 นาทีล่าสุด
       // (ไม่ทำตอนกำลังค้นหา — ผลว่างเพราะไม่ตรงคำค้น ไม่ใช่เพราะยังไม่ sync)
@@ -521,8 +593,38 @@ export default function InboxPage() {
     return () => { cancelled = true }
   }, [pageFilter, statusFilter, debouncedSearch, listLimit])
 
-  // เปลี่ยนเพจ/ตัวกรอง/คำค้น → กลับไปโหลด 50 รายการแรกใหม่
-  useEffect(() => { setListLimit(50) }, [pageFilter, statusFilter, debouncedSearch])
+  // โหลดรายการแชทของแต่ละเพจเก็บไว้ล่วงหน้า (ครั้งเดียวหลังเปิดแอป ทีละ 2 เพจ)
+  // → กดสลับเพจครั้งแรกก็ขึ้นทันที แล้วค่อยอัปเดตเบื้องหลัง
+  const pagesRef = useRef<any[]>([])
+  pagesRef.current = pages
+  const hasManyPages = pages.length >= 2
+  const prefetchedRef = useRef(false)
+  useEffect(() => {
+    if (!hasManyPages || prefetchedRef.current) return
+    let stopped = false
+    const timer = setTimeout(async () => {
+      prefetchedRef.current = true
+      const ids: string[] = pagesRef.current.map((pg: any) => pg.id).slice(0, 20)
+      let next = 0
+      const worker = async () => {
+        while (!stopped && next < ids.length) {
+          const id = ids[next++]
+          const key = listKeyOf(id, 'all', '')
+          if (listCacheRef.current.has(key)) continue
+          const seq = ++listSeqRef.current
+          try {
+            const r = await fetch(`/api/inbox/conversations?pageId=${encodeURIComponent(id)}&limit=50`)
+            if (!r.ok) continue
+            const res = await r.json()
+            if (!res.error && !stopped) applyListResponse(res, key, seq)
+          } catch {}
+        }
+      }
+      await Promise.all([worker(), worker()])
+    }, 1500)
+    return () => { stopped = true; clearTimeout(timer) }
+  }, [hasManyPages])
+
 
   // Poll DB ทุก 7 วิ (poll DB ของเราเอง ไม่กิน rate limit FB) → จออัปเดตเองไม่ต้องรีเฟรช
   // Background sync FB ทุก ~5 นาที (กัน webhook ตก)
@@ -951,6 +1053,7 @@ export default function InboxPage() {
     const ids = new Set<string>(pageFilter ? [pageFilter] : channelPages.map((p: any) => p.id))
     // optimistic — ไม่แตะแชทที่จัดเก็บ ให้ตรงกับ API (ไม่งั้นเลขเด้งกลับหลังโหลดใหม่)
     setConversations(prev => prev.map(c => ids.has(c.page_id) && !c.is_archived ? { ...c, unread_count: 0 } : c))
+    patchCachedConvs(c => ids.has(c.page_id) && !c.is_archived ? { ...c, unread_count: 0 } : c)
     setUnreadByPage(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = 0 }); return n })
     setTotalUnread(t => Math.max(0, t - scopedUnread))
     try {
@@ -1011,6 +1114,7 @@ export default function InboxPage() {
   const searchPending = search.trim() !== debouncedSearch || loadingList
   const filteredConvs = conversations.filter(c => {
     if (channelFilter && (c.connected_pages?.channel || 'facebook') !== channelFilter) return false
+    if (pageFilter && c.page_id !== pageFilter) return false
     if (!searchPending || !search.trim()) return true
     const s = search.trim().toLowerCase()
     return (c.customer_name || '').toLowerCase().includes(s)
@@ -1403,7 +1507,7 @@ export default function InboxPage() {
 
           {/* List */}
           <div style={{ flex: 1, overflowY: 'auto' }}>
-            {(loadingList || pageSyncing) && conversations.length === 0 ? (
+            {(loadingList || pageSyncing) && filteredConvs.length === 0 && !search.trim() ? (
               <div style={{ padding: 40, textAlign: 'center', color: MUTED, fontSize: 12 }}>
                 <RefreshCw size={18} style={{ animation: 'spin 1s linear infinite', marginBottom: 8 }} />
                 <div>{pageSyncing ? 'กำลังดึงแชทจากเพจ...' : 'กำลังโหลด...'}</div>

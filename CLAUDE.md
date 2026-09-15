@@ -61,6 +61,8 @@ supabase/*.sql                          ลำดับการรันอย�
 4. Messenger ตอบได้ภายใน 24 ชม. (error #551/#10) — แสดงข้อความที่แอดมินเข้าใจ
 5. SQL migration ให้ผู้ใช้รันเองใน Supabase SQL Editor — ห้าม DROP/ลบข้อมูลอัตโนมัติ
 6. iOS Safari เก่า: ห้ามใช้ regex lookbehind ใน client code (จอขาว)
+7. **Vercel functions อยู่ region `sin1` (vercel.json)** ให้ใกล้ Supabase (ap-southeast-1 สิงคโปร์) — ถ้าเอาออกจะกลับไป iad1 (สหรัฐฯ) ทุก query ข้ามทวีป สลับเพจ/เปิดแชทช้าหลายวินาที
+8. รายการแชทในกล่องข้อความ: โหลดผ่าน `loadConversations`/`applyListResponse` เท่านั้น (มี seq + key กันผลเก่าทับเพจที่เลือก และแคชต่อ key) — ห้าม `setConversations(res.conversations)` ตรงๆ
 
 ## 🚀 Local / Deploy
 ```bash

@@ -20,7 +20,7 @@ export async function GET(req: Request) {
 
     const accessible = Array.from(ctx.accessiblePageIds)
     if (accessible.length === 0) {
-      return NextResponse.json({ conversations: [], pages: [], totalUnread: 0, totalNeedsReply: 0, unreadByPage: {} })
+      return NextResponse.json({ conversations: [], pages: [], totalUnread: 0, totalNeedsReply: 0, unreadByPage: {}, needsReplyByPage: {} })
     }
 
     const { searchParams } = new URL(req.url)
@@ -28,23 +28,21 @@ export async function GET(req: Request) {
     const filter = searchParams.get('filter') || 'all'
     const q = (searchParams.get('q') || '').trim()
     const limit = Math.min(Number(searchParams.get('limit') || 50), 500)
+    // client ขอเพจที่เข้าไม่ได้แล้ว (ถูกถอนสิทธิ์ / ช่องทางถูกซ่อน เช่น LINE) → ไม่ดึงแชท
+    // แต่ยังส่งรายชื่อเพจ + ตัวเลขกลับไป ให้หน้าเว็บล้างตัวเลือกเพจเก่าแล้วกลับไป "ทุกเพจ" เอง
+    const stalePage = !!pageId && !ctx.accessiblePageIds.has(pageId)
 
     const sb = supabaseAdmin()
 
-    // ดึง pages ที่ user เข้าถึงได้ (สำหรับ filter dropdown)
-    const { data: pages } = await sb
+    // ยิงทุก query พร้อมกัน (เดิมยิงทีละตัว 6 รอบ → สลับเพจช้า)
+    // ตัวเลขทั้งหมดไม่ขึ้นกับเพจ/ตัวกรองที่เลือก — นับทุกเพจที่เข้าถึงได้
+    const pagesQuery = sb
       .from('connected_pages')
       .select('id, page_id, page_name, page_picture, nickname, channel')
       .in('id', accessible)
       .eq('is_active', true)
 
-    // client ขอเพจที่เข้าไม่ได้แล้ว (ถูกถอนสิทธิ์ / ช่องทางถูกซ่อน เช่น LINE) → ส่งรายชื่อเพจที่เข้าได้กลับไป
-    // หน้าเว็บจะล้างตัวเลือกเพจเก่าแล้วกลับไป "ทุกเพจ" เอง (ถ้าส่ง pages ว่าง หน้าจะค้างว่า "ยังไม่มีเพจ")
-    if (pageId && !ctx.accessiblePageIds.has(pageId)) {
-      return NextResponse.json({ conversations: [], pages: pages || [], totalUnread: 0, totalNeedsReply: 0, unreadByPage: {}, needsReplyByPage: {} })
-    }
-
-    let query = sb
+    let convQuery = sb
       .from('conversations')
       .select(`
         id, fb_psid, customer_name, customer_picture,
@@ -58,29 +56,22 @@ export async function GET(req: Request) {
       .order('last_message_at', { ascending: false, nullsFirst: false })
       .limit(limit)
 
-    if (pageId) query = query.eq('page_id', pageId)
-    if (filter === 'unread') query = query.gt('unread_count', 0).eq('is_archived', false)
-    else if (filter === 'archived') query = query.eq('is_archived', true)
-    else if (filter === 'starred') query = query.eq('is_starred', true).eq('is_archived', false)
-    else if (filter === 'unresolved') query = query.eq('is_resolved', false).eq('is_archived', false)
-    else if (filter === 'needs_reply') query = query.eq('last_sender', 'customer').eq('is_archived', false)
-    else query = query.eq('is_archived', false)  // default = active
+    if (pageId) convQuery = convQuery.eq('page_id', pageId)
+    if (filter === 'unread') convQuery = convQuery.gt('unread_count', 0).eq('is_archived', false)
+    else if (filter === 'archived') convQuery = convQuery.eq('is_archived', true)
+    else if (filter === 'starred') convQuery = convQuery.eq('is_starred', true).eq('is_archived', false)
+    else if (filter === 'unresolved') convQuery = convQuery.eq('is_resolved', false).eq('is_archived', false)
+    else if (filter === 'needs_reply') convQuery = convQuery.eq('last_sender', 'customer').eq('is_archived', false)
+    else convQuery = convQuery.eq('is_archived', false)  // default = active
 
     if (q) {
       // ต้อง quote ค่า ไม่งั้นคำที่มีลูกน้ำ/วงเล็บ (เช่น "ข้าวผัด,ต้มยำ") จะทำให้ PostgREST parse ไม่ผ่าน → 500
       const safe = q.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-      query = query.or(`customer_name.ilike."%${safe}%",last_message.ilike."%${safe}%"`)
+      convQuery = convQuery.or(`customer_name.ilike."%${safe}%",last_message.ilike."%${safe}%"`)
     }
-
-    const { data: conversations, error } = await query
-    if (error) {
-      console.error('[inbox/conversations] query error:', error)
-      throw error
-    }
-    console.log(`[inbox/conversations] pageId=${pageId || 'all'} filter=${filter} → ${conversations?.length || 0} convs`)
 
     // นับ unread รวม (สำหรับ badge)
-    const { count: totalUnread } = await sb
+    const totalUnreadQuery = sb
       .from('conversations')
       .select('id', { count: 'exact', head: true })
       .in('page_id', accessible)
@@ -88,7 +79,7 @@ export async function GET(req: Request) {
       .eq('is_archived', false)
 
     // นับ needs_reply
-    const { count: totalNeedsReply } = await sb
+    const totalNeedsReplyQuery = sb
       .from('conversations')
       .select('id', { count: 'exact', head: true })
       .in('page_id', accessible)
@@ -97,24 +88,47 @@ export async function GET(req: Request) {
 
     // นับ unread ต่อเพจ — นับ "จำนวนแชท" ที่มีข้อความค้าง (ให้ตรงกับ totalUnread
     // ที่นับจำนวนแชทเช่นกัน) ไม่ใช่บวกจำนวนข้อความ เพื่อให้ผลรวมท้ายเพจ = ตัวเลข "ทุกเพจ"
-    const { data: unreadRows } = await sb
+    const unreadRowsQuery = sb
       .from('conversations')
       .select('page_id')
       .in('page_id', accessible)
       .gt('unread_count', 0)
       .eq('is_archived', false)
-    const unreadByPage: Record<string, number> = {}
-    for (const r of (unreadRows || []) as Array<{ page_id: string }>) {
-      unreadByPage[r.page_id] = (unreadByPage[r.page_id] || 0) + 1
-    }
 
     // นับ needs_reply ต่อเพจ (ลูกค้าทักล่าสุด ยังไม่ตอบ) — ใช้แยกตัวเลขตามช่องทาง
-    const { data: needsReplyRows } = await sb
+    const needsReplyRowsQuery = sb
       .from('conversations')
       .select('page_id')
       .in('page_id', accessible)
       .eq('last_sender', 'customer')
       .eq('is_archived', false)
+
+    const [
+      { data: pages },
+      convResult,
+      { count: totalUnread },
+      { count: totalNeedsReply },
+      { data: unreadRows },
+      { data: needsReplyRows },
+    ] = await Promise.all([
+      pagesQuery,
+      stalePage ? Promise.resolve({ data: [], error: null }) : convQuery,
+      totalUnreadQuery,
+      totalNeedsReplyQuery,
+      unreadRowsQuery,
+      needsReplyRowsQuery,
+    ])
+
+    const { data: conversations, error } = convResult as { data: any[] | null; error: any }
+    if (error) {
+      console.error('[inbox/conversations] query error:', error)
+      throw error
+    }
+
+    const unreadByPage: Record<string, number> = {}
+    for (const r of (unreadRows || []) as Array<{ page_id: string }>) {
+      unreadByPage[r.page_id] = (unreadByPage[r.page_id] || 0) + 1
+    }
     const needsReplyByPage: Record<string, number> = {}
     for (const r of (needsReplyRows || []) as Array<{ page_id: string }>) {
       needsReplyByPage[r.page_id] = (needsReplyByPage[r.page_id] || 0) + 1
