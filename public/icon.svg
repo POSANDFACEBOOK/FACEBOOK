@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- ไอคอนระบบ FACEBOOK CHAT NAIWANSOOK — ตัว N (ในวันสุข) ในบับเบิลแชท พื้นขาว -->
+  <rect width="512" height="512" rx="118" fill="#ffffff"/>
+  <g transform="scale(2.6666667)">
+    <path d="M60 40 H132 A30 30 0 0 1 162 70 V106 A30 30 0 0 1 132 136 H104 L58 168 L78 136 H60 A30 30 0 0 1 30 106 V70 A30 30 0 0 1 60 40 Z" fill="#1877f2"/>
+    <polygon points="62,116 62,52 84,52 110,92 110,52 130,52 130,116 108,116 82,76 82,116" fill="#ffffff"/>
+  </g>
+</svg>

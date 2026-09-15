@@ -12,6 +12,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <meta name="theme-color" content="#1877f2" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+        <meta name="apple-mobile-web-app-title" content="FB CHAT" />
+        {/* ไอคอนแอป (ตัว N) + ติดตั้งเป็นแอปได้ — ตัวเลขแชทใหม่บนไอคอนอยู่ใน lib/app-badge.ts */}
+        <link rel="icon" href="/favicon.ico" sizes="any" />
+        <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+        <link rel="manifest" href="/manifest.webmanifest" />
         {/* ── Global interaction polish: hover "pop", tap feedback ── */}
         <style>{`
           * { -webkit-tap-highlight-color: transparent; }

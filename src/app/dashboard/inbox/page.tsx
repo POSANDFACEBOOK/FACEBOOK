@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import { useSession, signOut } from 'next-auth/react'
 import Link from 'next/link'
 import { LINE_ENABLED } from '@/lib/features'
+import { updateAppBadge, resetTabBadge } from '@/lib/app-badge'
 import {
   ArrowLeft, Send, Sparkles, RefreshCw, Search, Star, Archive, CheckCircle2,
   MessageSquare, Inbox, Settings, Zap, X, ChevronLeft, MoreVertical, Bot,
@@ -652,6 +653,10 @@ export default function InboxPage() {
     }, 7000)
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [activeConv?.id, pageFilter, statusFilter, debouncedSearch])
+
+  // ตัวเลขแชทใหม่บนชื่อแท็บ / ไอคอนแท็บ / ไอคอนแอปที่ติดตั้ง (นับทุกเพจที่เข้าถึงได้)
+  useEffect(() => { updateAppBadge(totalUnread) }, [totalUnread])
+  useEffect(() => () => resetTabBadge(), [])
 
   // ── Realtime: เด้งทันทีเมื่อมีข้อความ/แชทใหม่ (Supabase Realtime) ──
   // ถ้ายังไม่ได้ตั้ง SUPABASE_JWT_SECRET → endpoint คืน token=null → ใช้ polling 30 วิ แทน
