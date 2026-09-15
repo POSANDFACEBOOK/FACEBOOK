@@ -116,6 +116,10 @@ export default function InboxPage() {
   const [isOwner, setIsOwner] = useState<boolean | null>(null)  // null = ยังไม่รู้ → ซ่อนเมนู owner ไว้ก่อน
   // จัดการช่องทางได้ = เจ้าของเพจ หรือเจ้าของร้านที่ล็อกอินด้วย Facebook แต่ยังไม่เคยเชื่อมช่องทางแรก
   const [canManageChannels, setCanManageChannels] = useState(false)
+  // รูปโปรไฟล์ตัวเอง — เฉพาะบัญชี Facebook (บัญชีอีเมลไม่มีรูป → ตัวอักษรย่อทันที)
+  // ใส่ id บัญชีใน URL ให้ browser แยก cache ต่อบัญชี (มือถือเครื่องเดียวสลับบัญชีจะได้ไม่เห็นรูปคนก่อน)
+  const sessionFbId = (session as any)?.fbUserId as string | undefined
+  const selfAvatarSrc = sessionFbId ? `/api/avatar?k=${encodeURIComponent(sessionFbId)}` : undefined
   const [pages, setPages] = useState<any[]>([])
   const [conversations, setConversations] = useState<any[]>([])
   const [activeConv, setActiveConv] = useState<any | null>(null)
@@ -1038,13 +1042,8 @@ export default function InboxPage() {
 
         {session?.user && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', background: 'linear-gradient(135deg, #eaf2fd, #dcebff)', borderRadius: 12, marginBottom: 12, border: `1px solid ${BORDER}` }}>
-            {session.user.image ? (
-              <img src={session.user.image} alt="" style={{ width: 34, height: 34, borderRadius: '50%', objectFit: 'cover', flexShrink: 0, border: '1.5px solid white' }} />
-            ) : (
-              <div style={{ width: 34, height: 34, borderRadius: '50%', background: PRIMARY, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 14, fontWeight: 900 }}>
-                {(session.user.name || 'U')[0]}
-              </div>
-            )}
+            {/* ลิงก์รูปใน session หมดอายุ (รูปแตก) → ขอรูปล่าสุดผ่าน /api/avatar, ไม่มีรูป = ตัวอักษรย่อ */}
+            <Avatar name={session.user.name || 'U'} src={selfAvatarSrc} size={34} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 11, fontWeight: 800, color: TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{session.user.name || 'ผู้ใช้'}</div>
               <div style={{ fontSize: 9, color: GREEN, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 3 }}>
@@ -2065,7 +2064,7 @@ export default function InboxPage() {
             <div style={{ width: 40, height: 4, borderRadius: 999, background: '#cbd5e1', margin: '4px auto 14px' }} />
             {session?.user && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', background: SURFACE2, borderRadius: 12, marginBottom: 10 }}>
-                <Avatar name={session.user.name || 'U'} src={session.user.image || undefined} size={38} />
+                <Avatar name={session.user.name || 'U'} src={selfAvatarSrc} size={38} />
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 800, color: TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{session.user.name || 'ผู้ใช้'}</div>
                   <div style={{ fontSize: 11, color: GREEN, fontWeight: 700 }}>● เชื่อมต่อแล้ว</div>

@@ -173,13 +173,7 @@ export default function TeamPage() {
                   background: SURFACE2, border: `1px solid ${BORDER}`, borderRadius: 14, padding: '14px 16px',
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: m.pages.length > 0 ? 10 : 0 }}>
-                    {m.image ? (
-                      <img src={m.image} alt="" style={{ width: 44, height: 44, borderRadius: '50%', objectFit: 'cover', border: '2px solid white' }} />
-                    ) : (
-                      <div style={{ width: 44, height: 44, borderRadius: '50%', background: PRIMARY, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 900, fontSize: 16 }}>
-                        {m.name[0]}
-                      </div>
-                    )}
+                    <MemberAvatar userId={m.userId} name={m.name} hasFb={!!m.facebookId} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 800, fontSize: 14, color: TEXT }}>{m.name}</div>
                       <div style={{ fontSize: 11, color: MUTED, fontWeight: 600 }}>
@@ -1049,6 +1043,27 @@ function ResetPasswordModal({ target, onClose }: { target: ResetTarget; onClose:
           </>
         )}
       </div>
+    </div>
+  )
+}
+
+// รูปลูกทีม — ลิงก์รูป Facebook ที่เก็บไว้หมดอายุ จึงขอรูปล่าสุดผ่าน /api/avatar
+// โหลดไม่ขึ้น / ลูกทีมแบบอีเมล (ไม่มีรูป) → ตัวอักษรย่อ
+function MemberAvatar({ userId, name, hasFb }: { userId: string; name: string; hasFb: boolean }) {
+  const [broken, setBroken] = useState(false)
+  if (hasFb && !broken) {
+    return (
+      <img
+        src={`/api/avatar?u=${encodeURIComponent(userId)}`}
+        alt=""
+        onError={() => setBroken(true)}
+        style={{ width: 44, height: 44, borderRadius: '50%', objectFit: 'cover', border: '2px solid white', flexShrink: 0 }}
+      />
+    )
+  }
+  return (
+    <div style={{ width: 44, height: 44, borderRadius: '50%', background: PRIMARY, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 900, fontSize: 16, flexShrink: 0 }}>
+      {(Array.from(name || '?')[0] || '?').toUpperCase()}
     </div>
   )
 }

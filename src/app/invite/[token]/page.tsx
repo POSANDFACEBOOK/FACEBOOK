@@ -142,13 +142,7 @@ export default function InviteAcceptPage() {
             background: 'linear-gradient(135deg, #eaf2fd, #dcebff)',
             borderRadius: 14, marginBottom: 14, border: `1px solid ${BORDER}`,
           }}>
-            {preview.ownerImage ? (
-              <img src={preview.ownerImage} alt="" style={{ width: 40, height: 40, borderRadius: '50%', objectFit: 'cover', border: '1.5px solid white' }} />
-            ) : (
-              <div style={{ width: 40, height: 40, borderRadius: '50%', background: PRIMARY, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 900 }}>
-                {preview.ownerName[0]}
-              </div>
-            )}
+            <OwnerAvatar src={preview.ownerImage} name={preview.ownerName} />
             <div style={{ minWidth: 0, flex: 1 }}>
               <div style={{ fontSize: 11, color: MUTED, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>เชิญโดย</div>
               <div style={{ fontSize: 14, fontWeight: 900, color: TEXT }}>{preview.ownerName}</div>
@@ -243,6 +237,19 @@ export default function InviteAcceptPage() {
           </p>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ลิงก์รูป Facebook ของเจ้าของที่เก็บไว้หมดอายุได้ → โหลดไม่ขึ้นให้แสดงตัวอักษรย่อแทนรูปแตก
+function OwnerAvatar({ src, name }: { src: string | null; name: string }) {
+  const [broken, setBroken] = useState(false)
+  if (src && !broken) {
+    return <img src={src} alt="" onError={() => setBroken(true)} style={{ width: 40, height: 40, borderRadius: '50%', objectFit: 'cover', border: '1.5px solid white', flexShrink: 0 }} />
+  }
+  return (
+    <div style={{ width: 40, height: 40, borderRadius: '50%', background: PRIMARY, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 900, flexShrink: 0 }}>
+      {(Array.from(name || '?')[0] || '?').toUpperCase()}
     </div>
   )
 }
