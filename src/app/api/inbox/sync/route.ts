@@ -211,14 +211,14 @@ async function syncOnePage(
     const psids = convCustomers.map(x => x.customer.id)
 
     // หา conv ที่มีอยู่แล้ว (id + last_message_at) ในครั้งเดียว
-    const existing = new Map<string, { id: string; lastAt: string | null }>()
+    const existing = new Map<string, { id: string; lastAt: string | null; name?: string | null }>()
     if (psids.length > 0) {
       const { data: rows } = await sb
         .from('conversations')
-        .select('id, fb_psid, last_message_at')
+        .select('id, fb_psid, last_message_at, customer_name')
         .eq('fb_page_id', page.page_id)
         .in('fb_psid', psids)
-      for (const r of (rows || []) as any[]) existing.set(r.fb_psid, { id: r.id, lastAt: r.last_message_at })
+      for (const r of (rows || []) as any[]) existing.set(r.fb_psid, { id: r.id, lastAt: r.last_message_at, name: r.customer_name })
     }
 
     // ดึงโปรไฟล์เฉพาะ conv ใหม่ แบบ batch (1 call/เพจ แทน N)
@@ -281,6 +281,10 @@ async function syncOnePage(
         }
         existing.set(psid, { id: convId, lastAt: conv.updated_time })
       } else {
+        // แชทที่ webhook สร้างไว้ตอนดึงโปรไฟล์ไม่ได้ (ชื่อ "ลูกค้า") → ใส่ชื่อจริงจากรายชื่อผู้ร่วมแชท
+        if (known?.name === 'ลูกค้า' && customer.name && customer.name !== 'ลูกค้า') {
+          await sb.from('conversations').update({ customer_name: customer.name }).eq('id', convId)
+        }
         // อัปเดตเฉพาะเมื่อ FB มีข้อมูลใหม่กว่า — กันเขียนทับ webhook/สถานะอ่านแล้ว
         const fbNewer = !known?.lastAt || new Date(conv.updated_time).getTime() > new Date(known.lastAt).getTime()
         if (fbNewer) {

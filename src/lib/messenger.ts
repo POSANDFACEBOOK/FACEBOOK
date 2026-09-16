@@ -298,6 +298,27 @@ export async function listRecentPagePosts(
 }
 
 /** ดึงข้อมูล user (ลูกค้า) จาก PSID — ได้ name + profile pic */
+/** ชื่อลูกค้าจากรายชื่อผู้ร่วมแชท — ใช้แทนเมื่อ User Profile API ใช้ไม่ได้ (แอปยังไม่ได้สิทธิ์) */
+export async function getCustomerNameFromConversation(
+  pageFbId: string,
+  psid: string,
+  pageToken: string,
+): Promise<string | null> {
+  try {
+    const qs = new URLSearchParams({ platform: 'messenger', user_id: psid, fields: 'participants', access_token: pageToken })
+    const res = await fetch(`${FB_API}/${pageFbId}/conversations?${qs.toString()}`, { signal: AbortSignal.timeout(5000) })
+    const data: any = await res.json()
+    if (data.error) return null
+    for (const c of data.data || []) {
+      const p = (c.participants?.data || []).find((x: any) => x.id === psid)
+      if (p?.name) return String(p.name)
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
 export async function getUserProfile(
   psid: string,
   pageToken: string
