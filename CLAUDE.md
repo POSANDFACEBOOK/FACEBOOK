@@ -35,6 +35,8 @@ src/lib/features.ts                     สวิตช์ฟีเจอร์ 
 src/lib/supabase.ts                     supabaseAdmin(), ensureFbUser()
 src/lib/fb-pages.ts                     fetchManagedPages(), canConnectPage() — เพจที่ผู้ใช้ดูแล + บทบาทที่ตอบแชทได้
 src/lib/app-badge.ts                    ตัวเลขแชทใหม่บนชื่อแท็บ/favicon/ไอคอนแอป (Badging API)
+src/lib/customer-avatar.ts              รูปโปรไฟล์ลูกค้า: ดึงจาก FB มาเก็บใน Storage (avatars/) เพราะลิงก์ FB หมดอายุ · none:<วันที่> = ไม่มีรูป · ห้ามจำ "ไม่มีรูป" ตอน FB ล่ม/token หมดอายุ
+src/app/api/inbox/avatar/[id]           302 ไปรูปลูกค้า (ใช้เฉพาะแชทที่รูปยังไม่อยู่ในระบบ)
 public/icon.svg + icons/ + favicon.ico   ไอคอนแอป "ตัว N" (ต้นฉบับ = icon.svg; PNG/ICO สร้างจากไฟล์นี้) · manifest.webmanifest = ติดตั้งเป็นแอปได้
 src/lib/{messenger,line,media}.ts       helpers ของแต่ละช่องทาง
 supabase/*.sql                          ลำดับการรันอยู่ใน SETUP_GUIDE.md
@@ -64,7 +66,8 @@ supabase/*.sql                          ลำดับการรันอย�
 5. SQL migration ให้ผู้ใช้รันเองใน Supabase SQL Editor — ห้าม DROP/ลบข้อมูลอัตโนมัติ
 6. iOS Safari เก่า: ห้ามใช้ regex lookbehind ใน client code (จอขาว)
 7. **Vercel functions อยู่ region `sin1` (vercel.json)** ให้ใกล้ Supabase (ap-southeast-1 สิงคโปร์) — ถ้าเอาออกจะกลับไป iad1 (สหรัฐฯ) ทุก query ข้ามทวีป สลับเพจ/เปิดแชทช้าหลายวินาที
-8. รายการแชทในกล่องข้อความ: โหลดผ่าน `loadConversations`/`applyListResponse` เท่านั้น (มี seq + key กันผลเก่าทับเพจที่เลือก และแคชต่อ key) — ห้าม `setConversations(res.conversations)` ตรงๆ
+8. bucket `chat-uploads` เป็น public แต่ **ห้ามมี policy SELECT** บน storage.objects (จะทำให้ใครก็ตามที่มี anon key ไล่ดูรายชื่อไฟล์/รูปลูกค้าทั้ง bucket ได้) — อ่าน/เขียน storage ผ่าน service role เท่านั้น
+9. รายการแชทในกล่องข้อความ: โหลดผ่าน `loadConversations`/`applyListResponse` เท่านั้น (มี seq + key กันผลเก่าทับเพจที่เลือก และแคชต่อ key) — ห้าม `setConversations(res.conversations)` ตรงๆ
 
 ## 🚀 Local / Deploy
 ```bash

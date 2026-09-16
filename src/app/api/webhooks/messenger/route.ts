@@ -6,6 +6,7 @@
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { rehostUrlToStorage } from '@/lib/media'
+import { hostProfilePic, ensureCustomerPicture, avatarIsFresh } from '@/lib/customer-avatar'
 import {
   verifyWebhookSignature,
   getUserProfile,
@@ -121,14 +122,15 @@ async function processMessagingEvent(pageId: string, event: WebhookMessagingEven
   // ─── หา/สร้าง conversation ───
   let { data: conv } = await sb
     .from('conversations')
-    .select('id, customer_name, unread_count')
+    .select('id, customer_name, unread_count, customer_picture')
     .eq('fb_page_id', pageId)
     .eq('fb_psid', customerPsid)
     .single()
 
   if (!conv) {
-    // สร้าง conversation ใหม่ + ดึงโปรไฟล์ลูกค้า
+    // สร้าง conversation ใหม่ + ดึงโปรไฟล์ลูกค้า (รูปเก็บลง Storage เลย — ลิงก์ของ FB หมดอายุเร็ว)
     const profile = await getUserProfile(customerPsid, pageToken)
+    const hostedPic = await hostProfilePic(sb, page.id, customerPsid, profile?.profile_pic)
     const { data: newConv } = await sb
       .from('conversations')
       .insert({
@@ -137,13 +139,13 @@ async function processMessagingEvent(pageId: string, event: WebhookMessagingEven
         fb_page_id: pageId,
         fb_psid: customerPsid,
         customer_name: profile?.name || 'ลูกค้า',
-        customer_picture: profile?.profile_pic,
+        customer_picture: hostedPic || profile?.profile_pic || null,
         last_message: msg.text || '(ไฟล์แนบ)',
         last_message_at: new Date(event.timestamp).toISOString(),
         last_sender: direction === 'inbound' ? 'customer' : 'page',
         unread_count: direction === 'inbound' ? 1 : 0,
       })
-      .select('id, customer_name, unread_count')
+      .select('id, customer_name, unread_count, customer_picture')
       .single()
     conv = newConv
   } else {
@@ -196,6 +198,14 @@ async function processMessagingEvent(pageId: string, event: WebhookMessagingEven
   // ─── Auto-reply (ถ้าเปิด + เป็น inbound + นอกเวลาทำการ หรือ enable auto-reply เสมอ) ───
   if (direction === 'inbound') {
     await maybeAutoReply(page.id, page.user_id, pageId, pageToken, customerPsid)
+  }
+
+  // แชทเก่าที่รูปโปรไฟล์ยังเป็นลิงก์ชั่วคราว/หมดอายุ → ดึงมาเก็บใหม่ตอนลูกค้าทักเข้ามา (ไม่บ่อย: มีเช็ควันที่)
+  // ทำหลังบันทึกข้อความ + ตอบอัตโนมัติแล้ว — งานรูปช้าหรือพังต้องไม่ทำให้ข้อความลูกค้าหาย
+  if (direction === 'inbound' && !avatarIsFresh((conv as any).customer_picture)) {
+    try {
+      await ensureCustomerPicture(sb, { id: conv.id, fb_psid: customerPsid, page_id: page.id, customer_picture: (conv as any).customer_picture || null }, pageToken)
+    } catch {}
   }
 }
 

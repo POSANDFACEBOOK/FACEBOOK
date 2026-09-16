@@ -666,11 +666,34 @@ export default function InboxPage() {
   // ไม่งั้นทุกข้อความ LINE จะสั่งโหลดรายการใหม่บนมือถือแอดมินโดยไม่มีอะไรเปลี่ยน (poll 7 วิ ยังเป็นตัวสำรอง)
   const rtIgnoreRef = useRef<(table: string, row: any) => boolean>(() => false)
   rtIgnoreRef.current = (table, row) => {
-    if (LINE_ENABLED || !row) return false
+    if (!row) return false
     if (table === 'conversations') {
+      // อัปเดตเฉพาะรูปโปรไฟล์ (จาก /api/inbox/avatar) → แก้ในจอเลย ไม่ต้องโหลดรายการใหม่
+      // (ตอนเปิดครั้งแรกหลัง deploy รูปถูกเก็บใหม่ทีละหลายสิบแชท ถ้าโหลดใหม่ทุกครั้งมือถือจะกระตุก)
+      const local = conversations.find((c: any) => c.id === row.id)
+      if (local && local.customer_picture !== row.customer_picture) {
+        const ts = (v: any) => (v ? Date.parse(v) : 0)
+        const same = ts(local.last_message_at) === ts(row.last_message_at)
+          && (local.last_message ?? null) === (row.last_message ?? null)
+          && (local.unread_count ?? 0) === (row.unread_count ?? 0)
+          && (local.last_sender ?? null) === (row.last_sender ?? null)
+          && !!local.is_archived === !!row.is_archived
+          && !!local.is_resolved === !!row.is_resolved
+          && !!local.is_starred === !!row.is_starred
+          && (local.customer_name ?? null) === (row.customer_name ?? null)
+        if (same) {
+          const patch = (c: any) => c.id === row.id ? { ...c, customer_picture: row.customer_picture } : c
+          setConversations(prev => prev.map(patch))
+          patchCachedConvs(patch)
+          setActiveConv((c: any) => c && c.id === row.id ? { ...c, customer_picture: row.customer_picture } : c)
+          return true
+        }
+      }
+      if (LINE_ENABLED) return false
       const pid = row.page_id
       return !!pid && pages.length > 0 && !pages.some((p: any) => p.id === pid)
     }
+    if (LINE_ENABLED) return false
     const cid = row.conversation_id
     return !!cid && pages.length > 0 && activeConv?.id !== cid && !conversations.some((c: any) => c.id === cid)
   }
@@ -1614,7 +1637,7 @@ export default function InboxPage() {
                 >
                   <ChevronLeft size={22} strokeWidth={2.6} />
                 </button>
-                <Avatar name={activeConv.customer_name} src={activeConv.customer_picture} size={40} ringColor={pageColor(activeConv.page_id).border} />
+                <Avatar name={activeConv.customer_name} src={customerAvatarSrc(activeConv)} size={40} ringColor={pageColor(activeConv.page_id).border} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 15.5, fontWeight: 900, color: TEXT, display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
@@ -1777,7 +1800,7 @@ export default function InboxPage() {
                     key={m.id || i}
                     message={m}
                     customerName={activeConv.customer_name}
-                    customerPic={activeConv.customer_picture}
+                    customerPic={customerAvatarSrc(activeConv)}
                     onRetry={(retriedTick >= 0 && retriedRef.current.has(retryKeyOf(activeConv.id, m))) ? undefined : retryMessage}
                   />
                 ))}
@@ -1958,7 +1981,7 @@ export default function InboxPage() {
             borderLeft: `1.5px solid ${BORDER}`, padding: 18, overflowY: 'auto',
           }} className="ib-col3">
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, paddingBottom: 18, borderBottom: `1px solid ${BORDER}`, marginBottom: 16 }}>
-              <Avatar name={activeConv.customer_name} src={activeConv.customer_picture} size={64} />
+              <Avatar name={activeConv.customer_name} src={customerAvatarSrc(activeConv)} size={64} />
               <div style={{ fontSize: 15, fontWeight: 800, color: TEXT, textAlign: 'center' }}>
                 {activeConv.customer_name || 'ลูกค้า'}
               </div>
@@ -2468,24 +2491,43 @@ function NavItem({ icon, label, active, badge }: { icon: ReactNode; label: strin
   )
 }
 
+// รูปลูกค้า: ถ้าเป็นรูปในระบบเราแล้ว ใช้ตรงๆ · "none:" = ไม่มีรูป · อย่างอื่น (ลิงก์ FB ชั่วคราว/หมดอายุ)
+// → ขอผ่าน /api/inbox/avatar ให้ระบบดึงมาเก็บใหม่ (ครั้งเดียว รอบถัดไปได้ URL ถาวรจากรายการเลย)
+function customerAvatarSrc(conv: any): string | undefined {
+  const pic: string | null = conv?.customer_picture || null
+  if (pic && pic.includes('/storage/v1/object/public/chat-uploads/avatars/')) return pic
+  if (pic && pic.startsWith('none:')) return undefined
+  if (!conv?.id || String(conv.id).startsWith('temp-')) return pic || undefined
+  return `/api/inbox/avatar/${encodeURIComponent(conv.id)}`
+}
+
 function Avatar({ name, src, size = 40, ringColor }: { name?: string; src?: string; size?: number; ringColor?: string }) {
   const ring = ringColor ? `2px solid ${ringColor}` : '1.5px solid white'
-  // URL รูปโปรไฟล์ FB หมดอายุบ่อย → ถ้าโหลดไม่ขึ้นต้องตกไปใช้ตัวอักษรย่อ ไม่ใช่ปล่อยว่าง
+  // ตัวอักษรย่ออยู่ข้างล่างเสมอ รูปซ้อนทับเมื่อโหลดเสร็จ — ระหว่างรอรูป (หรือรูปแตก) จะไม่เห็นวงกลมว่างๆ
   const [broken, setBroken] = useState(false)
-  useEffect(() => { setBroken(false) }, [src])
-  if (src && !broken) {
-    return <img src={src} alt="" style={{ width: size, height: size, borderRadius: '50%', objectFit: 'cover', flexShrink: 0, border: ring, boxShadow: SHADOW_SM }} onError={() => setBroken(true)} />
-  }
+  const [loaded, setLoaded] = useState(false)
+  useEffect(() => { setBroken(false); setLoaded(false) }, [src])
+  const showImg = !!src && !broken
   return (
     <div style={{
+      position: 'relative', overflow: 'hidden',
       width: size, height: size, borderRadius: '50%', flexShrink: 0,
       background: 'linear-gradient(135deg, #5fa3ff, #2e89ff)', color: 'white',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       fontSize: size * 0.4, fontWeight: 800, boxShadow: SHADOW_SM,
-      border: ring,
+      border: ring, boxSizing: 'border-box',
     }}>
       {/* ตัดตาม code point — ชื่อที่ขึ้นต้นด้วย emoji (เช่น "🌸น้องมิว") จะไม่กลายเป็น "�" */}
       {(Array.from(name || '?')[0] || '?').toUpperCase()}
+      {showImg && (
+        <img
+          src={src}
+          alt=""
+          onLoad={() => setLoaded(true)}
+          onError={() => setBroken(true)}
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: loaded ? 1 : 0, transition: 'opacity .15s' }}
+        />
+      )}
     </div>
   )
 }
@@ -2513,7 +2555,7 @@ function ConvItem({ conv, active, onClick }: { conv: any; active: boolean; onCli
       onMouseEnter={e => { if (!active) e.currentTarget.style.background = SURFACE2 }}
       onMouseLeave={e => { if (!active) e.currentTarget.style.background = bgFor() }}
     >
-      <Avatar name={conv.customer_name} src={conv.customer_picture} size={44} ringColor={pc.border} />
+      <Avatar name={conv.customer_name} src={customerAvatarSrc(conv)} size={44} ringColor={pc.border} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 3 }}>
           <div style={{
