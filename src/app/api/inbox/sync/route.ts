@@ -7,6 +7,7 @@ import { NextResponse } from 'next/server'
 import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase'
 import { getCurrentUserContext } from '@/lib/team'
+import { hostProfilePic } from '@/lib/customer-avatar'
 import {
   listConversationsWithMessages,
   getUserProfilesBatch,
@@ -241,6 +242,8 @@ async function syncOnePage(
       if (!convId) {
         // upsert (กัน race กับ webhook ที่อาจ insert แทรก) — คืน id เสมอ
         const profile = profiles.get(psid)
+        // รูปโปรไฟล์: เก็บลง Storage เลย (ลิงก์ของ FB หมดอายุเร็ว) — ดึงไม่ได้ก็ใช้ลิงก์ FB ไปก่อน
+        const hostedPic = await hostProfilePic(sb, page.id, psid, profile?.profile_pic)
         const { data: up, error: upErr } = await sb
           .from('conversations')
           .upsert(
@@ -251,7 +254,7 @@ async function syncOnePage(
               fb_conversation_id: conv.id,
               fb_psid: psid,
               customer_name: customer.name || profile?.name || 'ลูกค้า',
-              customer_picture: profile?.profile_pic,
+              customer_picture: hostedPic || profile?.profile_pic || null,
               last_message: lastMsg,
               last_message_at: conv.updated_time,
               last_sender: lastSender,

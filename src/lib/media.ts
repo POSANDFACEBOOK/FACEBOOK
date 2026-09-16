@@ -22,15 +22,16 @@ export async function rehostUrlToStorage(
   fetchUrl: string,
   headers: Record<string, string>,
   prefix: string,
+  opts?: { name?: string; maxBytes?: number; timeoutMs?: number },  // name = ตั้งชื่อไฟล์เอง (ไม่ใส่นามสกุล) แทนสุ่ม uuid
 ): Promise<string | null> {
   try {
-    const res = await fetch(fetchUrl, { headers })
+    const res = await fetch(fetchUrl, { headers, signal: opts?.timeoutMs ? AbortSignal.timeout(opts.timeoutMs) : undefined })
     if (!res.ok) return null
     const ct = (res.headers.get('content-type') || 'image/jpeg').split(';')[0].trim()
     if (!ct.startsWith('image/') && !ct.startsWith('video/')) return null
     const buf = Buffer.from(await res.arrayBuffer())
-    if (buf.length === 0 || buf.length > MAX_BYTES) return null
-    const path = `${prefix}/${crypto.randomUUID()}.${extFromContentType(ct)}`
+    if (buf.length === 0 || buf.length > (opts?.maxBytes || MAX_BYTES)) return null
+    const path = `${prefix}/${opts?.name || crypto.randomUUID()}.${extFromContentType(ct)}`
     const { error } = await sb.storage.from(BUCKET).upload(path, buf, { contentType: ct, upsert: false })
     if (error) {
       console.warn('[media] storage upload failed:', error.message)

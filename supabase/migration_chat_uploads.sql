@@ -17,10 +17,10 @@ ON CONFLICT (id) DO UPDATE
       file_size_limit = 5242880,
       allowed_mime_types = ARRAY['image/jpeg','image/png','image/gif','image/webp'];
 
--- อ่านได้แบบ public (ดูรูปได้ทุกคนที่มี URL — จำเป็นสำหรับ FB/LINE)
+-- bucket เป็น public อยู่แล้ว → เปิดรูปผ่าน URL /object/public/... ได้โดยไม่ต้องมี policy SELECT
+-- ห้ามสร้าง policy SELECT ให้ anon/authenticated: มันไม่ได้ช่วยให้ "ดูรูป" แต่ทำให้ใครก็ตามที่มี anon key
+-- (ฝังอยู่ในหน้าเว็บ) "ไล่ดูรายชื่อไฟล์ทั้ง bucket" ได้ — รวมรูปโปรไฟล์ลูกค้าทุกคนใน avatars/
 DROP POLICY IF EXISTS "chat_uploads_public_read" ON storage.objects;
-CREATE POLICY "chat_uploads_public_read" ON storage.objects
-  FOR SELECT USING (bucket_id = 'chat-uploads');
 
 -- เขียน/ลบ ทำผ่าน service role (API /api/inbox/upload) เท่านั้น — service role bypass RLS
 -- ปฏิเสธ anon/authenticated อย่างชัดเจน (defense-in-depth) เผื่อ key หลุด
