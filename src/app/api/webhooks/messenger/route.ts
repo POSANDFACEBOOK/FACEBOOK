@@ -13,6 +13,7 @@ import {
   sendTextMessage,
   type WebhookEntry,
   type WebhookMessagingEvent,
+  getCustomerNameFromConversation,
 } from '@/lib/messenger'
 
 export const dynamic = 'force-dynamic'
@@ -131,6 +132,8 @@ async function processMessagingEvent(pageId: string, event: WebhookMessagingEven
     // สร้าง conversation ใหม่ + ดึงโปรไฟล์ลูกค้า (รูปเก็บลง Storage เลย — ลิงก์ของ FB หมดอายุเร็ว)
     const profile = await getUserProfile(customerPsid, pageToken)
     const hostedPic = await hostProfilePic(sb, page.id, customerPsid, profile?.profile_pic)
+    // User Profile API ใช้ไม่ได้ (แอปยังไม่ได้สิทธิ์) → ชื่อจากรายชื่อผู้ร่วมแชทแทน ไม่งั้นขึ้นว่า "ลูกค้า"
+    const fallbackName = profile?.name ? null : await getCustomerNameFromConversation(pageId, customerPsid, pageToken)
     const { data: newConv } = await sb
       .from('conversations')
       .insert({
@@ -138,7 +141,7 @@ async function processMessagingEvent(pageId: string, event: WebhookMessagingEven
         page_id: page.id,
         fb_page_id: pageId,
         fb_psid: customerPsid,
-        customer_name: profile?.name || 'ลูกค้า',
+        customer_name: profile?.name || fallbackName || 'ลูกค้า',
         customer_picture: hostedPic || profile?.profile_pic || null,
         last_message: msg.text || '(ไฟล์แนบ)',
         last_message_at: new Date(event.timestamp).toISOString(),

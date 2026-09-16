@@ -6,7 +6,7 @@
 //
 // รูปแบบค่าใน customer_picture:
 // - URL ของ Storage เรา ชื่อไฟล์ <psid>-<YYYYMMDD>-<สุ่ม>.jpg  → ใช้ได้เลย (รีเฟรชใหม่เมื่อเก่ากว่า 30 วัน)
-// - "none:<YYYYMMDD>"                                         → ลูกค้าไม่มีรูปจริงๆ ไม่ต้องลองใหม่จนกว่าจะเก่ากว่า 7 วัน
+// - "none:<YYYYMMDD>"                                         → ดึงรูปไม่ได้ (ไม่มีรูป / แอปยังไม่ได้สิทธิ์) ลองใหม่วันละครั้ง
 // - อย่างอื่น (URL ชั่วคราวของ FB / LINE / ว่าง)                → ต้องดึงใหม่
 //
 // ติดต่อ Facebook ไม่ได้ชั่วคราว (token หมดอายุ, rate limit, FB ล่ม) → ไม่แตะ DB ให้รอบหน้าลองใหม่
@@ -20,7 +20,9 @@ const BUCKET = 'chat-uploads'
 const BUCKET_PUBLIC_PREFIX = `/storage/v1/object/public/${BUCKET}/`
 const HOSTED_MARK = `${BUCKET_PUBLIC_PREFIX}avatars/`
 const REFRESH_AFTER_DAYS = 30
-const RETRY_NONE_AFTER_DAYS = 7
+// Facebook ตอบ #100/33 ทั้งกรณี "ไม่มีโปรไฟล์" และ "แอปยังไม่ได้สิทธิ์ Business Asset User Profile Access"
+// (แยกกันไม่ได้) → ลองใหม่ทุกวัน พอได้สิทธิ์แล้วรูปจะขึ้นเองภายใน 1 วัน
+const RETRY_NONE_AFTER_DAYS = 1
 const FETCH_TIMEOUT_MS = 5000
 
 function today(): string {
