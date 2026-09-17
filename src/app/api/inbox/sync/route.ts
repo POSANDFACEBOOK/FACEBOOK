@@ -10,6 +10,8 @@ import { getCurrentUserContext } from '@/lib/team'
 import { hostProfilePic } from '@/lib/customer-avatar'
 import {
   listConversationsWithMessages,
+  getConversationUpdateTimes,
+  getConversationsWithMessagesByIds,
   getUserProfilesBatch,
   subscribePageToWebhook,
 } from '@/lib/messenger'
@@ -195,6 +197,40 @@ async function syncOnePage(
       const refreshed = await refreshToken(page)
       if (!refreshed) throw e
       fbConvs = await listConversationsWithMessages(page.page_id, page.page_access_token, 40, 10, 2)
+    }
+
+    // แชทเก่าที่หลุดจากรายการล่าสุด (80 แชท) แต่ยังค้างใน "ใหม่"/"ยังไม่ตอบ"
+    // → ถ้าบน Facebook มีความเคลื่อนไหวใหม่กว่า (เช่นแอดมินตอบจากแอป Facebook/Business Suite) ดึงมาอัปเดต
+    // (ตอนนี้ Facebook ยังไม่ส่ง webhook ให้แอปที่ยังไม่เผยแพร่ — ไม่ทำตรงนี้แชทพวกนี้จะค้างตลอดไป)
+    try {
+      const listed = new Set(fbConvs.map((c: any) => c.id))
+      const { data: pending } = await sb
+        .from('conversations')
+        .select('fb_conversation_id, last_message_at')
+        .eq('page_id', page.id)
+        .eq('is_archived', false)
+        .or('last_sender.eq.customer,unread_count.gt.0')
+        .not('fb_conversation_id', 'is', null)
+        .order('last_message_at', { ascending: false })
+        .limit(200)
+      const candidates = ((pending || []) as any[]).filter(r => !listed.has(r.fb_conversation_id))
+      if (candidates.length > 0) {
+        const times = await getConversationUpdateTimes(candidates.map(r => r.fb_conversation_id), page.page_access_token)
+        const changed = candidates
+          .filter(r => {
+            const t = times.get(r.fb_conversation_id)
+            // ความละเอียดเวลาของ FB เป็นวินาที → เผื่อ 1 วิ
+            return !!t && (!r.last_message_at || Date.parse(t) > Date.parse(r.last_message_at) + 1000)
+          })
+          .slice(0, 30)
+          .map(r => r.fb_conversation_id as string)
+        if (changed.length > 0) {
+          fbConvs.push(...await getConversationsWithMessagesByIds(changed, page.page_access_token, 25))
+          pageResult.stale_refreshed = changed.length
+        }
+      }
+    } catch (e: any) {
+      console.warn(`[sync] stale check failed ${page.page_name}: ${e?.message || e}`)
     }
 
     // จับคู่ conv กับลูกค้า + dedupe ตาม psid (เก็บอันที่ใหม่สุด) กัน insert ชนกันเองในรอบเดียว
