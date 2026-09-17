@@ -211,6 +211,76 @@ export interface FBConversationWithMessages extends FBConversation {
  * ดึง conversations พร้อมข้อความล่าสุด inline ในครั้งเดียว (เลี่ยง N+1)
  * ใช้ field expansion ของ Graph API — 1 call/เพจ แทน 1 + N calls
  */
+const CONV_MSG_FIELDS =
+  'id,created_time,from,to,message,sticker,shares,attachments{id,mime_type,name,type,image_data,file_url,video_data,audio_data,payload}'
+const convFields = (msgLimit: number) =>
+  `id,updated_time,unread_count,snippet,participants,messages.limit(${msgLimit}){${CONV_MSG_FIELDS}}`
+
+/** เวลาอัปเดตล่าสุดของหลายแชทในครั้งเดียว (Graph ?ids= ครั้งละ 50) → Map<conversationId, updated_time> */
+export async function getConversationUpdateTimes(
+  conversationIds: string[],
+  pageToken: string,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  const ids = Array.from(new Set(conversationIds.filter(Boolean)))
+  for (let i = 0; i < ids.length; i += 50) {
+    const chunk = ids.slice(i, i + 50)
+    const data = await getJson(`${FB_API}/?${new URLSearchParams({ ids: chunk.join(','), fields: 'updated_time', access_token: pageToken })}`)
+    if (data && !data.error) {
+      for (const [id, v] of Object.entries(data)) {
+        const t = (v as any)?.updated_time
+        if (typeof t === 'string') out.set(id, t)
+      }
+      continue
+    }
+    // Facebook ปฏิเสธทั้งชุดถ้ามีแชทเดียวที่อ่านไม่ได้ (เช่นถูกลบใน Business Suite) → ถามทีละแชท ข้ามตัวที่อ่านไม่ได้
+    const bad: string[] = []
+    await Promise.all(chunk.map(async id => {
+      const d = await getJson(`${FB_API}/${encodeURIComponent(id)}?${new URLSearchParams({ fields: 'updated_time', access_token: pageToken })}`)
+      if (typeof d?.updated_time === 'string') out.set(id, d.updated_time)
+      else bad.push(id)
+    }))
+    if (bad.length) console.warn(`[messenger] unreadable conversations: ${bad.join(',')}`)
+  }
+  return out
+}
+
+async function getJson(url: string): Promise<any | null> {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(10000) })
+    return await res.json()
+  } catch {
+    return null
+  }
+}
+
+/** ดึงแชทพร้อมข้อความล่าสุดตาม id (รูปแบบเดียวกับ listConversationsWithMessages) */
+export async function getConversationsWithMessagesByIds(
+  conversationIds: string[],
+  pageToken: string,
+  msgLimit = 25,
+): Promise<FBConversationWithMessages[]> {
+  const all: FBConversationWithMessages[] = []
+  const ids = Array.from(new Set(conversationIds.filter(Boolean)))
+  // ครั้งละ 10 แชท (แชทละ msgLimit ข้อความ) — ชุดใหญ่เกินไป Facebook ตอบว่าข้อมูลเยอะเกิน
+  for (let i = 0; i < ids.length; i += 10) {
+    const chunk = ids.slice(i, i + 10)
+    const data = await getJson(`${FB_API}/?${new URLSearchParams({ ids: chunk.join(','), fields: convFields(msgLimit), access_token: pageToken })}`)
+    if (data && !data.error) {
+      for (const v of Object.values(data)) {
+        if (v && (v as any).id) all.push(v as FBConversationWithMessages)
+      }
+      continue
+    }
+    // ชุดนี้ล้ม → ดึงทีละแชท เก็บเฉพาะที่ได้
+    await Promise.all(chunk.map(async id => {
+      const d = await getJson(`${FB_API}/${encodeURIComponent(id)}?${new URLSearchParams({ fields: convFields(msgLimit), access_token: pageToken })}`)
+      if (d && !d.error && d.id) all.push(d as FBConversationWithMessages)
+    }))
+  }
+  return all
+}
+
 export async function listConversationsWithMessages(
   pageId: string,
   pageToken: string,
@@ -218,9 +288,7 @@ export async function listConversationsWithMessages(
   msgLimit = 15,
   maxPages = 2,
 ): Promise<FBConversationWithMessages[]> {
-  const msgFields =
-    'id,created_time,from,to,message,sticker,shares,attachments{id,mime_type,name,type,image_data,file_url,video_data,audio_data,payload}'
-  const fields = `id,updated_time,unread_count,snippet,participants,messages.limit(${msgLimit}){${msgFields}}`
+  const fields = convFields(msgLimit)
   // encode field expansion ({} () ,) อย่างถูกต้องข้าม environment
   const qs = new URLSearchParams({ fields, limit: String(convLimit), access_token: pageToken })
   const all: FBConversationWithMessages[] = []

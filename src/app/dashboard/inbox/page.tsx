@@ -9,7 +9,7 @@ import {
   ArrowLeft, Send, Sparkles, RefreshCw, Search, Star, Archive, CheckCircle2,
   MessageSquare, Inbox, Settings, Zap, X, ChevronLeft, MoreVertical, Bot,
   AlertCircle, Users, Bell, Plus, LogOut, ListFilter, MailOpen, MailQuestion,
-  Pencil, Check, Copy, Share2, ImagePlus, Menu, ExternalLink,
+  Pencil, Check, Copy, Share2, ImagePlus, Menu, ExternalLink, Trash2,
 } from 'lucide-react'
 
 // ─── Design Tokens (sync กับ dashboard) ───────────────────────
@@ -168,6 +168,7 @@ export default function InboxPage() {
   const retriedRef = useRef<Set<string>>(new Set())
   // id ของแถวใน DB ที่ถูกกดส่งซ้ำไปแล้ว → ซ่อนไม่ให้ฟองแดงเดิมเด้งกลับมาตอน poll
   const retriedServerIdsRef = useRef<Set<string>>(new Set())
+  const loadMessagesSilentRef = useRef<(() => void) | null>(null)
   const [retriedTick, setRetriedTick] = useState(0)  // บังคับ re-render หลัง mark
   // ค่าตั้งค่าต่อเพจ (ตอนนี้ใช้เช็คว่าเจ้าของปิดปุ่ม "AI ช่วยตอบ" ไว้ไหม)
   const [aiEnabledByPage, setAiEnabledByPage] = useState<Record<string, boolean>>({})
@@ -666,6 +667,15 @@ export default function InboxPage() {
 
   // ── Realtime: เด้งทันทีเมื่อมีข้อความ/แชทใหม่ (Supabase Realtime) ──
   // ถ้ายังไม่ได้ตั้ง SUPABASE_JWT_SECRET → endpoint คืน token=null → ใช้ polling 30 วิ แทน
+  // โหลดข้อความของแชทที่เปิดอยู่ใหม่แบบเงียบ (ใช้ตอนลบข้อความไม่สำเร็จ ให้แถวเดิมกลับมา)
+  loadMessagesSilentRef.current = () => {
+    const convId = activeConv?.id
+    if (!convId) return
+    fetch(`/api/inbox/conversations/${convId}`)
+      .then(r => r.json())
+      .then(res => { if (openReqRef.current === convId && res.messages) mergeServerMessages(res.messages) })
+      .catch(() => {})
+  }
   const rtTimerRef = useRef<any>(null)
   const rtRefreshRef = useRef<() => void>(() => {})
   // ช่องทาง LINE ถูกซ่อน แต่ webhook LINE ยังเขียนข้อมูลอยู่ → ข้าม event ของแชทที่ไม่อยู่ในเพจที่เห็น
@@ -834,7 +844,10 @@ export default function InboxPage() {
         const msg = friendlyError(data.error) || 'ส่งไม่สำเร็จ'
         if (isThis()) {
           setErrorBanner(msg)
-          setMessages(prev => prev.map(m => m.id === optimistic.id ? { ...m, delivery_status: 'failed', error_message: msg } : m))
+          // ใช้แถวที่ server บันทึกไว้ (id จริง) แทนฟองชั่วคราว → กด "ลบ"/"ส่งอีกครั้ง" แล้วไม่เด้งกลับมา
+          setMessages(prev => prev.map(m => m.id === optimistic.id
+            ? (data.message ? { ...data.message, error_message: msg } : { ...m, delivery_status: 'failed', error_message: msg })
+            : m))
           if (data.blockCode) setActiveConv((c: any) => c ? { ...c, send_block_code: data.blockCode } : c)
         }
         loadConversations({ silent: true })
@@ -874,6 +887,30 @@ export default function InboxPage() {
   }
 
   // ส่งอีกครั้งจากฟองข้อความที่ส่งไม่สำเร็จ (ทั้งข้อความและรูป)
+  // ข้อความที่ส่งไม่สำเร็จ (ไม่เคยถึงลูกค้า) → ลบออกจากแชท ให้แชทตรงกับ Facebook
+  function deleteFailedOnServer(m: any): Promise<boolean> {
+    if (String(m.id).startsWith('temp-')) return Promise.resolve(true)
+    return fetch(`/api/inbox/messages/${encodeURIComponent(String(m.id))}`, { method: 'DELETE' })
+      .then(r => r.ok || r.status === 404)  // 404 = ถูกลบไปแล้ว (เช่นจากอีกเครื่อง)
+      .catch(() => false)
+  }
+
+  async function discardFailed(m: any) {
+    if (!window.confirm('ลบข้อความที่ส่งไม่สำเร็จนี้?\n\nลูกค้าไม่ได้รับข้อความนี้ ลบแล้วเอากลับมาไม่ได้')) return
+    const id = String(m.id)
+    if (!id.startsWith('temp-')) retriedServerIdsRef.current.add(id)  // poll ห้ามเอากลับมา
+    setMessages(prev => prev.filter(x => x.id !== m.id))
+    const entry = pendingFilesRef.current.get(id)
+    if (entry) { pendingFilesRef.current.delete(id); try { URL.revokeObjectURL(entry.url) } catch {} }
+    const ok = await deleteFailedOnServer(m)
+    if (!ok) {
+      // ลบไม่สำเร็จ → เอากลับมาแสดง จะได้ไม่เข้าใจผิดว่าหายไปแล้ว
+      retriedServerIdsRef.current.delete(id)
+      setErrorBanner('ลบข้อความไม่สำเร็จ — ลองใหม่อีกครั้ง')
+      loadMessagesSilentRef.current?.()
+    }
+  }
+
   async function retryMessage(m: any) {
     if (sending || uploading || !activeConv) return
     const convId = activeConv.id
@@ -893,8 +930,11 @@ export default function InboxPage() {
     }
 
     markRetried(convId, m)
-    // แถวที่มาจาก DB จะถูกดึงกลับมาตอน poll → จำ id ไว้เพื่อซ่อนถาวร
-    if (!String(m.id).startsWith('temp-')) retriedServerIdsRef.current.add(String(m.id))
+    // แถวที่มาจาก DB จะถูกดึงกลับมาตอน poll → จำ id ไว้เพื่อซ่อน + ลบใน DB (รีเฟรชแล้วจะได้ไม่กลับมา)
+    if (!String(m.id).startsWith('temp-')) {
+      retriedServerIdsRef.current.add(String(m.id))
+      deleteFailedOnServer(m)
+    }
     setMessages(prev => prev.filter(x => x.id !== m.id))
     if (imgUrl) await sendImageUrl(imgUrl)
     else if (m.message_text) await handleSend(m.message_text)
@@ -929,7 +969,10 @@ export default function InboxPage() {
         const msg = friendlyError(data.error) || 'ส่งรูปไม่สำเร็จ'
         if (isThis()) {
           setErrorBanner(msg)
-          setMessages(prev => prev.map(m => m.id === optimistic.id ? { ...m, delivery_status: 'failed', error_message: msg } : m))
+          // ใช้แถวที่ server บันทึกไว้ (id จริง) แทนฟองชั่วคราว → กด "ลบ"/"ส่งอีกครั้ง" แล้วไม่เด้งกลับมา
+          setMessages(prev => prev.map(m => m.id === optimistic.id
+            ? (data.message ? { ...data.message, error_message: msg } : { ...m, delivery_status: 'failed', error_message: msg })
+            : m))
           if (data.blockCode) setActiveConv((c: any) => c ? { ...c, send_block_code: data.blockCode } : c)
         }
         loadConversations({ silent: true })
@@ -1809,6 +1852,7 @@ export default function InboxPage() {
                     customerName={activeConv.customer_name}
                     customerPic={customerAvatarSrc(activeConv)}
                     fbInboxUrl={facebookInboxUrl(activeConv)}
+                    onDiscard={discardFailed}
                     onRetry={(retriedTick >= 0 && retriedRef.current.has(retryKeyOf(activeConv.id, m))) ? undefined : retryMessage}
                   />
                 ))}
@@ -2753,7 +2797,7 @@ function facebookInboxUrl(conv: any): string | undefined {
   return `https://business.facebook.com/latest/inbox/all/?${qs.toString()}`
 }
 
-function MessageBubble({ message: m, customerName, customerPic, onRetry, fbInboxUrl }: { message: any; customerName?: string; customerPic?: string; onRetry?: (m: any) => void; fbInboxUrl?: string }) {
+function MessageBubble({ message: m, customerName, customerPic, onRetry, onDiscard, fbInboxUrl }: { message: any; customerName?: string; customerPic?: string; onRetry?: (m: any) => void; onDiscard?: (m: any) => void; fbInboxUrl?: string }) {
   const out = m.direction === 'outbound'
   const failed = m.delivery_status === 'failed'
   const sending = m.delivery_status === 'sending'
@@ -2841,12 +2885,26 @@ function MessageBubble({ message: m, customerName, customerPic, onRetry, fbInbox
                   onClick={() => onRetry(m)}
                   style={{
                     display: 'inline-flex', alignItems: 'center', gap: 4,
-                    padding: '4px 10px', borderRadius: 8, border: `1.5px solid ${RED}`,
+                    padding: '4px 10px', minHeight: 32, borderRadius: 8, border: `1.5px solid ${RED}`,
                     background: 'white', color: RED, fontSize: 11.5, fontWeight: 800,
                     fontFamily: 'inherit', cursor: 'pointer',
                   }}
                 >
                   <RefreshCw size={11} /> ส่งอีกครั้ง
+                </button>
+              )}
+              {onDiscard && (
+                <button
+                  onClick={() => onDiscard(m)}
+                  title="ลบข้อความนี้ (ลูกค้าไม่ได้รับ)"
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 4,
+                    padding: '4px 10px', minHeight: 32, borderRadius: 8, border: `1.5px solid ${BORDER}`,
+                    background: 'white', color: MUTED, fontSize: 11.5, fontWeight: 800,
+                    fontFamily: 'inherit', cursor: 'pointer',
+                  }}
+                >
+                  <Trash2 size={11} /> ลบ
                 </button>
               )}
             </>

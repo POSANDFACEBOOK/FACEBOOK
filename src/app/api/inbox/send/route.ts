@@ -77,12 +77,12 @@ export async function POST(req: Request) {
       if (!lineRes.success) {
         const userError = '⚠️ LINE ส่งไม่สำเร็จ: ' + (lineRes.error || '') +
           (lineRes.errorCode === 429 ? ' (เกินโควต้า push ของเดือนนี้)' : '')
-        await sb.from('inbox_messages').insert({
+        const { data: failedRow } = await sb.from('inbox_messages').insert({
           conversation_id: conv.id, fb_sender_id: conv.fb_page_id, direction: 'outbound',
           message_text: msgText, attachments, sent_by: 'page_user', sent_by_user_id: ctx.userId,
           delivery_status: 'failed', error_message: userError,
-        })
-        return NextResponse.json({ error: userError }, { status: 500 })
+        }).select('*').single()
+        return NextResponse.json({ error: userError, message: failedRow || undefined }, { status: 500 })
       }
       const { data: saved } = await sb
         .from('inbox_messages')
@@ -136,7 +136,7 @@ export async function POST(req: Request) {
       } else if (result.errorCode === 190) {
         userError = '⚠️ Page token หมดอายุ — กลับไปกด Sync แล้วลองใหม่'
       }
-      await sb.from('inbox_messages').insert({
+      const { data: failedRow } = await sb.from('inbox_messages').insert({
         conversation_id: conv.id,
         fb_sender_id: conv.fb_page_id,
         direction: 'outbound',
@@ -146,7 +146,7 @@ export async function POST(req: Request) {
         sent_by_user_id: ctx.userId,
         delivery_status: 'failed',
         error_message: userError,
-      })
+      }).select('*').single()
       // mark แชทว่าส่งไม่ได้ (ลูกค้าไม่พร้อม/เกินเวลา) → โชว์ป้ายเตือนให้แอดมิน
       const blockCode = result.errorCode === 551 ? 551
         : (result.errorCode === 10 || usedHumanAgent) ? 10 : null
@@ -155,7 +155,7 @@ export async function POST(req: Request) {
           .update({ send_block_code: blockCode, send_block_at: new Date().toISOString() })
           .eq('id', conv.id)
       }
-      return NextResponse.json({ error: userError, blockCode: blockCode || undefined }, { status: 500 })
+      return NextResponse.json({ error: userError, blockCode: blockCode || undefined, message: failedRow || undefined }, { status: 500 })
     }
 
     // บันทึก message สำเร็จ — sent_by_user_id = agent's id (audit trail)
