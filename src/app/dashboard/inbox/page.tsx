@@ -1442,7 +1442,8 @@ export default function InboxPage() {
                   ซิงค์...
                 </div>
               )}
-              {scopedUnread > 0 && (
+              {/* ปุ่ม "อ่านแล้ว" ใช้เฉพาะ LINE (LINE ไม่ส่งสถานะอ่านจาก OA Manager มาให้) — Facebook ไม่ต้องมี */}
+              {LINE_ENABLED && channelFilter === 'line' && scopedUnread > 0 && (
                 <button
                   onClick={markAllRead}
                   disabled={markingRead}
