@@ -347,9 +347,15 @@ export default function InboxPage() {
     const hadUnread = (conv.unread_count || 0) > 0
     setConversations(prev => prev.map(c => c.id === convId ? { ...c, unread_count: 0 } : c))
     patchCachedConvs(c => c.id === convId ? { ...c, unread_count: 0 } : c)
-    if (hadUnread && conv.page_id) {
+    // แชทที่จัดเก็บไว้ไม่ถูกนับในตัวเลขตั้งแต่แรก → ไม่ต้องปรับ
+    if (hadUnread && conv.page_id && !conv.is_archived) {
       setUnreadByPage(prev => ({ ...prev, [conv.page_id]: Math.max(0, (prev[conv.page_id] || 0) - 1) }))
       setTotalUnread(t => Math.max(0, t - 1))
+      // อ่านแล้วแต่ข้อความล่าสุดเป็นของลูกค้า → ตอนนี้นับเป็น "ยังไม่ตอบ"
+      if (conv.last_sender === 'customer') {
+        setNeedsReplyByPage(prev => ({ ...prev, [conv.page_id]: (prev[conv.page_id] || 0) + 1 }))
+        setTotalNeedsReply(t => t + 1)
+      }
     }
     try {
       const r = await fetch(`/api/inbox/conversations/${convId}`)

@@ -1,5 +1,9 @@
 // GET /api/inbox/conversations
 // Query: ?pageId=<connected_pages.id>&filter=unread|all|archived&q=<search>&limit=50
+//
+// ตัวกรอง/ตัวเลขที่แอดมินเห็น (ไม่ซ้อนกัน):
+// - "ใหม่" (unread)           = ยังไม่ได้เปิดอ่าน → unread_count > 0
+// - "ยังไม่ตอบ" (needs_reply) = เปิดอ่านแล้วแต่ยังไม่ตอบ → unread_count = 0 และข้อความล่าสุดเป็นของลูกค้า
 import { getServerSession } from 'next-auth'
 import { NextResponse } from 'next/server'
 import { authOptions } from '@/lib/auth'
@@ -61,7 +65,7 @@ export async function GET(req: Request) {
     else if (filter === 'archived') convQuery = convQuery.eq('is_archived', true)
     else if (filter === 'starred') convQuery = convQuery.eq('is_starred', true).eq('is_archived', false)
     else if (filter === 'unresolved') convQuery = convQuery.eq('is_resolved', false).eq('is_archived', false)
-    else if (filter === 'needs_reply') convQuery = convQuery.eq('last_sender', 'customer').eq('is_archived', false)
+    else if (filter === 'needs_reply') convQuery = convQuery.eq('last_sender', 'customer').lte('unread_count', 0).eq('is_archived', false)
     else convQuery = convQuery.eq('is_archived', false)  // default = active
 
     if (q) {
@@ -78,12 +82,13 @@ export async function GET(req: Request) {
       .gt('unread_count', 0)
       .eq('is_archived', false)
 
-    // นับ needs_reply
+    // นับ needs_reply (อ่านแล้วแต่ยังไม่ตอบ — ไม่นับแชทที่ยังไม่ได้เปิด ซึ่งอยู่ใน "ใหม่" แล้ว)
     const totalNeedsReplyQuery = sb
       .from('conversations')
       .select('id', { count: 'exact', head: true })
       .in('page_id', accessible)
       .eq('last_sender', 'customer')
+      .lte('unread_count', 0)
       .eq('is_archived', false)
 
     // นับ unread ต่อเพจ — นับ "จำนวนแชท" ที่มีข้อความค้าง (ให้ตรงกับ totalUnread
@@ -95,12 +100,13 @@ export async function GET(req: Request) {
       .gt('unread_count', 0)
       .eq('is_archived', false)
 
-    // นับ needs_reply ต่อเพจ (ลูกค้าทักล่าสุด ยังไม่ตอบ) — ใช้แยกตัวเลขตามช่องทาง
+    // นับ needs_reply ต่อเพจ (อ่านแล้ว ลูกค้าทักล่าสุด ยังไม่ตอบ)
     const needsReplyRowsQuery = sb
       .from('conversations')
       .select('page_id')
       .in('page_id', accessible)
       .eq('last_sender', 'customer')
+      .lte('unread_count', 0)
       .eq('is_archived', false)
 
     const [
