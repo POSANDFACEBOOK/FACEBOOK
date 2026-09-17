@@ -102,7 +102,13 @@ export async function POST(req: Request) {
             if (isSticker && isImage) continue  // สติ๊กเกอร์ไม่เก็บรูปซ้ำ
             add({ type: isImage ? 'image' : 'file', url, name: a.name || (isImage ? 'รูปภาพ' : 'ไฟล์แนบ') })
           }
-          if (!newText && attachments.length === 0) { result.push({ id: m.id, status: 'still_empty' }); return }
+          if (!newText && attachments.length === 0) {
+            // Facebook ไม่ให้เนื้อหาข้อความนี้ผ่าน API → ติดป้าย ไม่ต้องดึงซ้ำอีก
+            await sb.from('inbox_messages').update({ attachments: [{ type: 'unavailable' }] }).eq('id', m.id)
+            result.push({ id: m.id, status: 'unavailable' })
+            roundRepaired++
+            return
+          }
           await sb.from('inbox_messages').update({ message_text: newText, attachments }).eq('id', m.id)
           result.push({ id: m.id, status: 'repaired', attachmentCount: attachments.length })
           repaired++

@@ -49,7 +49,7 @@ export async function GET(req: Request) {
     let convQuery = sb
       .from('conversations')
       .select(`
-        id, fb_psid, customer_name, customer_picture,
+        id, fb_psid, fb_page_id, customer_name, customer_picture,
         last_message, last_message_at, last_sender, unread_count,
         ai_category, ai_sentiment, is_archived, is_resolved, is_starred, tags,
         send_block_code,
