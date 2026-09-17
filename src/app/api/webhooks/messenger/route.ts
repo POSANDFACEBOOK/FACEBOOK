@@ -128,6 +128,8 @@ async function processMessagingEvent(pageId: string, event: WebhookMessagingEven
     .eq('fb_psid', customerPsid)
     .single()
 
+  const isNewConv = !conv
+  const eventAt = new Date(event.timestamp).toISOString()
   if (!conv) {
     // สร้าง conversation ใหม่ + ดึงโปรไฟล์ลูกค้า (รูปเก็บลง Storage เลย — ลิงก์ของ FB หมดอายุเร็ว)
     const profile = await getUserProfile(customerPsid, pageToken)
@@ -151,19 +153,6 @@ async function processMessagingEvent(pageId: string, event: WebhookMessagingEven
       .select('id, customer_name, unread_count, customer_picture')
       .single()
     conv = newConv
-  } else {
-    // อัปเดต conversation
-    await sb
-      .from('conversations')
-      .update({
-        last_message: msg.text || '(ไฟล์แนบ)',
-        last_message_at: new Date(event.timestamp).toISOString(),
-        last_sender: direction === 'inbound' ? 'customer' : 'page',
-        unread_count: direction === 'inbound' ? (conv.unread_count || 0) + 1 : conv.unread_count,
-        // ลูกค้าทักกลับ → ส่งได้แล้ว → ล้างป้ายเตือน
-        ...(direction === 'inbound' ? { send_block_code: null, send_block_at: null } : {}),
-      })
-      .eq('id', conv.id)
   }
 
   if (!conv) return
@@ -181,7 +170,7 @@ async function processMessagingEvent(pageId: string, event: WebhookMessagingEven
     }),
   )
 
-  await sb
+  const { data: insertedRows, error: msgErr } = await sb
     .from('inbox_messages')
     .upsert(
       {
@@ -193,13 +182,36 @@ async function processMessagingEvent(pageId: string, event: WebhookMessagingEven
         attachments,
         sent_by: direction === 'inbound' ? 'customer' : 'page_user',
         delivery_status: 'delivered',
-        created_at: new Date(event.timestamp).toISOString(),
+        created_at: eventAt,
       },
       { onConflict: 'fb_message_id', ignoreDuplicates: true }
     )
+    .select('id')
+  if (msgErr) console.error('[messenger webhook] message upsert failed:', msgErr.message)
+  // Facebook ส่ง event เดิมซ้ำได้ (เช่นตอบช้า) → ข้อความที่มีอยู่แล้ว ห้ามนับ/ตอบอัตโนมัติซ้ำ
+  // (บันทึกพลาดเพราะ DB error → ถือว่าใหม่ ทำงานต่อแบบเดิม)
+  const inserted = !!msgErr || (insertedRows || []).length > 0
+
+  // ─── อัปเดต conversation (แชทที่มีอยู่แล้ว) ───
+  if (!isNewConv && inserted) {
+    await sb
+      .from('conversations')
+      .update({
+        last_message: msg.text || '(ไฟล์แนบ)',
+        last_message_at: eventAt,
+        last_sender: direction === 'inbound' ? 'customer' : 'page',
+        // เพจตอบแล้ว (แม้ตอบจากแอป Facebook/Business Suite) = แอดมินอ่านแล้ว → ล้างตัวเลข "ใหม่"
+        unread_count: direction === 'inbound' ? (conv.unread_count || 0) + 1 : 0,
+        // ลูกค้าทักกลับ → ส่งได้แล้ว → ล้างป้ายเตือน
+        ...(direction === 'inbound' ? { send_block_code: null, send_block_at: null } : {}),
+      })
+      .eq('id', conv.id)
+      // event ที่มาช้ากว่าข้อความล่าสุดในแชท (เช่นแอดมินตอบไปแล้ว) ห้ามทับสถานะใหม่กว่า
+      .or(`last_message_at.is.null,last_message_at.lte."${eventAt}"`)
+  }
 
   // ─── Auto-reply (ถ้าเปิด + เป็น inbound + นอกเวลาทำการ หรือ enable auto-reply เสมอ) ───
-  if (direction === 'inbound') {
+  if (direction === 'inbound' && inserted) {
     await maybeAutoReply(page.id, page.user_id, pageId, pageToken, customerPsid)
   }
 

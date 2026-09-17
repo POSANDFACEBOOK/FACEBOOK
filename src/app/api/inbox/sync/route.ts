@@ -288,6 +288,20 @@ async function syncOnePage(
         // อัปเดตเฉพาะเมื่อ FB มีข้อมูลใหม่กว่า — กันเขียนทับ webhook/สถานะอ่านแล้ว
         const fbNewer = !known?.lastAt || new Date(conv.updated_time).getTime() > new Date(known.lastAt).getTime()
         if (fbNewer) {
+          // ตัวเลขยังไม่อ่านของ Facebook นับแค่การอ่านใน Business Suite (ไม่รู้ว่าแอดมินอ่านในแอปเราแล้ว)
+          // → ห้ามลอกมาทับตรงๆ ไม่งั้นแชทที่อ่านแล้วเด้งกลับไป "ใหม่" ทั้งที่ลูกค้าไม่ได้ทักเพิ่ม
+          // - มีข้อความลูกค้าใหม่กว่าที่เรามี (webhook พลาด) → นับเป็นยังไม่อ่าน
+          // - Facebook บอก 0 (อ่าน/ตอบใน Business Suite แล้ว) → ล้าง
+          // - นอกนั้น → คงสถานะอ่านในแอปไว้
+          const newestCustomer = ((conv.messages?.data || []) as any[])
+            .filter(m => m.from?.id && m.from.id !== page.page_id)
+            .reduce((a: any, m: any) => (!a || Date.parse(m.created_time) > Date.parse(a.created_time) ? m : a), null)
+          const hasNewCustomerMsg = !!newestCustomer
+            && (!known?.lastAt || Date.parse(newestCustomer.created_time) > Date.parse(known.lastAt))
+          const fbUnread = conv.unread_count || 0
+          const unreadPatch = hasNewCustomerMsg
+            ? { unread_count: Math.max(1, fbUnread) }
+            : fbUnread === 0 ? { unread_count: 0 } : {}
           await sb
             .from('conversations')
             .update({
@@ -295,7 +309,7 @@ async function syncOnePage(
               last_message: lastMsg,
               last_message_at: conv.updated_time,
               last_sender: lastSender,
-              unread_count: conv.unread_count || 0,
+              ...unreadPatch,
               ...(lastSender === 'customer' ? { send_block_code: null, send_block_at: null } : {}),
             })
             .eq('id', convId)
