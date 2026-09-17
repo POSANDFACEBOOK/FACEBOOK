@@ -9,7 +9,7 @@ import {
   ArrowLeft, Send, Sparkles, RefreshCw, Search, Star, Archive, CheckCircle2,
   MessageSquare, Inbox, Settings, Zap, X, ChevronLeft, MoreVertical, Bot,
   AlertCircle, Users, Bell, Plus, LogOut, ListFilter, MailOpen, MailQuestion,
-  Pencil, Check, Copy, Share2, ImagePlus, Menu,
+  Pencil, Check, Copy, Share2, ImagePlus, Menu, ExternalLink,
 } from 'lucide-react'
 
 // ─── Design Tokens (sync กับ dashboard) ───────────────────────
@@ -1808,6 +1808,7 @@ export default function InboxPage() {
                     message={m}
                     customerName={activeConv.customer_name}
                     customerPic={customerAvatarSrc(activeConv)}
+                    fbInboxUrl={facebookInboxUrl(activeConv)}
                     onRetry={(retriedTick >= 0 && retriedRef.current.has(retryKeyOf(activeConv.id, m))) ? undefined : retryMessage}
                   />
                 ))}
@@ -2743,7 +2744,16 @@ function MsgImage({ url, name, withText }: { url: string; name?: string; withTex
   )
 }
 
-function MessageBubble({ message: m, customerName, customerPic, onRetry }: { message: any; customerName?: string; customerPic?: string; onRetry?: (m: any) => void }) {
+// ลิงก์เปิดแชทนี้ใน Meta Business Suite (ใช้กับข้อความที่ Facebook ไม่ส่งเนื้อหามาให้)
+function facebookInboxUrl(conv: any): string | undefined {
+  const pageFbId = conv?.fb_page_id || conv?.connected_pages?.page_id
+  if (!pageFbId || conv?.connected_pages?.channel === 'line') return undefined
+  const qs = new URLSearchParams({ asset_id: String(pageFbId), thread_type: 'FB_MESSAGE' })
+  if (conv?.fb_psid) qs.set('selected_item_id', String(conv.fb_psid))
+  return `https://business.facebook.com/latest/inbox/all/?${qs.toString()}`
+}
+
+function MessageBubble({ message: m, customerName, customerPic, onRetry, fbInboxUrl }: { message: any; customerName?: string; customerPic?: string; onRetry?: (m: any) => void; fbInboxUrl?: string }) {
   const out = m.direction === 'outbound'
   const failed = m.delivery_status === 'failed'
   const sending = m.delivery_status === 'sending'
@@ -2794,12 +2804,31 @@ function MessageBubble({ message: m, customerName, customerPic, onRetry }: { mes
               ) : null
             ))
           })()}
-          {/* Fallback: ไม่มี text + ไม่มี attachment ที่ render ได้
-              (เช่น sticker / reaction / ข้อความที่ FB API ไม่ส่ง content มา) */}
+          {/* ไม่มีข้อความ + ไม่มีไฟล์ที่แสดงได้ = Facebook ไม่ส่งเนื้อหามาให้
+              (Facebook เองขึ้นว่า "ไม่สามารถดูข้อความได้" — มักเป็นอีโมจิ/สติกเกอร์บางแบบ หรือข้อความพิเศษ) */}
           {!m.message_text && !(m.attachments || []).some((a: any) => a.url) && (
-            <span style={{ fontSize: 12, fontStyle: 'italic', opacity: 0.85 }}>
-              💬 ข้อความ (ภาพ/สติกเกอร์/ไม่มี content)
-            </span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: out ? 'flex-end' : 'flex-start' }}>
+              <span style={{ fontSize: 12.5, fontStyle: 'italic', opacity: 0.9, lineHeight: 1.45 }}>
+                ข้อความนี้ Facebook ไม่ส่งมาให้ระบบ<br />(อาจเป็นอีโมจิ สติกเกอร์ หรือข้อความพิเศษ)
+              </span>
+              {fbInboxUrl && (
+                <a
+                  href={fbInboxUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 5, minHeight: 32,
+                    padding: '5px 11px', borderRadius: 9, fontSize: 12, fontWeight: 800,
+                    textDecoration: 'none',
+                    background: out ? 'rgba(255,255,255,0.18)' : PRIMARY_LIGHT,
+                    color: out ? 'white' : PRIMARY,
+                    border: out ? '1px solid rgba(255,255,255,0.45)' : `1px solid ${BORDER}`,
+                  }}
+                >
+                  <ExternalLink size={12} /> เปิดดูใน Facebook
+                </a>
+              )}
+            </div>
           )}
         </div>
         <div style={{ fontSize: 11, color: MUTED, padding: '0 4px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: out ? 'flex-end' : 'flex-start' }}>

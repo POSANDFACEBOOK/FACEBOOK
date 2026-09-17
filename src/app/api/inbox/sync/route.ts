@@ -319,13 +319,16 @@ async function syncOnePage(
       for (const m of (conv.messages?.data || []) as any[]) {
         if (!m.from?.id) continue  // system message ไม่มี from → ข้าม
         const isFromPage = m.from.id === page.page_id
+        const parsedAtts = parseMsgAttachments(m)
         msgRows.push({
           conversation_id: convId,
           fb_message_id: m.id,
           fb_sender_id: m.from.id,
           direction: isFromPage ? 'outbound' : 'inbound',
           message_text: m.message || null,
-          attachments: parseMsgAttachments(m),
+          // Facebook ไม่ส่งเนื้อหามาเลย ("ไม่สามารถดูข้อความได้" — อีโมจิ/สติกเกอร์บางแบบ ข้อความพิเศษ)
+          // → ติดป้ายไว้ หน้าแชทจะบอกให้เปิดดูใน Facebook และ repair จะไม่ดึงซ้ำ
+          attachments: !m.message && parsedAtts.length === 0 ? [{ type: 'unavailable' }] : parsedAtts,
           sent_by: isFromPage ? 'page_user' : 'customer',
           delivery_status: 'delivered',
           created_at: m.created_time,
