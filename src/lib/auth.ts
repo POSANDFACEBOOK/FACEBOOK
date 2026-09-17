@@ -164,7 +164,7 @@ export const authOptions = {
       clientSecret: process.env.FACEBOOK_CLIENT_SECRET!,
       authorization: {
         params: {
-          scope: 'business_management,pages_show_list,pages_read_engagement,pages_read_user_content,pages_manage_metadata,pages_messaging',
+          scope: 'business_management,pages_show_list,pages_read_engagement,pages_manage_metadata,pages_messaging',
         },
       },
       // 🎯 Override userinfo + fallback ทน rate limit
