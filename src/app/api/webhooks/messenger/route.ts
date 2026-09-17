@@ -159,16 +159,21 @@ async function processMessagingEvent(pageId: string, event: WebhookMessagingEven
 
   // ─── บันทึก message (idempotent ด้วย fb_message_id unique) ───
   // รูป: FB ให้ URL ชั่วคราว → ดึงมาเก็บ storage ของเรา (URL ถาวร) กันรูปแตกทีหลัง
+  // สติกเกอร์/อีโมจิแบบรูป: Facebook ส่งมาเป็น attachment รูป + sticker_id (ทาง sync บางแบบดึงไม่ได้เลย
+  // มีแค่ช่องทางนี้ที่ได้รูป) → ตั้งชื่อ 'sticker' ให้หน้าแชทแสดงแบบสติกเกอร์
   const attachments = await Promise.all(
     (msg.attachments || []).map(async a => {
       const srcUrl = a.payload?.url
-      if (a.type === 'image' && srcUrl) {
+      const isSticker = !!a.payload?.sticker_id || !!msg.sticker_id
+      if ((a.type === 'image' || isSticker) && srcUrl) {
         const hosted = await rehostUrlToStorage(sb, srcUrl, {}, `fb/${page.id}`)
-        return { type: 'image', url: hosted || srcUrl }
+        return { type: 'image', url: hosted || srcUrl, ...(isSticker ? { name: 'sticker' } : {}) }
       }
-      return { type: a.type, url: srcUrl }
+      if (!srcUrl) return { type: 'unavailable' }
+      return { type: a.type === 'image' ? 'image' : 'file', url: srcUrl, name: a.title || a.payload?.title || undefined }
     }),
   )
+  const hasContent = !!msg.text || attachments.some(a => (a as any).url)
 
   const { data: insertedRows, error: msgErr } = await sb
     .from('inbox_messages')
@@ -191,6 +196,22 @@ async function processMessagingEvent(pageId: string, event: WebhookMessagingEven
   // Facebook ส่ง event เดิมซ้ำได้ (เช่นตอบช้า) → ข้อความที่มีอยู่แล้ว ห้ามนับ/ตอบอัตโนมัติซ้ำ
   // (บันทึกพลาดเพราะ DB error → ถือว่าใหม่ ทำงานต่อแบบเดิม)
   const inserted = !!msgErr || (insertedRows || []).length > 0
+
+  // sync ดึงข้อความนี้ไปก่อนแต่ได้เนื้อหาว่าง (อีโมจิ/สติกเกอร์บางแบบ) → เติมจาก webhook ที่มีรูปมาด้วย
+  if (!inserted && hasContent) {
+    const { data: existingMsg } = await sb
+      .from('inbox_messages')
+      .select('id, message_text, attachments')
+      .eq('fb_message_id', msg.mid)
+      .maybeSingle()
+    const existingHasContent = !!existingMsg?.message_text
+      || ((existingMsg?.attachments || []) as any[]).some(a => a?.url)
+    if (existingMsg && !existingHasContent) {
+      await sb.from('inbox_messages')
+        .update({ message_text: msg.text || null, attachments })
+        .eq('id', existingMsg.id)
+    }
+  }
 
   // ─── อัปเดต conversation (แชทที่มีอยู่แล้ว) ───
   if (!isNewConv && inserted) {

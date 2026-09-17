@@ -399,7 +399,8 @@ export interface WebhookMessagingEvent {
   message?: {
     mid: string
     text?: string
-    attachments?: Array<{ type: string; payload: { url?: string; sticker_id?: number } }>
+    attachments?: Array<{ type: string; title?: string; payload?: { url?: string; sticker_id?: number; title?: string } }>
+    sticker_id?: number               // ปุ่มไลก์/สติกเกอร์ (มาคู่กับ attachment รูป)
     is_echo?: boolean                 // true = ข้อความที่เพจส่ง (echo back)
     app_id?: number
   }
