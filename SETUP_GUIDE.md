@@ -9,8 +9,10 @@
    https://your-app.vercel.app/api/auth/callback/facebook
    ```
 4. **App Review → Permissions** ที่ระบบใช้:
-   `pages_show_list`, `pages_read_engagement`, `pages_read_user_content`,
+   `pages_show_list`, `pages_read_engagement`,
    `pages_manage_metadata`, `pages_messaging`, `business_management`
+   + ฟีเจอร์ **Business Asset User Profile Access** (Advanced Access — ใช้ดึงรูปโปรไฟล์ลูกค้า)
+   ⚠️ ห้ามลบสิทธิ์เหล่านี้ออกจากแอปใน App Review — การลบคือถอดออกจากแอปจริง และ login จะพังถ้า scope ใน src/lib/auth.ts ขอสิทธิ์ที่แอปไม่มี
 5. **Settings → Basic** → คัดลอก App ID / App Secret → `FACEBOOK_CLIENT_ID` / `FACEBOOK_CLIENT_SECRET`
 6. **Messenger → Settings → Webhooks**
    | Field | ค่า |
