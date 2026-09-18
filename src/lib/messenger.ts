@@ -177,6 +177,7 @@ export interface FBMessage {
   sticker?: string                         // URL ของ sticker (ถ้าข้อความเป็น sticker)
   shares?: { data: Array<{ link?: string; description?: string }> }
   attachments?: { data: Array<{ id: string; mime_type?: string; name?: string; image_data?: any; file_url?: string }> }
+  tags?: { data: Array<{ name: string }> }  // admin_text = ข้อความระบบของ Facebook
 }
 
 /** ดึงข้อความใน conversation */
@@ -212,7 +213,7 @@ export interface FBConversationWithMessages extends FBConversation {
  * ใช้ field expansion ของ Graph API — 1 call/เพจ แทน 1 + N calls
  */
 const CONV_MSG_FIELDS =
-  'id,created_time,from,to,message,sticker,shares,attachments{id,mime_type,name,type,image_data,file_url,video_data,audio_data,payload}'
+  'id,created_time,from,to,message,sticker,shares,tags,attachments{id,mime_type,name,type,image_data,file_url,video_data,audio_data,payload}'
 const convFields = (msgLimit: number) =>
   `id,updated_time,unread_count,snippet,participants,messages.limit(${msgLimit}){${CONV_MSG_FIELDS}}`
 

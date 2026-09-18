@@ -35,6 +35,7 @@ src/lib/features.ts                     สวิตช์ฟีเจอร์ 
 src/lib/supabase.ts                     supabaseAdmin(), ensureFbUser()
 src/lib/fb-pages.ts                     fetchManagedPages(), canConnectPage() — เพจที่ผู้ใช้ดูแล + บทบาทที่ตอบแชทได้
 src/lib/app-badge.ts                    ตัวเลขแชทใหม่บนชื่อแท็บ/favicon/ไอคอนแอป (Badging API)
+src/lib/fb-system-messages.ts            ข้อความระบบของ Facebook (ป้ายอัตโนมัติ, แจ้งเตือนการโทร, "ตอบกลับโฆษณา") → ซ่อนจากแชท + ไม่นับเป็นข้อความล่าสุด · บันทึก sent_by='fb_system' เฉพาะที่ Graph ติดป้าย admin_text
 src/lib/customer-avatar.ts              รูปโปรไฟล์ลูกค้า: ดึงจาก FB มาเก็บใน Storage (avatars/) เพราะลิงก์ FB หมดอายุ · none:<วันที่> = ไม่มีรูป · ห้ามจำ "ไม่มีรูป" ตอน FB ล่ม/token หมดอายุ
 src/app/api/inbox/avatar/[id]           302 ไปรูปลูกค้า (ใช้เฉพาะแชทที่รูปยังไม่อยู่ในระบบ)
 public/icon.svg + icons/ + favicon.ico   ไอคอนแอป "ตัว N" (ต้นฉบับ = icon.svg; PNG/ICO สร้างจากไฟล์นี้) · manifest.webmanifest = ติดตั้งเป็นแอปได้

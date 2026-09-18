@@ -5,6 +5,7 @@ import { NextResponse } from 'next/server'
 import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase'
 import { getCurrentUserContext } from '@/lib/team'
+import { isFbSystemText, isHiddenInboxMessage } from '@/lib/fb-system-messages'
 
 export const dynamic = 'force-dynamic'
 
@@ -42,12 +43,13 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     if (!ctx.accessiblePageIds.has(conversation.page_id)) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 })
     }
-    const messages = (latest || []).slice().reverse()  // กลับเป็นเก่า→ใหม่ เพื่อแสดงผล
+    const rows = (latest || []).slice().reverse()  // กลับเป็นเก่า→ใหม่ เพื่อแสดงผล
+    // ข้อความระบบของ Facebook (ป้ายอัตโนมัติ, คำขอโอนเงินอัตโนมัติ, แจ้งเตือนการโทร ฯลฯ) → ไม่แสดง แอดมินงง
+    let outMessages = rows.filter(m => !isHiddenInboxMessage(m, conversation.customer_name))
 
     // Fallback: แชทเก่าที่มี last_message แต่ message row หาย (webhook freeze ก่อน fix)
     // → สร้าง message สังเคราะห์จาก last_message ให้แอดมินเห็นว่าลูกค้าพิมพ์อะไร
-    let outMessages = messages || []
-    if (outMessages.length === 0 && conversation.last_message) {
+    if (rows.length === 0 && conversation.last_message && !isFbSystemText(conversation.last_message, null, conversation.customer_name)) {
       outMessages = [{
         id: `synthetic-${conversation.id}`,
         conversation_id: conversation.id,

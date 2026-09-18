@@ -7,6 +7,7 @@ import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase'
 import { getCurrentUserContext } from '@/lib/team'
 import { listRecentPagePosts } from '@/lib/messenger'
+import { isHiddenInboxMessage } from '@/lib/fb-system-messages'
 import Anthropic from '@anthropic-ai/sdk'
 
 export const dynamic = 'force-dynamic'
@@ -46,12 +47,12 @@ export async function POST(req: Request) {
     // ดึงข้อความล่าสุด 20 ข้อความ
     const { data: messages } = await sb
       .from('inbox_messages')
-      .select('direction, message_text, sent_by, created_at')
+      .select('direction, message_text, attachments, sent_by, created_at')
       .eq('conversation_id', conversationId)
       .order('created_at', { ascending: false })
       .limit(20)
 
-    const recent = (messages || []).reverse()
+    const recent = (messages || []).filter(m => !isHiddenInboxMessage(m, conv.customer_name)).reverse()
 
     // ยังไม่มีข้อความ → ไม่ต้องเรียก AI (กัน prompt ว่าง) คืนคำทักทายเริ่มต้น
     if (recent.length === 0) {

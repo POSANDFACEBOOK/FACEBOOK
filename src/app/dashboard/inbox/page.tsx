@@ -5,6 +5,7 @@ import { useSession, signOut } from 'next-auth/react'
 import Link from 'next/link'
 import { LINE_ENABLED } from '@/lib/features'
 import { updateAppBadge, resetTabBadge } from '@/lib/app-badge'
+import { isHiddenInboxMessage } from '@/lib/fb-system-messages'
 import {
   ArrowLeft, Send, Sparkles, RefreshCw, Search, Star, Archive, CheckCircle2,
   MessageSquare, Inbox, Settings, Zap, X, ChevronLeft, MoreVertical, Bot,
@@ -320,7 +321,7 @@ export default function InboxPage() {
       // แถวจริงที่อยู่บนจอแล้วแต่ response รอบนี้ยังไม่มี (poll ที่ยิงก่อนเราส่งข้อความ ตอบช้า)
       // → ห้ามทิ้ง ไม่งั้นข้อความที่เพิ่งส่งสำเร็จหายไปนานถึง 7 วิ
       const serverIds = new Set(server.map(s => String(s.id)))
-      const missing = prev.filter(m => !isTemp(m) && !serverIds.has(String(m.id)) && !hidden.has(String(m.id)))
+      const missing = prev.filter(m => !isTemp(m) && !serverIds.has(String(m.id)) && !hidden.has(String(m.id)) && !isHiddenInboxMessage(m))
 
       const seen = new Set<string>()
       const real = [...server, ...missing]

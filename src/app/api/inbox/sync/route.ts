@@ -8,6 +8,7 @@ import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase'
 import { getCurrentUserContext } from '@/lib/team'
 import { hostProfilePic } from '@/lib/customer-avatar'
+import { FB_SYSTEM_SENT_BY, isFbAdminTagged, isFbSystemGraphMessage, isFbSystemRow, isFbSystemText, fbSystemLastMessageFilter } from '@/lib/fb-system-messages'
 import {
   listConversationsWithMessages,
   getConversationUpdateTimes,
@@ -163,13 +164,49 @@ function parseMsgAttachments(m: any): any[] {
 }
 
 // หาข้อความใหม่สุดใน conversation → ใช้ตัดสิน last_sender
-function newestMessage(conv: any): any | null {
-  const msgs = (conv.messages?.data || []) as any[]
+function newestMessage(msgs: any[]): any | null {
   let newest: any = null
   for (const m of msgs) {
     if (!newest || new Date(m.created_time).getTime() > new Date(newest.created_time).getTime()) newest = m
   }
   return newest
+}
+
+// แชทที่ "ข้อความล่าสุด" เป็นข้อความระบบของ Facebook (เช่นป้ายอัตโนมัติที่เด้งหลังลูกค้าทัก)
+// → ใช้ข้อความจริงล่าสุดแทน ไม่งั้นแชทที่ลูกค้ายังรอคำตอบจะดูเหมือนตอบแล้ว
+// (แก้ข้อมูลเก่า + แชทที่ไม่ได้อยู่ในรายการที่ดึงรอบนี้ — รอบละไม่เกิน 20 แชท)
+async function fixSystemLastMessages(sb: any, pageRowId: string): Promise<number> {
+  const { data: convs } = await sb
+    .from('conversations')
+    .select('id, last_message, last_sender, customer_name')
+    .eq('page_id', pageRowId)
+    .or(fbSystemLastMessageFilter())
+    .order('last_message_at', { ascending: false })
+    .limit(20)
+  let fixed = 0
+  for (const c of (convs || []) as any[]) {
+    // SQL ilike กว้างกว่า (ไม่สนตัวพิมพ์/ความยาว) → เช็คซ้ำ
+    if (!isFbSystemText(c.last_message, null, c.customer_name)) continue
+    const { data: msgs } = await sb
+      .from('inbox_messages')
+      .select('direction, message_text, attachments, sent_by, delivery_status')
+      .eq('conversation_id', c.id)
+      .order('created_at', { ascending: false })
+      .limit(30)
+    // การ์ดฝั่งเพจที่ดึงเนื้อหาไม่ได้ (เช่นแอดมินส่งคำขอโอนเงิน) ยังนับว่าเพจตอบ — ตรงกับตอน sync
+    const list = (msgs || []) as any[]
+    if (list.length === 0) continue  // ยังไม่มีข้อความในระบบ — รอ sync ดึงมาก่อน
+    const real = list.find(m => !isFbSystemRow(m, c.customer_name) && m.delivery_status !== 'failed')
+    // 30 ข้อความล่าสุดเป็นข้อความระบบหมด → ใส่ข้อความว่างพอ (สถานะตอบ/ไม่ตอบคงเดิม) จะได้ไม่ถูกหยิบมาทุกรอบ
+    const patch = real
+      ? { last_message: real.message_text || '(ไฟล์แนบ)', last_sender: real.direction === 'inbound' ? 'customer' : 'page' }
+      : { last_message: '' }
+    const { data: upd } = await sb.from('conversations').update(patch)
+      .eq('id', c.id).eq('last_message', c.last_message)  // มีข้อความใหม่เข้ามาระหว่างนี้ → ไม่ทับ
+      .select('id')
+    if ((upd || []).length > 0) fixed++
+  }
+  return fixed
 }
 
 // ── Sync เพจเดียว: ดึง conversations+messages inline (1 call) + bulk upsert ──
@@ -264,17 +301,29 @@ async function syncOnePage(
       : new Map<string, { name?: string; profile_pic?: string }>()
 
     const msgRows: any[] = []
+    const systemMids: string[] = []
 
     await mapLimit(convCustomers, 8, async ({ conv, customer }) => {
       const psid = customer.id
-      const newest = newestMessage(conv)
+      const allMsgs = (conv.messages?.data || []) as any[]
+      // ข้อความระบบของ Facebook ไม่นับเป็นข้อความล่าสุด (ป้ายอัตโนมัติ/คำขอโอนเงินที่เด้งหลังลูกค้าทัก ≠ แอดมินตอบแล้ว)
+      const realMsgs = allMsgs.filter(m => !isFbSystemGraphMessage(m, page.page_id, customer.name))
+      const newestAny = newestMessage(allMsgs)
+      const newest = newestMessage(realMsgs)
+      // ข้อความที่ดึงมารอบนี้เป็นข้อความระบบทั้งหมด (เช่นลูกค้าโทรมาหลายสาย) → ไม่รู้ว่าข้อความจริงล่าสุดคืออะไร
+      // → ไม่แตะข้อความล่าสุด/สถานะตอบของแชทที่มีอยู่ และไม่สร้างแชทใหม่ (รอข้อความจริงก่อน)
+      const onlySystem = !newest && !!newestAny
       const lastSender: 'page' | 'customer' = newest
         ? (newest.from?.id === page.page_id ? 'page' : 'customer')
         : 'customer'
-      const lastMsg = conv.snippet || newest?.message || ''
+      // snippet ของ Facebook = ข้อความล่าสุดจริงๆ (อาจเป็นข้อความระบบ) → ใช้เมื่อข้อความล่าสุดไม่ใช่ข้อความระบบ
+      const lastMsg = newest && newest !== newestAny
+        ? (newest.message || '(ไฟล์แนบ)')
+        : (conv.snippet || newest?.message || '')
 
       const known = existing.get(psid)
       let convId = known?.id
+      if (!convId && onlySystem) return
       if (!convId) {
         // upsert (กัน race กับ webhook ที่อาจ insert แทรก) — คืน id เสมอ
         const profile = profiles.get(psid)
@@ -294,7 +343,7 @@ async function syncOnePage(
               last_message: lastMsg,
               last_message_at: conv.updated_time,
               last_sender: lastSender,
-              unread_count: conv.unread_count || 0,
+              unread_count: onlySystem ? 0 : (conv.unread_count || 0),
               ...(lastSender === 'customer' ? { send_block_code: null, send_block_at: null } : {}),
             },
             { onConflict: 'fb_page_id,fb_psid' },
@@ -329,7 +378,7 @@ async function syncOnePage(
           // - มีข้อความลูกค้าใหม่กว่าที่เรามี (webhook พลาด) → นับเป็นยังไม่อ่าน
           // - Facebook บอก 0 (อ่าน/ตอบใน Business Suite แล้ว) → ล้าง
           // - นอกนั้น → คงสถานะอ่านในแอปไว้
-          const newestCustomer = ((conv.messages?.data || []) as any[])
+          const newestCustomer = realMsgs
             .filter(m => m.from?.id && m.from.id !== page.page_id)
             .reduce((a: any, m: any) => (!a || Date.parse(m.created_time) > Date.parse(a.created_time) ? m : a), null)
           const hasNewCustomerMsg = !!newestCustomer
@@ -340,21 +389,26 @@ async function syncOnePage(
             : fbUnread === 0 ? { unread_count: 0 } : {}
           await sb
             .from('conversations')
-            .update({
-              fb_conversation_id: conv.id,
-              last_message: lastMsg,
-              last_message_at: conv.updated_time,
-              last_sender: lastSender,
-              ...unreadPatch,
-              ...(lastSender === 'customer' ? { send_block_code: null, send_block_at: null } : {}),
-            })
+            .update(onlySystem
+              ? { fb_conversation_id: conv.id, last_message_at: conv.updated_time }
+              : {
+                  fb_conversation_id: conv.id,
+                  last_message: lastMsg,
+                  last_message_at: conv.updated_time,
+                  last_sender: lastSender,
+                  ...unreadPatch,
+                  ...(lastSender === 'customer' ? { send_block_code: null, send_block_at: null } : {}),
+                })
             .eq('id', convId)
         }
       }
 
-      for (const m of (conv.messages?.data || []) as any[]) {
+      for (const m of allMsgs) {
         if (!m.from?.id) continue  // system message ไม่มี from → ข้าม
         const isFromPage = m.from.id === page.page_id
+        // บันทึกป้ายเฉพาะที่ Facebook ยืนยันเอง (admin_text) — ที่ดูจากตัวหนังสือจะซ่อนตอนแสดงผลแทน
+        const isSystem = isFbAdminTagged(m, page.page_id)
+        if (isSystem && known) systemMids.push(m.id)
         const parsedAtts = parseMsgAttachments(m)
         msgRows.push({
           conversation_id: convId,
@@ -365,7 +419,8 @@ async function syncOnePage(
           // Facebook ไม่ส่งเนื้อหามาเลย ("ไม่สามารถดูข้อความได้" — อีโมจิ/สติกเกอร์บางแบบ ข้อความพิเศษ)
           // → ติดป้ายไว้ หน้าแชทจะบอกให้เปิดดูใน Facebook และ repair จะไม่ดึงซ้ำ
           attachments: !m.message && parsedAtts.length === 0 ? [{ type: 'unavailable' }] : parsedAtts,
-          sent_by: isFromPage ? 'page_user' : 'customer',
+          // ข้อความระบบของ Facebook → ติดป้ายไว้ หน้าแชทจะไม่แสดง
+          sent_by: isSystem ? FB_SYSTEM_SENT_BY : (isFromPage ? 'page_user' : 'customer'),
           delivery_status: 'delivered',
           created_at: m.created_time,
         })
@@ -382,6 +437,23 @@ async function syncOnePage(
       else inserted += Math.min(500, msgRows.length - i)
     }
     pageResult.messages = inserted
+
+    // ข้อความระบบที่บันทึกไว้ก่อนหน้านี้ (ก่อนมีตัวกรอง) → ติดป้ายย้อนหลัง
+    // (upsert ด้านบนข้ามแถวที่มีอยู่แล้ว)
+    for (let i = 0; i < systemMids.length; i += 50) {
+      const { error } = await sb
+        .from('inbox_messages')
+        .update({ sent_by: FB_SYSTEM_SENT_BY })
+        .in('fb_message_id', systemMids.slice(i, i + 50))
+        .or(`sent_by.is.null,sent_by.neq.${FB_SYSTEM_SENT_BY}`)
+      if (error) { console.warn(`[sync] mark system failed ${page.page_name}: ${error.message}`); break }
+    }
+    try {
+      const fixed = await fixSystemLastMessages(sb, page.id)
+      if (fixed > 0) pageResult.system_last_fixed = fixed
+    } catch (e: any) {
+      console.warn(`[sync] fix system last message failed ${page.page_name}: ${e?.message || e}`)
+    }
   } catch (e: any) {
     pageResult.errors.push(`Sync: ${e?.message || e}`)
   }
