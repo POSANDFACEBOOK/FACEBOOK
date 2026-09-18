@@ -7,6 +7,7 @@ import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { rehostUrlToStorage } from '@/lib/media'
 import { hostProfilePic, ensureCustomerPicture, avatarIsFresh } from '@/lib/customer-avatar'
+import { isFbSystemText } from '@/lib/fb-system-messages'
 import {
   verifyWebhookSignature,
   getUserProfile,
@@ -130,6 +131,10 @@ async function processMessagingEvent(pageId: string, event: WebhookMessagingEven
 
   const isNewConv = !conv
   const eventAt = new Date(event.timestamp).toISOString()
+  // ข้อความระบบของ Facebook (แจ้งเตือนการโทร, ป้ายอัตโนมัติ ฯลฯ) → เก็บไว้ (หน้าแชทซ่อนเอง) แต่ไม่นับเป็นข้อความใหม่
+  const isSystem = isFbSystemText(msg.text, direction, conv?.customer_name)
+  // แชทใหม่ที่เริ่มด้วยข้อความระบบ → ไม่ต้องสร้าง (ไม่มีอะไรให้แอดมินตอบ; sync จะดึงแชทมาเองเมื่อมีข้อความจริง)
+  if (!conv && isSystem) return
   if (!conv) {
     // สร้าง conversation ใหม่ + ดึงโปรไฟล์ลูกค้า (รูปเก็บลง Storage เลย — ลิงก์ของ FB หมดอายุเร็ว)
     const profile = await getUserProfile(customerPsid, pageToken)
@@ -214,7 +219,7 @@ async function processMessagingEvent(pageId: string, event: WebhookMessagingEven
   }
 
   // ─── อัปเดต conversation (แชทที่มีอยู่แล้ว) ───
-  if (!isNewConv && inserted) {
+  if (!isNewConv && inserted && !isSystem) {
     await sb
       .from('conversations')
       .update({
@@ -232,7 +237,7 @@ async function processMessagingEvent(pageId: string, event: WebhookMessagingEven
   }
 
   // ─── Auto-reply (ถ้าเปิด + เป็น inbound + นอกเวลาทำการ หรือ enable auto-reply เสมอ) ───
-  if (direction === 'inbound' && inserted) {
+  if (direction === 'inbound' && inserted && !isSystem) {
     await maybeAutoReply(page.id, page.user_id, pageId, pageToken, customerPsid)
   }
 
