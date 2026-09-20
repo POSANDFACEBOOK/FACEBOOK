@@ -13,7 +13,10 @@ import Anthropic from '@anthropic-ai/sdk'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
+// ต้องจำกัดเวลาเอง — ค่า default ของ SDK คือรอ 10 นาที + retry 2 ครั้ง ซึ่งเกิน maxDuration 60 วิ
+// พอเกิน Vercel ตอบ 504 เป็น text ธรรมดา หน้าเว็บ parse JSON ไม่ได้ → แอดมินเห็น error ภาษาอังกฤษ
+// 22 วิ x 2 ครั้ง (~45 วิ) ยังอยู่ในงบ 60 วิ รวมเวลาอ่าน DB/ดึงโพสต์แล้ว
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY!, timeout: 22_000, maxRetries: 1 })
 
 // cache โพสต์เพจ (ลด FB call ทุกครั้งที่กด AI) — TTL 15 นาที, อยู่ใน instance ที่ warm
 const postsCache = new Map<string, { posts: Array<{ message: string; created_time: string }>; at: number }>()
@@ -44,13 +47,27 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 })
     }
 
-    // ดึงข้อความล่าสุด 20 ข้อความ
-    const { data: messages } = await sb
-      .from('inbox_messages')
-      .select('direction, message_text, attachments, sent_by, created_at')
-      .eq('conversation_id', conversationId)
-      .order('created_at', { ascending: false })
-      .limit(20)
+    // ดึงข้อความล่าสุด 20 ข้อความ + settings + เพจ พร้อมกัน (เดิมยิงทีละตัว 3 รอบ → กินงบเวลา 60 วิ)
+    const [{ data: messages }, { data: settings }, { data: page }] = await Promise.all([
+      sb
+        .from('inbox_messages')
+        .select('direction, message_text, attachments, sent_by, created_at')
+        .eq('conversation_id', conversationId)
+        .order('created_at', { ascending: false })
+        .limit(20),
+      // knowledge base + tone (per-page; ไม่ filter ตาม user_id เพราะ agent ก็ใช้ของ owner)
+      sb
+        .from('inbox_settings')
+        .select('ai_tone, knowledge_base')
+        .eq('page_id', conv.page_id)
+        .single(),
+      // page (name + token + fb id) สำหรับดึงโพสต์
+      sb
+        .from('connected_pages')
+        .select('page_name, page_access_token, page_id')
+        .eq('id', conv.page_id)
+        .single(),
+    ])
 
     const recent = (messages || []).filter(m => !isHiddenInboxMessage(m, conv.customer_name)).reverse()
 
@@ -62,22 +79,8 @@ export async function POST(req: Request) {
       })
     }
 
-    // ดึง knowledge base + tone จาก settings (per-page; ไม่ filter ตาม user_id เพราะ agent ก็ใช้ของ owner)
-    const { data: settings } = await sb
-      .from('inbox_settings')
-      .select('ai_tone, knowledge_base')
-      .eq('page_id', conv.page_id)
-      .single()
-
     const tone = settings?.ai_tone || 'friendly'
     const kb = settings?.knowledge_base || ''
-
-    // ดึง page (name + token + fb id) สำหรับดึงโพสต์
-    const { data: page } = await sb
-      .from('connected_pages')
-      .select('page_name, page_access_token, page_id')
-      .eq('id', conv.page_id)
-      .single()
 
     // ── ดึงโพสต์ล่าสุดของเพจ (ข้อมูลร้าน + โปรโมชั่นล่าสุด) — cache 15 นาที ──
     let posts: Array<{ message: string; created_time: string }> = []
@@ -86,8 +89,18 @@ export async function POST(req: Request) {
       if (cached && Date.now() - cached.at < POSTS_TTL) {
         posts = cached.posts
       } else {
-        posts = await listRecentPagePosts(page.page_id, page.page_access_token, 12)
-        postsCache.set(conv.page_id, { posts, at: Date.now() })
+        // listRecentPagePosts ไล่ลองได้ถึง 3 edge และไม่มี timeout — ถ้า Graph ค้างจะกินงบ 60 วิจนหมด
+        // โพสต์เป็นข้อมูลเสริม ขาดได้ → รอไม่เกิน 5 วิแล้วไปต่อ (ไม่ cache ผลตอนที่รอไม่ทัน)
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const fetched = await Promise.race([
+          listRecentPagePosts(page.page_id, page.page_access_token, 12),
+          new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), 5000) }),
+        ])
+        if (timer) clearTimeout(timer)
+        if (fetched) {
+          posts = fetched
+          postsCache.set(conv.page_id, { posts, at: Date.now() })
+        }
       }
     }
     const postsBlock = posts.length > 0
@@ -143,7 +156,9 @@ ${instruction ? `# คำสั่งพิเศษจากแอดมิน:
       messages: [{ role: 'user', content: prompt }],
     })
 
-    const raw = resp.content[0].type === 'text' ? resp.content[0].text : ''
+    // หา block ที่เป็นข้อความ — content อาจว่างหรือขึ้นต้นด้วย block ชนิดอื่น (resp.content[0] จะพัง)
+    const textBlock: any = resp.content.find(b => b.type === 'text')
+    const raw: string = typeof textBlock?.text === 'string' ? textBlock.text : ''
 
     // Parse JSON safely
     let parsed: any = {}
@@ -169,6 +184,19 @@ ${instruction ? `# คำสั่งพิเศษจากแอดมิน:
 
     return NextResponse.json({ suggestions, category, sentiment, summary })
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 })
+    console.error('[ai-suggest]', err)
+    // ห้ามส่ง err.message ดิบๆ ให้แอดมินเห็น (เป็นภาษาอังกฤษ/JSON อ่านไม่รู้เรื่อง) → แปลเป็นไทยว่าต้องทำอะไรต่อ
+    if (err instanceof Anthropic.APIConnectionTimeoutError) {
+      return NextResponse.json({ error: 'AI ใช้เวลานานเกินไป ลองกดใหม่อีกครั้ง' }, { status: 504 })
+    }
+    if (err instanceof Anthropic.APIError) {
+      const status = err.status || 0
+      return NextResponse.json({
+        error: status === 429 || status >= 500
+          ? 'AI ไม่ว่างชั่วคราว รอสักครู่แล้วลองใหม่'
+          : 'AI ใช้งานไม่ได้ตอนนี้ — แจ้งเจ้าของระบบให้ตรวจสอบบัญชี AI',
+      }, { status: 503 })
+    }
+    return NextResponse.json({ error: 'AI ยังสร้างคำแนะนำไม่ได้ ลองใหม่อีกครั้ง' }, { status: 500 })
   }
 }

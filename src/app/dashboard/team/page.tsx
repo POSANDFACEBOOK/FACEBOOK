@@ -38,6 +38,8 @@ export default function TeamPage() {
   const { data: session } = useSession()
   const [loading, setLoading] = useState(true)
   const [forbidden, setForbidden] = useState(false)
+  // แยก "โหลดไม่สำเร็จ" ออกจาก "ไม่มีสิทธิ์" — เน็ตหลุด/เซิร์ฟเวอร์สะดุด ต้องกดลองใหม่ได้ ไม่ใช่ขึ้นจอ 🔒 ให้เจ้าของเพจนึกว่าเสียสิทธิ์
+  const [loadError, setLoadError] = useState<'auth' | 'network' | null>(null)
   const [pages, setPages] = useState<Page[]>([])
   const [members, setMembers] = useState<Member[]>([])
   const [invitations, setInvitations] = useState<Invitation[]>([])
@@ -53,21 +55,30 @@ export default function TeamPage() {
 
   async function loadAll() {
     setLoading(true)
+    setLoadError(null)
     try {
-      const meRes = await fetch('/api/me').then(r => r.json())
-      if (!meRes?.role?.isOwner) {
-        setForbidden(true)
-        setLoading(false)
-        return
+      const meRes = await fetch('/api/me', { cache: 'no-store' })
+      if (meRes.status === 401) { setLoadError('auth'); return }       // เซสชันหมดอายุ
+      if (!meRes.ok) { setLoadError('network'); return }               // 5xx ชั่วคราว
+      const me = await meRes.json().catch(() => null)                  // ตอบกลับไม่ใช่ JSON (หน้า error ของ Vercel)
+      if (!me?.authenticated) { setLoadError('auth'); return }
+      if (!me.role?.isOwner) { setForbidden(true); return }            // ปฏิเสธสิทธิ์จริงเท่านั้นถึงขึ้นจอ 🔒
+
+      const getJson = async (url: string) => {
+        const r = await fetch(url, { cache: 'no-store' })
+        if (!r.ok) throw new Error(url)
+        return r.json()
       }
       const [pagesRes, membersRes, invitesRes] = await Promise.all([
-        fetch('/api/team/pages').then(r => r.json()),
-        fetch('/api/team/members').then(r => r.json()),
-        fetch('/api/team/invitations').then(r => r.json()),
+        getJson('/api/team/pages'),
+        getJson('/api/team/members'),
+        getJson('/api/team/invitations'),
       ])
       setPages(pagesRes.pages || [])
       setMembers(membersRes.members || [])
       setInvitations(invitesRes.invitations || [])
+    } catch {
+      setLoadError('network')   // fetch ถูกตัดกลางคัน → อย่าปล่อยให้หน้าว่างเงียบๆ
     } finally {
       setLoading(false)
     }
@@ -99,14 +110,61 @@ export default function TeamPage() {
     loadAll()
   }
 
+  // โหลดไม่สำเร็จ ≠ ไม่มีสิทธิ์ — บอกให้ชัดว่าเกิดอะไร แล้วให้กดลองใหม่ได้เลย
+  if (loadError) {
+    const isAuth = loadError === 'auth'
+    return (
+      <div style={{ minHeight: '100vh', background: BG, fontFamily: "'Sarabun', sans-serif", padding: 40 }}>
+        <div style={{ maxWidth: 460, margin: '60px auto', background: SURFACE, borderRadius: 22, padding: 36, textAlign: 'center', border: `1.5px solid ${BORDER}` }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>{isAuth ? '🔑' : '📡'}</div>
+          <h1 style={{ fontSize: 20, fontWeight: 900, color: TEXT, margin: '0 0 8px' }}>
+            {isAuth ? 'เซสชันหมดอายุ' : 'โหลดข้อมูลทีมไม่สำเร็จ'}
+          </h1>
+          <p style={{ color: MUTED, fontSize: 13, margin: '0 0 18px', lineHeight: 1.6 }}>
+            {isAuth
+              ? 'เข้าสู่ระบบใหม่อีกครั้งแล้วเปิดหน้านี้ได้เลย — สิทธิ์ของคุณยังอยู่เหมือนเดิม'
+              : 'เน็ตอาจหลุดชั่วคราว กดลองใหม่ได้เลย — สิทธิ์ของคุณยังอยู่เหมือนเดิม'}
+          </p>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+            {isAuth && (
+              <Link href="/login" className="fbtap" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minHeight: 44, padding: '12px 22px', fontSize: 14, fontWeight: 900, background: PRIMARY, color: 'white', borderRadius: 13, textDecoration: 'none' }}>
+                เข้าสู่ระบบใหม่
+              </Link>
+            )}
+            <button
+              className="fbtap"
+              onClick={() => loadAll()}
+              style={{ minHeight: 44, padding: '12px 22px', fontSize: 14, fontWeight: 900, background: isAuth ? SURFACE2 : PRIMARY, color: isAuth ? TEXT : 'white', border: isAuth ? `1.5px solid ${BORDER}` : 'none', borderRadius: 13, cursor: 'pointer', fontFamily: 'inherit' }}
+            >
+              ลองใหม่
+            </button>
+          </div>
+          <div style={{ marginTop: 18 }}>
+            <Link href="/dashboard/inbox" style={{ color: MUTED, fontWeight: 800, textDecoration: 'none', fontSize: 13 }}>← กลับกล่องข้อความ</Link>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   if (forbidden) {
     return (
       <div style={{ minHeight: '100vh', background: BG, fontFamily: "'Sarabun', sans-serif", padding: 40 }}>
         <div style={{ maxWidth: 460, margin: '60px auto', background: SURFACE, borderRadius: 22, padding: 36, textAlign: 'center', border: `1.5px solid ${BORDER}` }}>
           <div style={{ fontSize: 48, marginBottom: 12 }}>🔒</div>
           <h1 style={{ fontSize: 20, fontWeight: 900, color: TEXT, margin: '0 0 8px' }}>ไม่มีสิทธิ์เข้าหน้านี้</h1>
-          <p style={{ color: MUTED, fontSize: 13, marginBottom: 22 }}>เฉพาะเจ้าของเพจเท่านั้น</p>
-          <Link href="/dashboard/inbox" style={{ color: PRIMARY, fontWeight: 800, textDecoration: 'none', fontSize: 14 }}>← กลับกล่องข้อความ</Link>
+          <p style={{ color: MUTED, fontSize: 13, marginBottom: 18 }}>เฉพาะเจ้าของเพจเท่านั้น</p>
+          {/* เผื่อระบบอ่านสิทธิ์พลาดชั่วคราว — เจ้าของเพจตัวจริงกดตรวจสอบใหม่ได้ ไม่ต้องออกจากระบบ */}
+          <button
+            className="fbtap"
+            onClick={() => { setForbidden(false); loadAll() }}
+            style={{ minHeight: 44, padding: '11px 20px', fontSize: 13.5, fontWeight: 900, background: SURFACE2, color: TEXT, border: `1.5px solid ${BORDER}`, borderRadius: 13, cursor: 'pointer', fontFamily: 'inherit', marginBottom: 16 }}
+          >
+            ตรวจสอบสิทธิ์อีกครั้ง
+          </button>
+          <div>
+            <Link href="/dashboard/inbox" style={{ color: PRIMARY, fontWeight: 800, textDecoration: 'none', fontSize: 14 }}>← กลับกล่องข้อความ</Link>
+          </div>
         </div>
       </div>
     )

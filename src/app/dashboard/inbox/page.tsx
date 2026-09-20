@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useLayoutEffect, useRef, useState, ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, memo, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useSession, signOut } from 'next-auth/react'
 import Link from 'next/link'
@@ -82,6 +82,9 @@ function pageColor(pageId?: string) {
   return PAGE_PALETTE[Math.abs(hash) % PAGE_PALETTE.length]
 }
 
+// toLocaleDateString สร้างตัวจัดรูปแบบวันที่ใหม่ทุกครั้งที่เรียก — แพงมาก
+// หน้านี้เรียกทุกแถวในรายการแชท (ได้ถึง 500) + ทุกฟองข้อความ ทุกครั้งที่จอวาดใหม่ → เก็บไว้ใช้ซ้ำ
+let thShortDate: Intl.DateTimeFormat | null = null
 function timeAgo(d?: string): string {
   if (!d) return ''
   const diff = Date.now() - new Date(d).getTime()
@@ -92,7 +95,10 @@ function timeAgo(d?: string): string {
   if (h < 24) return `${h} ชม.`
   const day = Math.floor(h / 24)
   if (day < 7) return `${day} วัน`
-  return new Date(d).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' })
+  if (!thShortDate) {
+    try { thShortDate = new Intl.DateTimeFormat('th-TH', { day: 'numeric', month: 'short' }) } catch {}
+  }
+  return thShortDate ? thShortDate.format(new Date(d)) : new Date(d).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' })
 }
 
 // แปลง error ดิบจาก API/เบราว์เซอร์ → ข้อความที่แอดมินร้านอ่านแล้วรู้ว่าต้องทำอะไรต่อ
@@ -108,8 +114,272 @@ function friendlyError(raw?: string): string {
   if (/Invalid image URL/i.test(e)) return 'รูปนี้ส่งซ้ำไม่ได้ — กรุณาเลือกรูปใหม่อีกครั้ง'
   if (/\bnot found\b|\bHTTP\s*404\b/i.test(e)) return 'ไม่พบข้อมูลนี้แล้ว — ลองรีเฟรชหน้าจอ'
   if (/timeout|timed out/i.test(e)) return 'ใช้เวลานานเกินไป — ลองใหม่อีกครั้ง'
+  // server ตอบกลับมาไม่ใช่ JSON (เช่นหน้า error 502/504 ของ Vercel) → JSON.parse พัง
+  // ห้ามโยนข้อความดิบแบบ "Unexpected token 'A'..." ให้แอดมินร้านอ่าน
+  if (/is not valid JSON|Unexpected token|JSON Parse error|did not match the expected pattern/i.test(e)) return 'ระบบตอบกลับผิดปกติ — ลองใหม่อีกครั้ง'
   return e
 }
+
+// ── ยิง fetch พร้อมเวลาจำกัด ──
+// มือถือสลับ wifi↔4G กลางคัน fetch จะค้างได้เป็นนาที → ปุ่มส่งหมุนค้าง ตอบลูกค้าคนอื่นไม่ได้
+// ใช้ AbortController (ไม่ใช่ AbortSignal.timeout) เพราะ iOS Safari รุ่นเก่ายังไม่มี timeout()
+async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
+  const ac = new AbortController()
+  const t = setTimeout(() => ac.abort(), ms)
+  try {
+    return await fetch(url, { ...init, signal: ac.signal })
+  } finally {
+    clearTimeout(t)
+  }
+}
+const isAbortError = (e: any) => e?.name === 'AbortError'
+const SEND_TIMEOUT_MS = 25_000
+const UPLOAD_TIMEOUT_MS = 60_000   // 4G ช้า + รูปหลาย MB ต้องใจกว้างกว่าการส่งข้อความ
+
+// ── ย่อรูปก่อนอัปโหลด ──
+// รูปจากกล้องมือถือมักใหญ่ 4-8 MB ส่งผ่าน Vercel ไม่ได้ (เพดาน body 4.5 MB) และกินเน็ตแอดมินฟรีๆ
+// ใช้ <img> + canvas (ไม่ใช่ createImageBitmap) เพราะ Safari รุ่นเก่าหมุนรูปตาม EXIF ให้เฉพาะทาง <img>
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024   // ต้องตรงกับ MAX_BYTES ใน api/inbox/upload
+async function prepareImageForUpload(file: File): Promise<File> {
+  // GIF = ภาพเคลื่อนไหว ย่อแล้วเหลือเฟรมเดียว / ไฟล์เล็กอยู่แล้วไม่ต้องแตะ
+  if (file.type === 'image/gif' || file.size <= 600 * 1024) return file
+  const srcUrl = URL.createObjectURL(file)
+  try {
+    const img = document.createElement('img')
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve()
+      img.onerror = () => reject(new Error('decode failed'))
+      img.src = srcUrl
+    })
+    const w = img.naturalWidth, h = img.naturalHeight
+    if (!w || !h) return file
+    const draw = (maxEdge: number, quality: number) => new Promise<Blob | null>(resolve => {
+      const scale = Math.min(1, maxEdge / Math.max(w, h))
+      const cw = Math.max(1, Math.round(w * scale)), ch = Math.max(1, Math.round(h * scale))
+      const canvas = document.createElement('canvas')
+      canvas.width = cw; canvas.height = ch
+      const ctx = canvas.getContext('2d')
+      if (!ctx) { resolve(null); return }
+      ctx.fillStyle = '#ffffff'      // PNG พื้นโปร่งใส → พื้นขาว ไม่ใช่ดำ
+      ctx.fillRect(0, 0, cw, ch)
+      ctx.drawImage(img, 0, 0, cw, ch)
+      canvas.toBlob(b => resolve(b), 'image/jpeg', quality)
+    })
+    let blob = await draw(1600, 0.8)
+    if (blob && blob.size > 2 * 1024 * 1024) blob = await draw(1600, 0.65)
+    if (blob && blob.size > MAX_UPLOAD_BYTES) blob = await draw(1200, 0.6)
+    if (!blob || blob.size >= file.size) return file   // ย่อแล้วไม่เล็กลง → ใช้ไฟล์เดิมดีกว่า
+    const base = file.name.replace(/\.[^.]+$/, '') || 'photo'
+    return new File([blob], `${base}.jpg`, { type: 'image/jpeg' })
+  } catch {
+    return file   // เบราว์เซอร์เก่า/ไฟล์เสีย → ส่งไฟล์เดิม แล้วให้ตัวเช็คขนาดบอกแอดมินเอง
+  } finally {
+    URL.revokeObjectURL(srcUrl)
+  }
+}
+
+// ── รูปที่เพิ่งอัปจากเครื่องนี้: Supabase URL → blob: URL ของไฟล์ต้นฉบับ ──
+// อัปเสร็จแล้วถ้าสลับไปใช้ URL ของ Supabase ทันที เบราว์เซอร์ต้องโหลดรูปเดิมกลับมาใหม่ทั้งไฟล์
+// บนเน็ตมือถือแอดมินจะเห็นฟองว่างๆ แล้วนึกว่าส่งรูปไม่สำเร็จ
+const localPreviews = new Map<string, string>()
+function rememberLocalPreview(remoteUrl: string, blobUrl: string) {
+  localPreviews.set(remoteUrl, blobUrl)
+  while (localPreviews.size > 12) {          // กันสะสมกินหน่วยความจำบนมือถือ
+    const k = localPreviews.keys().next().value as string | undefined
+    if (k === undefined) break
+    const v = localPreviews.get(k)
+    localPreviews.delete(k)
+    if (v) { try { URL.revokeObjectURL(v) } catch {} }
+  }
+}
+function clearLocalPreviews() {
+  localPreviews.forEach(v => { try { URL.revokeObjectURL(v) } catch {} })
+  localPreviews.clear()
+}
+
+// จอที่แสดงทีละคอลัมน์แบบ Messenger (มือถือ + มือถือแนวนอน) — ต้องตรงกับ @media ใน INBOX_CSS
+const MOBILE_MQ = '(max-width: 820px), (pointer: coarse) and (max-height: 500px)'
+
+// ── CSS ของหน้ากล่องข้อความ ──
+// ต้องเป็นค่าคงที่ + <style> ธรรมดา ไม่ใช่ <style jsx global>
+// styled-jsx ใน App Router ไม่มี StyleRegistry ฝั่ง server → CSS จะถูกใส่หลัง JS โหลดเสร็จเท่านั้น
+// เปิดแอปบนมือถือครั้งแรกจึงเห็นหน้าจอแบบคอม (sidebar 244px ทับจอ) แว้บนึงทุกครั้ง
+// หมายเหตุ: ต้องใช้ dangerouslySetInnerHTML — <style>{CSS}</style> React จะ escape ">" กับ "\""
+// ทำให้ selector .ib-pagebar > div และ [data-active="1"] พังทั้งหมด
+const INBOX_CSS = `
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+        /* ── Fix body: กันเลื่อนซ้าย-ขวา + rubber-band ทุกอุปกรณ์ ── */
+        * { box-sizing: border-box; }
+        html, body {
+          overflow-x: hidden !important;
+          max-width: 100%;
+          width: 100%;
+          position: relative;
+          overscroll-behavior: none;
+          overscroll-behavior-x: none;
+          -webkit-text-size-adjust: 100%;
+        }
+        .ib-main, .ib-pagebar, .ib-col1, .ib-col2, .ib-col3 { max-width: 100%; min-width: 0; }
+
+        /* Tablet — hide right panel + ซ่อนปุ่มเปิดแผงขวาด้วย (ไม่งั้นกดแล้วไม่มีอะไรเกิดขึ้น) */
+        @media (max-width: 1280px) {
+          .ib-col3 { display: none !important; }
+          .ib-toggle-right { display: none !important; }
+        }
+
+        /* Narrow tablet — narrower col1 + page tiles 2 cols */
+        @media (max-width: 980px) {
+          .ib-col1 { width: 290px !important; }
+          .ib-pagebar > div { grid-template-columns: repeat(2, 1fr) !important; }
+        }
+
+        /* Mobile/tablet — hide sidebar + ล็อก viewport (กันเลื่อน/เด้ง)
+           เงื่อนไขที่ 2 = มือถือหมุนแนวนอน (กว้าง 844-932px แต่สูงไม่ถึง 500px)
+           ถ้าดูแค่ความกว้าง มือถือแนวนอนจะได้หน้าจอแบบคอม: sidebar 244 + ลิสต์ + แชทเหลือนิดเดียว
+           และไม่ได้ล็อก viewport → คีย์บอร์ดเด้งแล้วหัวแชทหาย (แท็บเล็ตสูงเกิน 500px จึงไม่โดน) */
+        @media (max-width: 820px), (pointer: coarse) and (max-height: 500px) {
+          html, body {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            width: 100%; height: 100%;
+            overflow: hidden !important;
+            overscroll-behavior: none;
+            touch-action: pan-y;
+          }
+          .ib-sidebar { transform: translateX(-100%); transition: transform 0.25s; }
+          /* ใช้ความสูง+offset จริงจาก visualViewport (--app-height/--app-offset)
+             → คีย์บอร์ดเด้งแล้ว composer ยังอยู่เหนือคีย์บอร์ดเป๊ะ ไม่หลุดขึ้นบน */
+          .ib-root {
+            height: var(--app-height, 100svh) !important;
+            min-height: 0 !important;
+            max-height: var(--app-height, 100svh) !important;
+            transform: translateY(var(--app-offset, 0px));
+          }
+          .ib-main { margin-left: 0 !important; padding-top: 0 !important; height: var(--app-height, 100svh) !important; width: 100% !important; }
+          .ib-mobile-bar { display: flex !important; }
+          /* หน้าเลือกช่องทาง — เต็มจอบนมือถือ
+             ต้องดันลงใต้ mobile bar (fixed สูง 52px, z-40) เพราะ gate อยู่ใน <main>
+             ที่มี z-index 1 จึงชนะ mobile bar ด้วย z-index ไม่ได้ */
+          .ib-channel-gate { left: 0 !important; top: 52px !important; }
+          /* รายการแชท (ยังไม่เปิดแชท): mobile bar เป็น fixed → ดันเนื้อหาลงมาไม่ให้โดนบัง */
+          .ib-root[data-active="0"] .ib-main { padding-top: 52px !important; }
+          /* page bar เลื่อนแนวนอนได้ (เฉพาะตัวมันเอง) */
+          .ib-pagebar > div { touch-action: pan-x; }
+          /* เว้นขอบให้พ้น "ติ่งกล้อง"/มุมโค้ง ตอนหมุนจอแนวนอน (viewport-fit=cover)
+             ไม่งั้นปุ่มย้อนกลับกับปุ่มส่งไปอยู่ใต้ติ่ง กดไม่โดน */
+          .ib-main {
+            padding-left: env(safe-area-inset-left, 0px) !important;
+            padding-right: env(safe-area-inset-right, 0px) !important;
+          }
+          .ib-mobile-bar {
+            padding-left: calc(14px + env(safe-area-inset-left, 0px)) !important;
+            padding-right: calc(14px + env(safe-area-inset-right, 0px)) !important;
+          }
+        }
+
+        /* Mobile/tablet — Messenger-like UX (≤820 ครอบทุกมือถือ + แท็บเล็ตเล็ก/in-app browser) */
+        @media (max-width: 820px), (pointer: coarse) and (max-height: 500px) {
+          /* Single column toggle */
+          .ib-col1 { width: 100% !important; }
+          .ib-main[data-active="1"] .ib-col1 { display: none !important; }
+          .ib-main[data-active="0"] .ib-col2 { display: none !important; }
+          /* เปิดแชท → ซ่อน mobile bar (sibling ของ .ib-main จึงใช้ .ib-root) + โชว์ปุ่มกลับ */
+          .ib-root[data-active="1"] .ib-mobile-bar { display: none !important; }
+          .ib-back { display: flex !important; }
+          .ib-only-mobile-flex { display: flex !important; }
+
+          /* Page bar — แนวนอน scroll (เหมือน stories) เห็นทุกเพจ */
+          .ib-pagebar { padding: 8px 10px !important; }
+          .ib-pagebar > div {
+            display: flex !important;
+            grid-template-columns: none !important;
+            overflow-x: auto !important;
+            scroll-snap-type: x mandatory;
+            gap: 6px !important;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+          }
+          .ib-pagebar > div::-webkit-scrollbar { display: none; }
+          /* ครอบทั้งปุ่ม "ทุกเพจ" และ wrapper ของไทล์เพจ (ที่มีปุ่มแก้ชื่อแยก) */
+          .ib-pagebar > div > button,
+          .ib-pagebar > div > div {
+            scroll-snap-align: start;
+            flex-shrink: 0 !important;
+            max-width: 220px;
+          }
+
+          /* ซ่อน page bar + mobile bar เมื่อเปิดแชท → เห็นแชทเต็มจอ
+             ใช้ .ib-root (พ่อร่วมของทั้งคู่) เพราะ .ib-mobile-bar เป็น sibling ของ .ib-main */
+          .ib-root[data-active="1"] .ib-pagebar { display: none !important; }
+          .ib-root[data-active="1"] .ib-mobile-bar { display: none !important; }
+
+          /* Mobile back button — แสดงในหัว chat เพื่อกลับ list */
+          .ib-back {
+            min-width: 38px !important; min-height: 38px !important;
+            padding: 8px !important;
+          }
+
+          /* Touch targets ใหญ่ขึ้น */
+          .ib-col1 button, .ib-col1 a { min-height: 36px; }
+        }
+
+        /* iOS safe area — กัน composer ทับแถบ home
+           ใช้ --kb-open (ตั้งจาก visualViewport) → คีย์บอร์ดเปิดแล้วตัด padding ทิ้ง
+           ไม่งั้นจะมีช่องว่างขาวคั่นระหว่างช่องพิมพ์กับคีย์บอร์ด */
+        @supports (padding: env(safe-area-inset-bottom)) {
+          @media (max-width: 820px), (pointer: coarse) and (max-height: 500px) {
+            .ib-main { padding-bottom: calc(env(safe-area-inset-bottom) * var(--kb-open, 1)) !important; }
+          }
+        }
+
+        /* iOS zoom prevention — input fontSize ≥ 16 */
+        @media (max-width: 820px), (pointer: coarse) and (max-height: 500px) {
+          /* ครอบ input ทุกชนิดที่พิมพ์ได้ (เดิมระบุเฉพาะ type="text" → ช่องที่ไม่ระบุ type หลุด) */
+          input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+          textarea, select {
+            font-size: 16px !important;
+          }
+          /* ซ่อนปุ่มที่ไม่จำเป็นบนมือถือ (right panel ใช้ไม่ได้อยู่แล้ว) */
+          .ib-hide-mobile { display: none !important; }
+        }
+        /* ── Composer ──
+           มือถือ: 2 แถว (ปุ่มแถวบน / ช่องพิมพ์+ส่ง แถวล่าง) → ช่องพิมพ์ได้พื้นที่เต็ม
+           จอใหญ่: แถวเดียวเหมือนเดิม */
+        .ib-composer { display: flex; flex-direction: column; gap: 8px; }
+        .ib-composer-actions { display: flex; gap: 8px; align-items: center; }
+        .ib-composer-input { display: flex; gap: 8px; align-items: flex-end; }
+        .ib-only-mobile { display: none; }
+        @media (max-width: 820px), (pointer: coarse) and (max-height: 500px) {
+          .ib-only-mobile { display: inline; }
+          /* ปุ่มที่มีข้อความกระจายเต็มแถว กดง่ายด้วยนิ้วโป้ง (ปุ่มไอคอนล้วนคงขนาดเดิม) */
+          .ib-composer-grow { flex: 1; justify-content: center; }
+        }
+        /* แถวเดียวเฉพาะตอนคอลัมน์แชทกว้างพอจริง — ที่ 821-1080px ยังมี sidebar 244 + ลิสต์ 290
+           ทำให้เหลือที่ช่องพิมพ์แค่ไม่กี่ px ถ้าบังคับแถวเดียว */
+        @media (min-width: 1100px) {
+          /* flex-wrap: ถ้าที่ไม่พอ (เช่น 1281-1350px ตอนแผงขวาเปิด) ให้ตกลงมาเป็น 2 แถวเอง
+             ไม่งั้นปุ่ม "ส่ง" ล้นออกนอกคอลัมน์แล้วโดนตัด กดไม่ได้ */
+          .ib-composer { flex-direction: row; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+          .ib-composer-input { flex: 1; min-width: 240px; }
+        }
+
+        /* toast ต้องไม่ทับแถวช่องพิมพ์ตอนเปิดแชทอยู่บนมือถือ */
+        @media (max-width: 820px), (pointer: coarse) and (max-height: 500px) {
+          /* 240px = composer 2 แถวตอนช่องพิมพ์ขยายสูงสุด (140px) + ปุ่ม + ระยะขอบ */
+          .ib-toast-above-composer {
+            bottom: calc(env(safe-area-inset-bottom, 0px) + 240px) !important;
+          }
+        }
+        /* จอแคบสุด (iPhone SE 320px / in-app browser ที่บีบความกว้าง) */
+        @media (max-width: 400px) {
+          .ib-hide-narrow { display: none !important; }
+        }
+        @media (max-width: 360px) {
+          /* เหลือแต่ไอคอน — ป้าย "ข้อความบันทึก" ทำให้ปุ่มตัดบรรทัดสูงไม่เท่ากัน */
+          .ib-only-mobile { display: none !important; }
+        }
+`
 
 export default function InboxPage() {
   const { data: session } = useSession()
@@ -117,7 +387,8 @@ export default function InboxPage() {
   // Data
   const [isOwner, setIsOwner] = useState<boolean | null>(null)  // null = ยังไม่รู้ → ซ่อนเมนู owner ไว้ก่อน
   // จัดการช่องทางได้ = เจ้าของเพจ หรือเจ้าของร้านที่ล็อกอินด้วย Facebook แต่ยังไม่เคยเชื่อมช่องทางแรก
-  const [canManageChannels, setCanManageChannels] = useState(false)
+  // null = ยังไม่รู้ (เช่น /api/me ล้มเหลว) — ไม่ใช่ "ไม่มีสิทธิ์"
+  const [canManageChannels, setCanManageChannels] = useState<boolean | null>(null)
   // รูปโปรไฟล์ตัวเอง — เฉพาะบัญชี Facebook (บัญชีอีเมลไม่มีรูป → ตัวอักษรย่อทันที)
   // ใส่ id บัญชีใน URL ให้ browser แยก cache ต่อบัญชี (มือถือเครื่องเดียวสลับบัญชีจะได้ไม่เห็นรูปคนก่อน)
   const sessionFbId = (session as any)?.fbUserId as string | undefined
@@ -127,6 +398,12 @@ export default function InboxPage() {
   const [activeConv, setActiveConv] = useState<any | null>(null)
   const [messages, setMessages] = useState<any[]>([])
   const [quickReplies, setQuickReplies] = useState<any[]>([])
+  // โหลดข้อความบันทึกไม่สำเร็จ (เน็ตหลุด/หน้า error ของ Vercel) — ต้องไม่ขึ้นว่า "ยังไม่มีข้อความบันทึกไว้"
+  const [qrLoadFailed, setQrLoadFailed] = useState(false)
+  // รายการข้อความบันทึกที่ถืออยู่ตอนนี้เป็นของเพจไหน ('' = ยังไม่ได้เจาะจงเพจ) — สลับไปแชทของอีกเพจต้องโหลดใหม่
+  const qrLoadedForRef = useRef<string>('')
+  // เปิดหน้าตั้งค่าโดยเลือกแท็บไว้ล่วงหน้า (ปุ่ม "+ สร้าง" ต้องพาไปแท็บข้อความบันทึก ไม่ใช่แท็บ AI)
+  const [settingsTab, setSettingsTab] = useState<'general'|'auto'|'kb'|'qr'>('general')
 
   // Filters
   const [channelFilter, setChannelFilter] = useState<'facebook' | 'line' | null>(null)
@@ -138,17 +415,28 @@ export default function InboxPage() {
   const [renamePage, setRenamePage] = useState<any | null>(null)
   const [nicknameDraft, setNicknameDraft] = useState('')
   const [savingNickname, setSavingNickname] = useState(false)
+  // บอกผลในกล่องเลย — แบนเนอร์รวมอยู่ใต้ modal แอดมินมองไม่เห็นว่ากดแล้วไม่สำเร็จ
+  const [nicknameError, setNicknameError] = useState<string | null>(null)
 
   // UI state
   const [loadingList, setLoadingList] = useState(true)
   const [pageSyncing, setPageSyncing] = useState(false)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [syncing, setSyncing] = useState(false)
-  const [sending, setSending] = useState(false)
-  const [uploading, setUploading] = useState(false)
+  // "กำลังส่ง / กำลังอัปโหลด" แยกรายแชท — เดิมเป็นตัวแปรเดียวทั้งหน้า
+  // ส่งค้างที่ลูกค้า A แล้วปุ่มส่งของลูกค้า B จะกดไม่ได้เลยจนกว่าอันแรกจะ error (เน็ตสะดุดกลางร้าน = รอเป็นนาที)
+  // ใช้ ref เป็นตัวตัดสิน (กดรัวๆ ก่อน React re-render ก็ไม่ส่งซ้ำ) + tick ไว้บังคับให้จอวาดใหม่
+  const sendingConvsRef = useRef<Set<string>>(new Set())
+  const uploadingConvsRef = useRef<Set<string>>(new Set())
+  const [, setBusyTick] = useState(0)
+  const setBusy = (bag: React.MutableRefObject<Set<string>>, convId: string, on: boolean) => {
+    if (on) bag.current.add(convId); else bag.current.delete(convId)
+    setBusyTick(t => t + 1)
+  }
+  const sending = !!activeConv && sendingConvsRef.current.has(activeConv.id)
+  const uploading = !!activeConv && uploadingConvsRef.current.has(activeConv.id)
   const [aiLoading, setAiLoading] = useState(false)
   const [aiSuggestions, setAiSuggestions] = useState<string[]>([])
-  const [draft, setDraft] = useState('')
   const [showSettings, setShowSettings] = useState(false)
   const [showSavedReplies, setShowSavedReplies] = useState(false)
   const [showRightPanel, setShowRightPanel] = useState(true)
@@ -163,7 +451,8 @@ export default function InboxPage() {
   const listLimitRef = useRef(50)
   listLimitRef.current = listLimit
   const [sessionExpired, setSessionExpired] = useState(false)
-  const [toast, setToast] = useState<{ msg: string; undo?: () => void } | null>(null)
+  // sticky = ไม่หายเอง (ใช้กับ "ส่งไม่สำเร็จ" ที่แอดมินต้องเห็นแน่ๆ) / action = ปุ่มอื่นที่ไม่ใช่ "เลิกทำ"
+  const [toast, setToast] = useState<{ msg: string; undo?: () => void; action?: { label: string; run: () => void }; sticky?: boolean } | null>(null)
   // เก็บ "ลายเซ็นข้อความที่กดส่งซ้ำไปแล้ว" — ใช้ ref ไม่ให้หายตอนสลับแชทกลับมา
   // (ถ้าเก็บใน state แล้วรีเซ็ต ผู้ใช้จะกดส่งซ้ำได้อีก ลูกค้าได้ข้อความเดิมหลายรอบ)
   const retriedRef = useRef<Set<string>>(new Set())
@@ -175,13 +464,31 @@ export default function InboxPage() {
   const [aiEnabledByPage, setAiEnabledByPage] = useState<Record<string, boolean>>({})
   const [settingsVer, setSettingsVer] = useState(0)  // ++ เมื่อปิดหน้าตั้งค่า → ดึงค่า ai_assist_enabled ใหม่
   const [errorBanner, setErrorBanner] = useState<string | null>(null)
+  // โหลดรายการแชทไม่สำเร็จ — แยกจาก errorBanner เพราะ errorBanner ใช้บอกผลที่แอดมินเป็นคนสั่ง (ส่งไม่สำเร็จ ฯลฯ)
+  // ห้ามทับกัน และอันนี้ต้องหายเองเมื่อโหลดสำเร็จรอบถัดไป
+  const [listError, setListError] = useState<string | null>(null)
+  const listEverLoadedRef = useRef(false)
+  // ปัญหาจากการดึงข้อมูลเบื้องหลัง (เช่น token เพจหมดอายุ) — เตือนข้างรายการแชท ไม่ไปทับแบนเนอร์ในห้องแชท
+  const [syncNotice, setSyncNotice] = useState<{ sig: string; text: string } | null>(null)
+  const dismissedSyncSigRef = useRef<string>('')
+  // มีข้อความใหม่เข้ามาตอนแอดมินเลื่อนอ่านข้อความเก่าอยู่ → ขึ้นปุ่มลอยให้กดลงไปดู
+  const [newMsgCount, setNewMsgCount] = useState(0)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const msgPaneRef = useRef<HTMLDivElement>(null)
+  const nearBottomRef = useRef(true)         // แอดมินอยู่ท้ายสุดของแชทไหม (ตัดสินว่าจะเลื่อนตามให้ไหม)
+  const lastMsgIdRef = useRef<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const pollRef = useRef<any>(null)
   const lastFbSyncRef = useRef(Date.now())  // เวลาที่ sync FB ล่าสุด (ไม่รีเซ็ตตอนสลับแชท)
+  const syncInFlightRef = useRef(false)     // กันยิง sync ซ้อนกัน (poll + กลับเข้าแอป + กดปุ่มเอง พร้อมกัน)
   const openReqRef = useRef<string>('')  // กัน race ตอนเปิดหลายแชทเร็วๆ
-  const draftRef = useRef<HTMLTextAreaElement>(null)
+  const openSeqRef = useRef(0)           // ลำดับการ "เปิดแชท" — กันผลเก่าของแชทเดียวกันทับผลใหม่
+  const detailSeqRef = useRef(0)         // ลำดับการโหลดข้อความเบื้องหลัง
+  const detailAppliedRef = useRef(0)     // ผลโหลดข้อความล่าสุดที่เอาขึ้นจอแล้ว
+  // แถวข้อความที่ "เครื่องนี้" เพิ่งบันทึกเอง (id → เวลา) — ใช้กันไม่ให้ poll เก่าลบฟองที่เพิ่งส่งสำเร็จ
+  const localRowsRef = useRef<Map<string, number>>(new Map())
+  // ช่องพิมพ์อยู่ในคอมโพเนนต์ลูก (Composer) — สั่งงานผ่าน ref นี้ (แทรกข้อความ/ล้างช่อง)
+  const composerApiRef = useRef<ComposerApi | null>(null)
   // เก็บไฟล์รูปที่อัปโหลดไม่สำเร็จไว้ เพื่อให้ "ส่งอีกครั้ง" อัปโหลดใหม่ได้จริง
   // (ถ้าส่ง blob: URL ไป server จะตีกลับ 400 ทุกครั้ง)
   const pendingFilesRef = useRef<Map<string, { file: File; url: string }>>(new Map())
@@ -190,24 +497,111 @@ export default function InboxPage() {
     pendingFilesRef.current.forEach(v => { try { URL.revokeObjectURL(v.url) } catch {} })
     pendingFilesRef.current.clear()
   }
-  useEffect(() => () => clearPendingFiles(), [])
+  useEffect(() => () => { clearPendingFiles(); clearLocalPreviews() }, [])
+
+  // เลื่อนไปข้อความล่าสุดแบบทันที (ไม่ใช่ smooth) — เปิดแชทแล้วต้องเห็นข้อความล่าสุดตั้งแต่เฟรมแรก
+  // smooth จะไล่จอจากข้อความเก่าสุดลงมา ระหว่างนั้นรูปในแชทโหลดเสร็จแล้วดันข้อความล่าสุดหลุดจออีก
+  const pinMessagesToBottom = useCallback(() => {
+    nearBottomRef.current = true
+    const el = msgPaneRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [])
+  // รูป/เสียง/วิดีโอในแชทโหลดเสร็จ → ความสูงเปลี่ยน ถ้าแอดมินยังอยู่ท้ายแชทต้องตรึงไว้ท้ายเหมือนเดิม
+  // (iOS Safari ไม่มี scroll anchoring ให้ ต้องเลื่อนเอง ไม่งั้นสลิปโอนเงินดันคำถามล่าสุดพ้นจอ)
+  const onMediaReady = useCallback(() => {
+    const el = msgPaneRef.current
+    if (el && nearBottomRef.current) el.scrollTop = el.scrollHeight
+  }, [])
+
+  // ── ปุ่มย้อนกลับของเครื่อง (Android / ปัดขอบจอ iOS) ──
+  // เปิดแชทบนมือถือ = เพิ่ม 1 รายการใน history → กดย้อนกลับแล้วกลับมาที่รายการแชท
+  // เดิมไม่มีรายการนี้ กดย้อนกลับ = ออกจากกล่องข้อความ (แอปที่ติดตั้งไว้จะปิดไปเลย) ที่พิมพ์ค้างหายหมด
+  // เปิดแชทอื่นต่อใช้ replace → history ไม่บวมทีละแชท
+  const pushChatHistory = (convId: string) => {
+    try {
+      if (!window.matchMedia || !window.matchMedia(MOBILE_MQ).matches) return
+      const st: any = window.history.state || {}
+      if (st.ibChat) window.history.replaceState({ ...st, ibChat: convId }, '')
+      else window.history.pushState({ ...st, ibChat: convId }, '')
+    } catch {}
+  }
+
+  // ── จำตำแหน่งที่เลื่อนค้างไว้ของรายการแชท + แถบเพจ ──
+  // บนมือถือคอลัมน์รายการถูกซ่อนด้วย display:none ตอนเปิดแชท เบราว์เซอร์จึงทิ้งตำแหน่งเลื่อนทิ้งหมด
+  // กลับจากแชทแล้วเด้งขึ้นบนสุดทุกครั้ง = ต้องไล่หาลูกค้าที่ทักไว้เมื่อวานใหม่ทุกรอบ
+  const listScrollRef = useRef<HTMLDivElement | null>(null)
+  const listScrollTopRef = useRef(0)
+  const pagebarScrollRef = useRef<HTMLDivElement | null>(null)
+  const pagebarLeftRef = useRef(0)
+  // เก็บตอน "กำลังจะเปิดแชท" — ตอนนั้นคอลัมน์ยังอยู่บนจอ ค่ายังอ่านได้
+  const rememberListScroll = useCallback(() => {
+    listScrollTopRef.current = listScrollRef.current?.scrollTop ?? 0
+    pagebarLeftRef.current = pagebarScrollRef.current?.scrollLeft ?? 0
+  }, [])
+  // คืนตำแหน่งก่อนจอวาด (useLayoutEffect) → ไม่เห็นรายการกระพริบขึ้นบนสุดแล้วเด้งกลับ
+  useLayoutEffect(() => {
+    if (activeConv) return
+    const list = listScrollRef.current
+    if (list && listScrollTopRef.current > 0) {
+      list.scrollTop = Math.min(listScrollTopRef.current, Math.max(0, list.scrollHeight - list.clientHeight))
+    }
+    const bar = pagebarScrollRef.current
+    if (bar && pagebarLeftRef.current > 0) {
+      // scroll-snap-type: x mandatory จะดึงกลับทันทีถ้าเขียน scrollLeft ตรงๆ → ปิดไว้ 1 เฟรม
+      const prevSnap = bar.style.scrollSnapType
+      bar.style.scrollSnapType = 'none'
+      bar.scrollLeft = pagebarLeftRef.current
+      requestAnimationFrame(() => { bar.style.scrollSnapType = prevSnap })
+    }
+  }, [activeConv])
+
+  // ร่างข้อความแยกตามแชท — เดิมมีตัวเดียวทั้งหน้า กดย้อนกลับไปดูแชทอื่นแล้วที่พิมพ์ไว้หายหมด
+  // เก็บในหน่วยความจำเท่านั้น (มีที่อยู่/เบอร์ลูกค้า ไม่ควรค้างในเครื่องที่ร้านใช้ร่วมกัน)
+  const draftsRef = useRef<Map<string, string>>(new Map())
+  // ค่าล่าสุดในช่องพิมพ์ — เก็บเป็น ref ไม่ใช่ state
+  // (Composer อัปเดตให้ทุกตัวอักษร แต่ไม่สั่งวาดหน้าใหม่ทั้งกล่องข้อความ)
+  const draftValueRef = useRef('')
+  const onDraftChange = useCallback((v: string) => { draftValueRef.current = v }, [])
+  const stashDraft = () => {
+    const id = openReqRef.current
+    if (!id) return
+    const v = draftValueRef.current
+    if (v.trim()) draftsRef.current.set(id, v)
+    else draftsRef.current.delete(id)
+  }
+
+  // ข้อความที่ส่งไม่สำเร็จ "ตอนที่แอดมินออกจากแชทนั้นไปแล้ว" — server ไม่มีแถวนี้
+  // ไม่เก็บไว้ = ข้อความที่พิมพ์หายถาวร ลูกค้าไม่ได้รับ และไม่มีอะไรบอกแอดมินเลย
+  const outboxRef = useRef<Map<string, any[]>>(new Map())
+  const stashFailed = (convId: string, m: any) => {
+    const cur = (outboxRef.current.get(convId) || []).filter(x => String(x.id) !== String(m.id))
+    outboxRef.current.set(convId, [...cur, m])
+  }
+  const dropFromOutbox = (convId: string, id: any) => {
+    const cur = outboxRef.current.get(convId)
+    if (!cur) return
+    const next = cur.filter(x => String(x.id) !== String(id))
+    if (next.length) outboxRef.current.set(convId, next)
+    else outboxRef.current.delete(convId)
+  }
 
   // คอม = Enter ส่ง / มือถือ = Enter ขึ้นบรรทัดใหม่
   const [isDesktop, setIsDesktop] = useState(false)
   useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return
     const mq = window.matchMedia('(min-width: 821px) and (pointer: fine)')
     const on = () => setIsDesktop(mq.matches)
-    on(); mq.addEventListener('change', on)
-    return () => mq.removeEventListener('change', on)
+    on()
+    // iPad/iPhone ที่ค้างอยู่ iOS 12-13 (Safari < 14) ไม่มี addEventListener บน MediaQueryList
+    // เรียกตรงๆ จะโยน TypeError ใน useEffect → ทั้งกล่องข้อความจอขาว เปิดใช้งานไม่ได้เลย
+    if (typeof mq.addEventListener === 'function') {
+      mq.addEventListener('change', on)
+      return () => mq.removeEventListener('change', on)
+    }
+    const legacy = mq as any
+    legacy.addListener?.(on)
+    return () => legacy.removeListener?.(on)
   }, [])
-
-  // ช่องพิมพ์ขยายตามจำนวนบรรทัด (สูงสุด 140px) — เดิม rows=1 ตายตัว พิมพ์ยาวแล้วอ่านไม่ออก
-  useEffect(() => {
-    const el = draftRef.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 140)}px`
-  }, [draft])
 
   // ── Load conversations ──
   // สลับเพจให้เร็ว + ไม่แสดงแชทผิดเพจ:
@@ -222,8 +616,36 @@ export default function InboxPage() {
   const loadingSeqRef = useRef(0)         // request แบบโชว์สปินเนอร์ตัวล่าสุด
   const listCacheRef = useRef<Map<string, { seq: number; conversations: any[] }>>(new Map())
 
+  // แชทที่แอดมินเพิ่งกดเปิด (= อ่านแล้ว) → id → ลำดับ request ล่าสุดตอนที่กดเปิด
+  // ผลรายการที่ยิงออกไป "ก่อน" กดเปิด ยังถือว่าแชทนั้นยังไม่อ่าน ห้ามเอาจุดแดง/ตัวเลขเก่ากลับมา
+  const locallyReadRef = useRef<Map<string, number>>(new Map())
+
+  // ลบ "ยังไม่อ่าน" ของแชทที่อ่านไปแล้วบนจอ ออกจากผลที่ยิงก่อนหน้านั้น (รวมตัวเลขรวมด้วย)
+  function applyLocalReads(res: any, seq: number) {
+    const map = locallyReadRef.current
+    if (map.size === 0) return
+    map.forEach((readSeq, id) => {
+      if (seq > readSeq) { map.delete(id); return }  // ผลนี้ยิงหลังกดเปิดแชท → server รู้แล้วว่าอ่านแล้ว
+      const conv = (res.conversations || []).find((c: any) => c.id === id)
+      if (!conv || !((conv.unread_count || 0) > 0)) return
+      conv.unread_count = 0
+      if (conv.is_archived) return  // แชทที่จัดเก็บไม่ถูกนับในตัวเลขตั้งแต่แรก
+      const pid = conv.page_id
+      if (pid && res.unreadByPage) res.unreadByPage[pid] = Math.max(0, (res.unreadByPage[pid] || 0) - 1)
+      res.totalUnread = Math.max(0, (res.totalUnread || 0) - 1)
+      // อ่านแล้วแต่ข้อความล่าสุดเป็นของลูกค้า → ย้ายไปนับเป็น "ยังไม่ตอบ"
+      if (conv.last_sender === 'customer') {
+        if (pid && res.needsReplyByPage) res.needsReplyByPage[pid] = (res.needsReplyByPage[pid] || 0) + 1
+        res.totalNeedsReply = (res.totalNeedsReply || 0) + 1
+      }
+    })
+  }
+
   // เอาผลรายการแชทจาก server ไปใช้ — คืน true ถ้าได้แสดงบนจอ
   function applyListResponse(res: any, key: string, seq: number): boolean {
+    applyLocalReads(res, seq)
+    listEverLoadedRef.current = true
+    setListError(null)   // โหลดสำเร็จแล้ว → เอาแถบแดง "โหลดไม่สำเร็จ" ออกเอง ไม่ต้องให้แอดมินกดปิด
     const convs = res.conversations || []
     const cache = listCacheRef.current
     const prev = cache.get(key)
@@ -275,12 +697,13 @@ export default function InboxPage() {
       const r = await fetch(`/api/inbox/conversations?${params.toString()}`)
       if (r.status === 401 || r.status === 403) { setSessionExpired(true); return }
       const res = await r.json()
-      if (res.error) { if (!silent) setErrorBanner(friendlyError(res.error)); return }
+      if (res.error) { if (!silent || !listEverLoadedRef.current) setListError(friendlyError(res.error)); return }
       setSessionExpired(false)
       applyListResponse(res, key, seq)
     } catch {
       // เน็ตหลุด — ไม่ล้างของเดิมบนจอ รอบถัดไปค่อยลองใหม่
-      if (!silent) setErrorBanner('เชื่อมต่อไม่ได้ — ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่')
+      // โหลดรอบแรกยังไม่เคยสำเร็จ → ต้องบอกเสมอ ไม่งั้นจอขึ้น "ยังไม่มีเพจที่เชื่อมต่อ" ให้เข้าใจผิด
+      if (!silent || !listEverLoadedRef.current) setListError('เชื่อมต่อไม่ได้ — ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่')
     } finally {
       if (!silent && loadingSeqRef.current === seq) setLoadingList(false)
     }
@@ -299,12 +722,15 @@ export default function InboxPage() {
   // รวมข้อความจาก server กับฟอง optimistic ที่ยังไม่มีคู่ในฝั่ง server
   // - ฟองที่ยังส่งอยู่/ส่งไม่สำเร็จ ต้องไม่ถูก poll ลบทิ้ง (ไม่งั้นข้อความที่พิมพ์หายถาวร)
   // - ถ้า server มีแถวเดียวกันแล้ว ต้องตัดฟอง optimistic ทิ้ง ไม่งั้นขึ้น 2 ฟอง + React key ซ้ำ
-  function mergeServerMessages(serverMsgs: any[]) {
+  // startedAt = เวลาที่ยิง request นี้ออกไป (ใช้ตัดสินว่าแถวบนจอที่ server ไม่ส่งมา คือ "เพิ่งส่งเสร็จ" หรือ "ถูกลบไปแล้ว")
+  function mergeServerMessages(serverMsgs: any[], startedAt: number) {
     setMessages(prev => {
       const isTemp = (m: any) => typeof m.id === 'string' && m.id.startsWith('temp-')
       const hidden = retriedServerIdsRef.current           // แถวที่กด "ส่งอีกครั้ง" ไปแล้ว → ไม่เอากลับมา
       const server = serverMsgs.filter(s => !hidden.has(String(s.id)))
-      const temps = prev.filter(isTemp)
+      // ฟองชั่วคราวของแชทอื่นห้ามค้างอยู่ในจอนี้ (อัปรูปให้ลูกค้า A แล้วสลับไป B ระหว่างรอ
+      // ฟอง "กำลังส่ง" ของ A จะไปค้างอยู่ในแชท B ตลอดกาล เพราะ poll ไม่เคยลบ temp)
+      const temps = prev.filter(m => isTemp(m) && (!m.conversation_id || m.conversation_id === openReqRef.current))
 
       // แถวจริงที่แสดงอยู่บนจอแล้ว = มีเจ้าของแล้ว ห้ามเอาไปจับคู่กับ temp ตัวใหม่
       const shownIds = new Set(prev.filter(m => !isTemp(m)).map(m => String(m.id)))
@@ -319,9 +745,12 @@ export default function InboxPage() {
       })
 
       // แถวจริงที่อยู่บนจอแล้วแต่ response รอบนี้ยังไม่มี (poll ที่ยิงก่อนเราส่งข้อความ ตอบช้า)
-      // → ห้ามทิ้ง ไม่งั้นข้อความที่เพิ่งส่งสำเร็จหายไปนานถึง 7 วิ
+      // → เก็บไว้เฉพาะแถวที่ "เครื่องนี้เพิ่งบันทึกหลังจาก request นี้ออกไปแล้ว" ไม่งั้นข้อความที่เพิ่งส่งสำเร็จหายไป 7 วิ
+      // แถวอื่นที่ server ไม่ส่งมาแล้ว = ถูกลบ/ซ่อนจากเครื่องอื่น → ต้องหายตามไปด้วย
+      // (เดิมเก็บไว้ตลอดกาล ทำให้แถวปลอม synthetic-* ค้างคู่กับข้อความจริง และข้อความที่เพื่อนร่วมทีมลบแล้วไม่หาย)
       const serverIds = new Set(server.map(s => String(s.id)))
-      const missing = prev.filter(m => !isTemp(m) && !serverIds.has(String(m.id)) && !hidden.has(String(m.id)) && !isHiddenInboxMessage(m))
+      const missing = prev.filter(m => !isTemp(m) && !serverIds.has(String(m.id)) && !hidden.has(String(m.id)) && !isHiddenInboxMessage(m)
+        && (localRowsRef.current.get(String(m.id)) ?? 0) >= startedAt)
 
       const seen = new Set<string>()
       const real = [...server, ...missing]
@@ -332,36 +761,76 @@ export default function InboxPage() {
     })
   }
 
+  // อัปเดตหัวแชท/คำเตือนของแชทที่เปิดอยู่ ตามข้อมูลล่าสุดจาก server
+  // สำคัญที่สุดคือ send_block_code: พอลูกค้าทักกลับมา Facebook ให้ตอบได้แล้ว แต่แถบส้ม "ห้ามตอบ" ยังค้าง
+  // แอดมินเลยไม่กล้าตอบ (เดิมค่าเหล่านี้อัปเดตเฉพาะตอนปิดแล้วเปิดแชทใหม่)
+  // เอาเฉพาะค่าที่ server เป็นเจ้าของ — ไม่แตะ ติดดาว/จบ/จัดเก็บ เพราะแอดมินกดแล้วเห็นผลทันที (optimistic)
+  // ถ้าเอาค่าจาก poll มาทับ ปุ่มที่เพิ่งกดจะเด้งกลับ
+  function mergeServerConvMeta(convId: string, sc: any) {
+    if (!sc || openReqRef.current !== convId) return
+    setActiveConv((c: any) => {
+      if (!c || c.id !== convId) return c
+      const patch: any = {}
+      for (const k of ['send_block_code', 'send_block_at', 'customer_name', 'customer_picture', 'last_sender', 'last_message_at']) {
+        if (k in sc && sc[k] !== c[k]) patch[k] = sc[k]
+      }
+      return Object.keys(patch).length ? { ...c, ...patch } : c   // ไม่มีอะไรเปลี่ยน = คืนตัวเดิม ไม่ re-render
+    })
+  }
+
+  // ลดตัวเลข "ยังไม่อ่าน" บนจอให้ตรงกับที่ server เพิ่งล้างให้ (ทั้งตอนกดเปิดแชท และตอนโหลดข้อความเบื้องหลัง)
+  // ไม่ทำ = จุดแดงของแชทกับตัวเลขบนไอคอนแอปค้างอยู่จนกว่ารายการจะโหลดรอบหน้า
+  function markConvReadLocally(conv: any) {
+    const convId = conv.id
+    setConversations(prev => prev.map(c => c.id === convId ? { ...c, unread_count: 0 } : c))
+    patchCachedConvs(c => c.id === convId ? { ...c, unread_count: 0 } : c)
+    // แชทที่จัดเก็บไว้ไม่ถูกนับในตัวเลขตั้งแต่แรก → ไม่ต้องปรับ
+    if (!conv.page_id || conv.is_archived) return
+    setUnreadByPage(prev => ({ ...prev, [conv.page_id]: Math.max(0, (prev[conv.page_id] || 0) - 1) }))
+    setTotalUnread(t => Math.max(0, t - 1))
+    // อ่านแล้วแต่ข้อความล่าสุดเป็นของลูกค้า → ตอนนี้นับเป็น "ยังไม่ตอบ"
+    if (conv.last_sender === 'customer') {
+      setNeedsReplyByPage(prev => ({ ...prev, [conv.page_id]: (prev[conv.page_id] || 0) + 1 }))
+      setTotalNeedsReply(t => t + 1)
+    }
+  }
+
   async function loadMessages(conv: any) {
     const convId = conv?.id
     if (!convId) return
+    // ทุกครั้งที่กดเปิดแชทมี "ตั๋ว" ของตัวเอง — เปิดแชทเดิมซ้ำแล้วผลของครั้งก่อนตอบช้า จะได้ไม่ทับผลใหม่
+    // (เช็คแค่ id ไม่พอ เพราะเป็นแชทเดียวกัน ผลเก่าจึงผ่านด่าน)
+    const seq = ++openSeqRef.current
+    const isThisOpen = () => openSeqRef.current === seq && openReqRef.current === convId
+    stashDraft()   // เก็บที่พิมพ์ค้างไว้ของแชทเดิมก่อน แล้วค่อยสลับ
     // เปิดหน้าแชททันที (optimistic) จากข้อมูลใน list → จอสลับไว ไม่ต้องรอ API
     openReqRef.current = convId
+    detailAppliedRef.current = 0
+    localRowsRef.current.clear()
+    lastMsgIdRef.current = null
+    nearBottomRef.current = true
+    setNewMsgCount(0)
     setActiveConv(conv)
-    setMessages([])
-    setDraft('')
+    pushChatHistory(convId)   // กดปุ่มย้อนกลับของเครื่อง = กลับไปหน้ารายการแชท ไม่ใช่ออกจากแอป
+    // ข้อความที่ส่งไม่สำเร็จตอนแอดมินออกจากแชทนี้ไป ต้องกลับมาพร้อมปุ่ม "ส่งอีกครั้ง"
+    setMessages([...(outboxRef.current.get(convId) || [])])
+    // ช่องพิมพ์ถูกสร้างใหม่ตาม key ของแชท → อ่านค่าเริ่มต้นจาก draftsRef เอง
+    draftValueRef.current = draftsRef.current.get(convId) || ''
     setAiSuggestions([])
     setErrorBanner(null)
     setShowChatMenu(false)
     clearPendingFiles()   // ไฟล์รูปที่ค้างจากแชทก่อนหน้า ใช้กับแชทนี้ไม่ได้อยู่แล้ว
     setLoadingMessages(true)
     // optimistic: เคลียร์ทั้ง badge ของ row + ตัวเลขรวม (page tile / ชิป "ใหม่" / sidebar) ทันที
-    const hadUnread = (conv.unread_count || 0) > 0
-    setConversations(prev => prev.map(c => c.id === convId ? { ...c, unread_count: 0 } : c))
-    patchCachedConvs(c => c.id === convId ? { ...c, unread_count: 0 } : c)
-    // แชทที่จัดเก็บไว้ไม่ถูกนับในตัวเลขตั้งแต่แรก → ไม่ต้องปรับ
-    if (hadUnread && conv.page_id && !conv.is_archived) {
-      setUnreadByPage(prev => ({ ...prev, [conv.page_id]: Math.max(0, (prev[conv.page_id] || 0) - 1) }))
-      setTotalUnread(t => Math.max(0, t - 1))
-      // อ่านแล้วแต่ข้อความล่าสุดเป็นของลูกค้า → ตอนนี้นับเป็น "ยังไม่ตอบ"
-      if (conv.last_sender === 'customer') {
-        setNeedsReplyByPage(prev => ({ ...prev, [conv.page_id]: (prev[conv.page_id] || 0) + 1 }))
-        setTotalNeedsReply(t => t + 1)
-      }
+    // + จำไว้ว่าอ่านแชทนี้แล้ว ณ ลำดับ request เท่าไหร่ — ผลรายการที่ยิงไปก่อนหน้านี้จะได้ไม่เอาจุดแดงกลับมา
+    if ((conv.unread_count || 0) > 0) {
+      locallyReadRef.current.set(convId, listSeqRef.current)
+      markConvReadLocally(conv)
     }
+    const startedAt = Date.now()
     try {
       const r = await fetch(`/api/inbox/conversations/${convId}`)
-      if (openReqRef.current !== convId) return  // เปิดแชทอื่นไปแล้ว — ทิ้งผลเก่า
+      if (!isThisOpen()) return  // เปิดแชทอื่น/เปิดแชทนี้ใหม่ไปแล้ว — ทิ้งผลเก่า
       if (r.status === 401 || r.status === 403) { setSessionExpired(true); return }
       if (!r.ok) {
         // ไม่งั้นจะขึ้น "ยังไม่มีข้อความในบทสนทนานี้" เงียบๆ เหมือนประวัติแชทหายไป
@@ -369,79 +838,159 @@ export default function InboxPage() {
         return
       }
       const res = await r.json()
-      if (openReqRef.current !== convId) return
+      if (!isThisOpen()) return
       if (res.conversation) {
         setActiveConv(res.conversation)
-        setMessages(res.messages || [])
+        // ข้อความใน outbox ที่ server บันทึกไว้แล้วจริงๆ (เช่นส่งติดแต่ตอบกลับไม่ทัน) → เอาออก ไม่ให้ขึ้นซ้ำ
+        const pend = outboxRef.current.get(convId)
+        if (pend?.length) {
+          const serverKeys = new Set((res.messages || []).filter((s: any) => s.direction === 'outbound').map(msgKey))
+          const left = pend.filter((p: any) => !serverKeys.has(msgKey(p)))
+          if (left.length) outboxRef.current.set(convId, left)
+          else outboxRef.current.delete(convId)
+        }
+        // merge ไม่ใช่ทับ — ระหว่างรอโหลด แอดมินกดส่งข้อความได้ ฟอง "กำลังส่ง"/"ส่งไม่สำเร็จ" ต้องไม่หาย
+        mergeServerMessages(res.messages || [], startedAt)
       }
     } catch {
-      if (openReqRef.current === convId) setErrorBanner('โหลดข้อความไม่สำเร็จ ลองใหม่อีกครั้ง')
+      if (isThisOpen()) setErrorBanner('โหลดข้อความไม่สำเร็จ ลองใหม่อีกครั้ง')
     } finally {
-      if (openReqRef.current === convId) setLoadingMessages(false)
+      if (isThisOpen()) setLoadingMessages(false)
     }
-    setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
+    if (isThisOpen()) pinMessagesToBottom()
   }
 
-  async function loadQuickReplies() {
-    const r = await fetch('/api/inbox/quick-replies').then(r => r.json())
-    setQuickReplies(r.replies || [])
+  // เน็ตหลุด/หน้า error ของ Vercel (ไม่ใช่ JSON) ต้องไม่ทำให้รายการที่มีอยู่หายไปเป็นค่าว่าง
+  // และต้องไม่เป็น unhandled rejection (เดิมยิงตอน mount โดยไม่มี catch)
+  // pageId = แถวเพจของแชทที่เปิดอยู่ → ให้ server คัดมาเฉพาะข้อความบันทึกของเพจนี้ (+ ของกลาง)
+  // ร้านที่ดูแลหลายเพจจะได้ไม่เห็นข้อความบันทึกของอีกเพจปนมา (ฝั่ง client ยังกรองซ้ำอีกชั้นที่ repliesForActive)
+  async function loadQuickReplies(pageId?: string) {
+    const key = pageId || ''
+    try {
+      const r = await fetch(`/api/inbox/quick-replies${key ? `?pageId=${encodeURIComponent(key)}` : ''}`)
+      if (!r.ok) { setQrLoadFailed(true); return }
+      const d = await r.json()
+      if (Array.isArray(d?.replies)) { setQuickReplies(d.replies); setQrLoadFailed(false); qrLoadedForRef.current = key }
+    } catch {
+      setQrLoadFailed(true)   // เก็บรายการเดิมไว้ แล้วลองใหม่ตอนเปิดแผ่นข้อความบันทึก
+    }
   }
 
   function openRename(p: any) {
     setRenamePage(p)
     setNicknameDraft(p.nickname || '')
+    setNicknameError(null)
   }
 
   async function saveNickname() {
     if (!renamePage || savingNickname) return
     setSavingNickname(true)
+    setNicknameError(null)
     try {
       const res = await fetch('/api/inbox/pages', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pageId: renamePage.id, nickname: nicknameDraft.trim() || null }),
       })
-      const data = await res.json()
+      const data = await res.json().catch(() => ({} as any))   // 502/504 ตอบเป็น HTML — ห้ามให้ parse พัง
       if (!res.ok || !data.success) {
-        alert('บันทึกไม่สำเร็จ: ' + (data.error || 'unknown'))
+        setNicknameError(friendlyError(data.error) || 'บันทึกชื่อเล่นไม่สำเร็จ — ลองใหม่อีกครั้ง')
         return
       }
       setRenamePage(null)
       await loadConversations()
+    } catch (e: any) {
+      // เน็ตหลุด — ต้องบอกในกล่อง ไม่งั้นแอดมินกดซ้ำแล้วไม่มีอะไรเกิดขึ้นเลย
+      setNicknameError(friendlyError(e?.message))
     } finally {
       setSavingNickname(false)
     }
   }
 
   // ── Background sync (silent — no spinner) ──
+  // ยิงซ้อนกันไม่ได้ (syncInFlightRef) เพราะทั้ง poll, การกลับเข้าแอป และปุ่ม "ดึงข้อความใหม่" เรียกตัวเดียวกัน
   async function backgroundSync(pageId?: string) {
+    if (syncInFlightRef.current) return
+    syncInFlightRef.current = true
+    lastFbSyncRef.current = Date.now()
+    // ดึงทั้งรอบไม่สำเร็จ (504 ของ Vercel / เน็ตหลุด) → บอกสั้นๆ ว่าระบบจะลองใหม่ให้เอง
+    // ใช้ syncNotice ไม่ใช่ errorBanner เพราะ errorBanner ใช้บอกผลที่แอดมินสั่งเอง ("ส่งไม่สำเร็จ") ห้ามถูกทับ
+    const noticeSyncDown = () => {
+      const sig = 'sync-down'
+      if (sig === dismissedSyncSigRef.current) return
+      // ปัญหาชั่วคราวของรอบนี้ห้ามทับเรื่องที่สำคัญกว่าซึ่งค้างอยู่ (เช่น "การเชื่อมต่อเพจหมดอายุ")
+      setSyncNotice(cur => (cur && cur.sig !== sig) ? cur : { sig, text: 'ดึงข้อความใหม่จาก Facebook ไม่สำเร็จ — จะลองใหม่อัตโนมัติ' })
+    }
     try {
       const res = await fetch('/api/inbox/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(pageId ? { pageId } : {}),
       })
-      const data = await res.json()
+      // 502/504 ของ Vercel ตอบเป็น HTML — เดิม res.json() พังแล้วถูก catch กลืน แอดมินไม่รู้เลยว่าไม่ได้ดึงข้อความใหม่
+      if (!res.ok) {
+        console.error('[inbox/sync] HTTP', res.status, (await res.text().catch(() => '')).slice(0, 500))
+        noticeSyncDown()
+        return
+      }
+      const data = await res.json().catch(() => null)
+      if (!data) { noticeSyncDown(); return }
       // หลัง sync เสร็จ → trigger repair ถ้ามี empty messages ค้างอยู่
-      // (ทำเงียบๆ ไม่รอผล ไม่ block UI)
+      // (ทำเงียบๆ ไม่รอผล ไม่ block UI — silent ไม่งั้นลิสต์จะขึ้น "กำลังโหลด..." ทุกรอบที่ซิงก์)
       fetch('/api/inbox/repair', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(pageId ? { pageId } : {}),
-      }).then(() => loadConversations()).catch(() => {})
-      // ถ้า sync มี error → แสดงให้ user เห็น (ไม่งั้น user งง ว่าทำไมแชทไม่มี)
-      if (data?.summary?.length) {
-        const errs: string[] = []
-        for (const p of data.summary) {
-          if (p.errors?.length) {
-            errs.push(`${p.page_name}: ${p.errors.join('; ')}`)
-          }
-        }
-        if (errs.length) setErrorBanner(`Sync error → ${errs.join(' | ')}`)
+      }).then(() => loadConvRef.current({ silent: true })).catch(() => {})
+      // ดึงข้อมูลจาก Facebook ไม่สำเร็จ → บอกเป็นภาษาที่แอดมินร้านทำต่อได้ (ไม่ใช่ error ดิบของ Graph)
+      // และแยกที่แสดงออกจากแบนเนอร์ในห้องแชท ไม่งั้นข้อความ "ส่งไม่สำเร็จ" ที่แอดมินต้องอ่านจะถูกทับทุกรอบ
+      const bad: string[] = []
+      let tokenDead = false
+      for (const p of (data?.summary || [])) {
+        if (!p?.errors?.length) continue
+        const joined = String(p.errors.join(' '))
+        console.warn('[inbox/sync]', p.page_name || p.page_id || 'page', joined.slice(0, 500))   // error ดิบของ Graph อยู่ใน console เท่านั้น ห้ามขึ้นจอ
+        if (/access token|OAuthException|session has been invalidated|\(#190\)|code[:\s]*190\b/i.test(joined)) tokenDead = true
+        bad.push(p.page_name || 'เพจ')
       }
-    } catch {
-      // ignore — next interval will retry
+      if (bad.length === 0) {
+        setSyncNotice(null)
+        dismissedSyncSigRef.current = ''
+      } else {
+        const sig = `${tokenDead ? 'token' : 'other'}|${bad.join(',')}`
+        const text = tokenDead
+          ? `ดึงข้อความใหม่จาก ${bad.join(', ')} ไม่สำเร็จ — การเชื่อมต่อเพจหมดอายุ ให้เจ้าของเพจไปที่เมนู "ช่องทางแชท" แล้วเชื่อมเพจใหม่อีกครั้ง`
+          : `ดึงข้อความใหม่จาก ${bad.join(', ')} ไม่สำเร็จ — จะลองใหม่อัตโนมัติ`
+        if (sig !== dismissedSyncSigRef.current) setSyncNotice({ sig, text })
+      }
+    } catch (e) {
+      // เน็ตหลุด/ยกเลิกกลางคัน — บอกด้วยข้อความเดียวกัน แล้วรอบถัดไปลองใหม่เอง (แถบนี้หายเองเมื่อดึงสำเร็จ)
+      console.error('[inbox/sync] request failed', e)
+      noticeSyncDown()
+    } finally {
+      syncInFlightRef.current = false
+      lastFbSyncRef.current = Date.now()   // นับจากตอน "เสร็จ" — รอบที่ใช้เวลานานจะได้ไม่จ่อคิวต่อทันที
     }
+  }
+
+  // ดึงข้อความใหม่จาก Facebook แล้วรีเฟรชจอ — ทางเดียวที่ทุกจุดเรียกใช้ (poll / กลับเข้าแอป / ปุ่มดึงเอง)
+  // minGapMs = เพิ่งดึงไปไม่ถึงเท่านี้ ไม่ต้องดึงซ้ำ (ฝั่ง server มีตัวกันยิงถี่อีกชั้นอยู่แล้ว)
+  async function maybeSync(minGapMs: number) {
+    if (syncInFlightRef.current) return
+    if (Date.now() - lastFbSyncRef.current < minGapMs) return
+    await backgroundSync()
+    loadConvRef.current({ silent: true })
+    loadMessagesSilentRef.current?.()   // แชทที่เปิดอยู่เห็นข้อความใหม่ทันที ไม่ต้องรอ poll รอบหน้า
+  }
+  const maybeSyncRef = useRef(maybeSync)
+  maybeSyncRef.current = maybeSync
+
+  // ปุ่ม "ดึงข้อความใหม่" — ระบบดึงให้เองทุกนาทีอยู่แล้ว แต่ตอนลูกค้าสั่งรัวๆ แอดมินอยากกดเองให้แน่ใจ
+  // (หน้านี้ล็อกการเลื่อนไว้ ลากลงเพื่อรีเฟรชแบบแอปอื่นจึงใช้ไม่ได้)
+  async function manualSync() {
+    if (syncing || syncInFlightRef.current) return
+    setSyncing(true)
+    try { await maybeSync(0) } finally { setSyncing(false) }
   }
 
   // ── ตามขนาด "visual viewport" จริง (กันคีย์บอร์ด iOS ดัน layout เด้ง / แถบล่างลอย) ──
@@ -455,7 +1004,9 @@ export default function InboxPage() {
       cancelAnimationFrame(raf)
       raf = requestAnimationFrame(() => {  // batch — กัน layout thrash จาก scroll event ถี่ๆ
         const raw = vv && vv.height > 0 ? vv.height : window.innerHeight
-        const h = Math.max(Math.round(raw), 240)  // clamp กันค่า transient เล็กผิดปกติ
+        // clamp กันค่า transient เล็กผิดปกติ — ต่ำได้ถึง 120px เพราะมือถือแนวนอนเปิดคีย์บอร์ด
+        // เหลือพื้นที่จริงแค่ ~150-190px ถ้าตรึงไว้ที่ 240 ช่องพิมพ์จะจมอยู่ใต้คีย์บอร์ด
+        const h = Math.max(Math.round(raw), 120)
         const top = vv ? Math.max(Math.round(vv.offsetTop), 0) : 0
         root.style.setProperty('--app-height', `${h}px`)
         root.style.setProperty('--app-offset', `${top}px`)
@@ -479,14 +1030,46 @@ export default function InboxPage() {
     }
   }, [])
 
+  // รู้ว่าเป็น owner หรือ agent → ซ่อนเมนู "ช่องทางแชท" / "จัดการทีม" สำหรับลูกทีม
+  // โหลดไม่สำเร็จ = "ยังไม่รู้" (null) ไม่ใช่ "ไม่ใช่เจ้าของ" แล้วลองใหม่ให้เอง
+  // (เดิมเน็ตสะดุดจังหวะเปิดแอปครั้งเดียว เมนูของเจ้าของร้านจะหายไปทั้งวันจนกว่าจะปิดแอปแล้วเปิดใหม่)
+  useEffect(() => {
+    let cancelled = false, tries = 0, done = false
+    const loadRole = async () => {
+      try {
+        const r = await fetch('/api/me')
+        if (!r.ok) throw new Error(String(r.status))
+        const d = await r.json()
+        if (cancelled) return
+        if (!d?.authenticated) throw new Error('unauthenticated')
+        setIsOwner(!!d.role?.isOwner)
+        // ลูกทีมที่เข้าด้วย Facebook ก็ไม่เห็นเมนูนี้ — เฉพาะเจ้าของร้านที่ยังไม่มีช่องทางแรก
+        setCanManageChannels(!!d.role?.isOwner || (!!d.user?.facebookId && !d.role?.isAgentOnly))
+        done = true
+      } catch {
+        if (cancelled || tries >= 3) return
+        tries += 1
+        setTimeout(loadRole, 1500 * tries)   // 1.5 / 3 / 4.5 วินาที
+      }
+    }
+    loadRole()
+    const retryWhenBack = () => {
+      if (done || cancelled) return
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
+      tries = 0
+      loadRole()
+    }
+    document.addEventListener('visibilitychange', retryWhenBack)
+    window.addEventListener('online', retryWhenBack)
+    return () => {
+      cancelled = true
+      document.removeEventListener('visibilitychange', retryWhenBack)
+      window.removeEventListener('online', retryWhenBack)
+    }
+  }, [])
+
   // ── Initial load + auto-sync on mount (with throttle) ──
   useEffect(() => {
-    // รู้ว่าเป็น owner หรือ agent → ซ่อนเมนู "ช่องทางแชท" / "จัดการทีม" สำหรับลูกทีม
-    fetch('/api/me').then(r => r.json()).then(d => {
-      setIsOwner(!!d?.role?.isOwner)
-      // ลูกทีมที่เข้าด้วย Facebook ก็ไม่เห็นเมนูนี้ — เฉพาะเจ้าของร้านที่ยังไม่มีช่องทางแรก
-      setCanManageChannels(!!d?.role?.isOwner || (!!d?.user?.facebookId && !d?.role?.isAgentOnly))
-    }).catch(() => setIsOwner(false))
     // ไม่เรียก loadConversations ที่นี่ — effect [pageFilter, statusFilter, debouncedSearch]
     // ยิงให้อยู่แล้วตอน mount (เดิมยิงซ้ำ 2 ครั้งพร้อมกัน ทำให้ลิสต์กระตุก/สีเพจเปลี่ยนเอง)
     loadQuickReplies()
@@ -530,6 +1113,7 @@ export default function InboxPage() {
     prevListFilterRef.current = { pageFilter, statusFilter, q: debouncedSearch }
 
     if (changed) {
+      listScrollTopRef.current = 0   // คนละรายการแล้ว — ตำแหน่งเลื่อนเดิมใช้ไม่ได้
       // แสดงผลทันทีโดยไม่รอ server: แคชของ key นี้ → หรือตัดจากรายการ "ทุกเพจ" ที่โหลดไว้แล้ว
       const cached = listCacheRef.current.get(key)
       const all = listCacheRef.current.get(listKeyOf('', 'all', ''))
@@ -562,18 +1146,18 @@ export default function InboxPage() {
         if (r.status === 401 || r.status === 403) { if (!cancelled) setSessionExpired(true); stopLoading(); return }
         // 500 ฯลฯ — ห้ามล้างลิสต์เป็นค่าว่าง ไม่งั้นจอขึ้น "ยังไม่มีเพจที่เชื่อมต่อ" ให้เข้าใจผิด
         if (!r.ok) {
-          if (!cancelled) setErrorBanner('โหลดรายการแชทไม่สำเร็จ — ลองใหม่อีกครั้ง')
+          if (!cancelled) setListError('โหลดรายการแชทไม่สำเร็จ — ลองใหม่อีกครั้ง')
           stopLoading()
           return
         }
         res = await r.json()
         if (res.error) {
-          if (!cancelled) setErrorBanner(friendlyError(res.error))
+          if (!cancelled) setListError(friendlyError(res.error))
           stopLoading()
           return
         }
       } catch {
-        if (!cancelled) setErrorBanner('เชื่อมต่อไม่ได้ — ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่')
+        if (!cancelled) setListError('เชื่อมต่อไม่ได้ — ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่')
         stopLoading()
         return
       }
@@ -602,79 +1186,98 @@ export default function InboxPage() {
     return () => { cancelled = true }
   }, [pageFilter, statusFilter, debouncedSearch, listLimit])
 
-  // โหลดรายการแชทของแต่ละเพจเก็บไว้ล่วงหน้า (ครั้งเดียวหลังเปิดแอป ทีละ 2 เพจ)
+  // โหลดรายการแชทของแต่ละเพจเก็บไว้ล่วงหน้า (ครั้งเดียวหลังเปิดแอป)
   // → กดสลับเพจครั้งแรกก็ขึ้นทันที แล้วค่อยอัปเดตเบื้องหลัง
+  // เพจที่มีแชทใหม่ก่อน (แอดมินจะกดเข้าอันนั้นก่อนอยู่แล้ว) + ทีละเพจแบบเว้นจังหวะ
+  // ไม่งั้นมือถือต้องแย่งเน็ตกับการเปิดแชทแรกของแอดมิน ทั้งที่ทุก request ตอบตัวเลข/รายชื่อเพจชุดเดิมซ้ำๆ
   const pagesRef = useRef<any[]>([])
   pagesRef.current = pages
+  const unreadByPageRef = useRef<Record<string, number>>({})
+  unreadByPageRef.current = unreadByPage
   const hasManyPages = pages.length >= 2
   const prefetchedRef = useRef(false)
   useEffect(() => {
     if (!hasManyPages || prefetchedRef.current) return
+    // เน็ตช้า/โหมดประหยัดเน็ต → ไม่ต้องโหลดล่วงหน้า (ผู้ใช้กดเพจไหนค่อยโหลดเพจนั้น)
+    const conn: any = typeof navigator !== 'undefined' ? (navigator as any).connection : null
+    if (conn?.saveData || /(^|-)2g$/.test(conn?.effectiveType || '')) return
     let stopped = false
     const timer = setTimeout(async () => {
       prefetchedRef.current = true
-      const ids: string[] = pagesRef.current.map((pg: any) => pg.id).slice(0, 20)
-      let next = 0
-      const worker = async () => {
-        while (!stopped && next < ids.length) {
-          const id = ids[next++]
-          const key = listKeyOf(id, 'all', '')
-          if (listCacheRef.current.has(key)) continue
-          const seq = ++listSeqRef.current
-          try {
-            const r = await fetch(`/api/inbox/conversations?pageId=${encodeURIComponent(id)}&limit=50`)
-            if (!r.ok) continue
-            const res = await r.json()
-            if (!res.error && !stopped) applyListResponse(res, key, seq)
-          } catch {}
-        }
+      const un = unreadByPageRef.current
+      const ids: string[] = [...pagesRef.current]
+        .sort((a: any, b: any) => (un[b.id] || 0) - (un[a.id] || 0))
+        .map((pg: any) => pg.id)
+        .slice(0, 8)
+      for (const id of ids) {
+        if (stopped) return
+        const key = listKeyOf(id, 'all', '')
+        if (listCacheRef.current.has(key)) continue
+        const seq = ++listSeqRef.current
+        try {
+          const r = await fetch(`/api/inbox/conversations?pageId=${encodeURIComponent(id)}&limit=50`)
+          if (!r.ok) continue
+          const res = await r.json()
+          if (!res.error && !stopped) applyListResponse(res, key, seq)
+        } catch {}
+        await new Promise(r => setTimeout(r, 300))   // เว้นจังหวะ ไม่ถือคิวเน็ตค้างไว้ตอนแอดมินกำลังกด
       }
-      await Promise.all([worker(), worker()])
     }, 1500)
     return () => { stopped = true; clearTimeout(timer) }
   }, [hasManyPages])
 
 
   // Poll DB ทุก 7 วิ (poll DB ของเราเอง ไม่กิน rate limit FB) → จออัปเดตเองไม่ต้องรีเฟรช
-  // Background sync FB ทุก ~5 นาที (กัน webhook ตก)
+  // ตั้งครั้งเดียวตอนเปิดหน้า (deps []) — เดิมผูกกับแชท/ตัวกรองที่เลือก ตัวจับเวลาจึงถูกรีเซ็ตทุกครั้งที่แตะจอ
+  // แอดมินที่สลับแชทถี่กว่า 7 วิ (ช่วงลูกค้าเยอะ) จะไม่เคยได้ tick เลย = ลิสต์ค้างและไม่ได้ดึงข้อความใหม่จาก Facebook
+  // ทุก callback อ่านของล่าสุดผ่าน ref (loadConvRef / loadMessagesSilentRef / maybeSyncRef) จึงไม่ค้างตัวกรองเก่า
   useEffect(() => {
-    if (pollRef.current) clearInterval(pollRef.current)
-    pollRef.current = setInterval(() => {
-      loadConversations({ silent: true })
-      if (activeConv) {
-        const convId = activeConv.id
-        fetch(`/api/inbox/conversations/${convId}`)
-          .then(r => r.json())
-          .then(res => {
-            // ต้องยังเปิดแชทเดิมอยู่ ไม่งั้นข้อความลูกค้าคนอื่นจะโผล่ผิดแชท
-            if (openReqRef.current !== convId) return
-            if (res.messages) mergeServerMessages(res.messages)
-          })
-          .catch(() => {})
-      }
-      // sync สำรอง (กัน webhook ตก) — ใช้เวลาจริงจาก ref ไม่ใช่ tick ของ interval
-      // เพราะ interval ถูกสร้างใหม่ทุกครั้งที่สลับแชท/เปลี่ยนฟิลเตอร์ → tick รีเซ็ต ไม่เคยถึงรอบ
-      if (Date.now() - lastFbSyncRef.current > 5 * 60 * 1000) {
-        lastFbSyncRef.current = Date.now()
-        backgroundSync()
-      }
+    const visible = () => typeof document === 'undefined' || document.visibilityState === 'visible'
+    const t = setInterval(() => {
+      loadConvRef.current({ silent: true })   // ทำตลอด แม้แอปอยู่เบื้องหลัง — ตัวเลขบนไอคอนแอปจะได้ตรง
+      if (!visible()) return
+      loadMessagesSilentRef.current?.()
+      // ดึงข้อความใหม่จาก Facebook ~1 นาทีครั้งระหว่างที่แอดมินเปิดจออยู่
+      // (webhook ของ Facebook ยังไม่ส่งมา นี่คือทางเดียวที่ข้อความลูกค้าเข้าระบบ)
+      // หยุดตอนแอปอยู่เบื้องหลัง — ประหยัดแบตกับเน็ตมือถือ
+      maybeSyncRef.current(60 * 1000)
     }, 7000)
-    return () => { if (pollRef.current) clearInterval(pollRef.current) }
-  }, [activeConv?.id, pageFilter, statusFilter, debouncedSearch])
+    return () => clearInterval(t)
+  }, [])
 
   // ตัวเลขแชทใหม่บนชื่อแท็บ / ไอคอนแท็บ / ไอคอนแอปที่ติดตั้ง (นับทุกเพจที่เข้าถึงได้)
   useEffect(() => { updateAppBadge(totalUnread) }, [totalUnread])
   useEffect(() => () => resetTabBadge(), [])
 
   // ── Realtime: เด้งทันทีเมื่อมีข้อความ/แชทใหม่ (Supabase Realtime) ──
-  // ถ้ายังไม่ได้ตั้ง SUPABASE_JWT_SECRET → endpoint คืน token=null → ใช้ polling 30 วิ แทน
-  // โหลดข้อความของแชทที่เปิดอยู่ใหม่แบบเงียบ (ใช้ตอนลบข้อความไม่สำเร็จ ให้แถวเดิมกลับมา)
+  // ถ้ายังไม่ได้ตั้ง SUPABASE_JWT_SECRET → endpoint คืน token=null → ใช้ poll 7 วิ อย่างเดียว
+  // โหลดข้อความ + สถานะของแชทที่เปิดอยู่ใหม่แบบเงียบ (poll / realtime / หลังลบข้อความไม่สำเร็จ)
   loadMessagesSilentRef.current = () => {
     const convId = activeConv?.id
     if (!convId) return
+    // แอปอยู่เบื้องหลัง = แอดมินไม่ได้มองจอ → ไม่ต้องดึง
+    // API นี้ล้าง "ยังไม่อ่าน" ให้ทุกครั้งที่เรียก ถ้าดึงตอนแอปอยู่เบื้องหลัง
+    // ข้อความใหม่ในแชทที่เปิดค้างไว้จะกลายเป็น "อ่านแล้ว" ของทั้งทีม โดยไม่มีใครได้เห็น
+    // (ตัวเลขบนไอคอนแอป/ชิป "ใหม่" ก็ไม่ขึ้น) — พอกลับเข้าแอปค่อยดึงแล้วค่อยทำเป็นอ่านแล้ว
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
+    const seq = ++detailSeqRef.current
+    const startedAt = Date.now()
     fetch(`/api/inbox/conversations/${convId}`)
       .then(r => r.json())
-      .then(res => { if (openReqRef.current === convId && res.messages) mergeServerMessages(res.messages) })
+      .then(res => {
+        // ต้องยังเปิดแชทเดิมอยู่ ไม่งั้นข้อความลูกค้าคนอื่นจะโผล่ผิดแชท
+        // + ผลที่ยิงก่อนแต่มาทีหลัง ห้ามทับผลที่ใหม่กว่า
+        if (openReqRef.current !== convId || seq < detailAppliedRef.current) return
+        detailAppliedRef.current = seq
+        if (res.messages) mergeServerMessages(res.messages, startedAt)
+        mergeServerConvMeta(convId, res.conversation)
+        // ค่าที่ได้กลับมาคือค่าก่อนที่ API จะล้างให้ → >0 แปลว่ารอบนี้เพิ่งทำเป็น "อ่านแล้ว"
+        // ลดตัวเลขบนจอตามทันที ไม่ต้องรอรายการโหลดรอบหน้า
+        if (res.conversation && (res.conversation.unread_count || 0) > 0) {
+          locallyReadRef.current.set(convId, listSeqRef.current)   // ผลรายการที่ยิงก่อนหน้านี้ห้ามเอาจุดแดงกลับมา
+          markConvReadLocally(res.conversation)
+        }
+      })
       .catch(() => {})
   }
   const rtTimerRef = useRef<any>(null)
@@ -719,39 +1322,107 @@ export default function InboxPage() {
     rtTimerRef.current = setTimeout(() => {
       rtTimerRef.current = null
       loadConversations({ silent: true })
-      const ac = activeConv
-      if (ac) {
-        const convId = ac.id
-        fetch(`/api/inbox/conversations/${convId}`)
-          .then(r => r.json())
-          .then(res => {
-            if (openReqRef.current !== convId) return  // สลับแชทไปแล้ว — ทิ้งผลเก่า
-            if (res.messages) mergeServerMessages(res.messages)
-          })
-          .catch(() => {})
-      }
+      loadMessagesSilentRef.current?.()   // ที่เดียวกับ poll — มีทั้งกัน race และกันทำเป็น "อ่านแล้ว" ตอนไม่ได้ดูจอ
     }, 250)
   }
+  // ต่อ realtime แบบ "ซ่อมตัวเองได้": token หมดอายุก็ขอใหม่ก่อนหมด, ขอ token รอบแรกไม่ติดก็ลองใหม่,
+  // ช่องทางหลุด (มือถือหลับ/เน็ตสะดุด) ก็ต่อกลับให้เอง
+  // เดิมขอ token ครั้งเดียวตอนเปิดหน้า ไม่มีการต่ออายุและไม่มีใครดูสถานะ → เปิดแอปทิ้งไว้ทั้งวันแล้วเงียบไปเฉยๆ
   useEffect(() => {
-    let channel: any = null, client: any = null, cancelled = false
-    ;(async () => {
+    let client: any = null, channel: any = null, stopped = false
+    let refreshT: any = null, retryT: any = null, attempt = 0, expMs = 0
+
+    const getToken = async (): Promise<string | null> => {
+      const r = await fetch('/api/realtime/token', { cache: 'no-store' })
+      if (r.status === 401 || r.status === 403) return null   // หมดสิทธิ์ — มีหน้าจอ "เซสชันหมดอายุ" จัดการอยู่แล้ว
+      if (!r.ok) throw new Error(`rt token ${r.status}`)
+      const j = await r.json()
+      if (!j?.token) return null                              // ยังไม่ได้ตั้ง SUPABASE_JWT_SECRET → ใช้ poll อย่างเดียว
+      const ttl = Number(j.expiresInSec) > 0 ? Number(j.expiresInSec) : 3600
+      expMs = Date.now() + ttl * 1000
+      return String(j.token)
+    }
+
+    // ขอ token ใหม่ก่อนหมดอายุ ~10 นาที (setAuth จะส่ง access_token ใหม่ให้ช่องที่ join อยู่ ไม่ต้อง subscribe ใหม่)
+    const scheduleRefresh = () => {
+      clearTimeout(refreshT)
+      refreshT = setTimeout(refresh, Math.max(60_000, expMs - Date.now() - 10 * 60_000))
+    }
+    const refresh = async () => {
+      if (stopped || !client) return
       try {
-        const res = await fetch('/api/realtime/token').then(r => r.json())
-        if (cancelled || !res?.token) return
+        const t = await getToken()
+        if (stopped || !t || !client) return
+        await client.realtime.setAuth(t)
+        scheduleRefresh()
+      } catch {
+        if (!stopped) { clearTimeout(refreshT); refreshT = setTimeout(refresh, 60_000) }
+      }
+    }
+    const retry = () => {
+      if (stopped) return
+      clearTimeout(retryT)
+      retryT = setTimeout(start, Math.min(60_000, 2000 * 2 ** attempt++))
+    }
+
+    async function start() {
+      if (stopped) return
+      try {
+        const t = await getToken()
+        if (stopped || !t) return
         const url = process.env.NEXT_PUBLIC_SUPABASE_URL
         const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
         if (!url || !anon) return
-        const { createClient } = await import('@supabase/supabase-js')
-        client = createClient(url, anon, { realtime: { params: { eventsPerSecond: 10 } } })
-        await client.realtime.setAuth(res.token)
-        channel = client.channel('inbox-rt')
-          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'inbox_messages' }, (e: any) => { if (!rtIgnoreRef.current('inbox_messages', e?.new)) rtRefreshRef.current() })
-          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'conversations' }, (e: any) => { if (!rtIgnoreRef.current('conversations', e?.new)) rtRefreshRef.current() })
-          .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'conversations' }, (e: any) => { if (!rtIgnoreRef.current('conversations', e?.new)) rtRefreshRef.current() })
-          .subscribe()
-      } catch {}
-    })()
-    return () => { cancelled = true; try { channel?.unsubscribe(); client?.removeAllChannels?.() } catch {} }
+        if (!client) {
+          const { createClient } = await import('@supabase/supabase-js')
+          if (stopped) return
+          // ปิดระบบ auth ของ supabase ทิ้ง — หน้านี้ใช้ token ของเราเอง
+          // ไม่งั้นทุกครั้งที่เข้าหน้านี้จะได้ตัวจับเวลา refresh + listener ค้างเพิ่มอีกชุด
+          client = createClient(url, anon, {
+            auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+            realtime: { params: { eventsPerSecond: 10 } },
+          })
+        }
+        await client.realtime.setAuth(t)
+        if (stopped) { teardown(); return }
+        if (channel) { const old = channel; channel = null; try { client.removeChannel(old) } catch {} }
+        const ch = client.channel('inbox-rt')
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'inbox_messages' }, (e: any) => { if (!stopped && !rtIgnoreRef.current('inbox_messages', e?.new)) rtRefreshRef.current() })
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'conversations' }, (e: any) => { if (!stopped && !rtIgnoreRef.current('conversations', e?.new)) rtRefreshRef.current() })
+          .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'conversations' }, (e: any) => { if (!stopped && !rtIgnoreRef.current('conversations', e?.new)) rtRefreshRef.current() })
+        channel = ch
+        ch.subscribe((status: string) => {
+          if (stopped || ch !== channel) return   // callback ของช่องเก่า/ตอนออกจากหน้า — ไม่ต้องทำอะไร
+          if (status === 'SUBSCRIBED') { attempt = 0; scheduleRefresh(); rtRefreshRef.current() }  // ตามเก็บของที่พลาดตอนหลุด
+          else if (status === 'CHANNEL_ERROR') refresh()                 // ส่วนใหญ่คือ token หมดอายุ
+          else if (status === 'CLOSED' || status === 'TIMED_OUT') retry() // server ปิดช่อง → สร้างใหม่
+        })
+      } catch {
+        retry()   // เน็ตยังไม่พร้อมตอนเปิดแอป → ถอยแล้วลองใหม่ (เดิมเงียบไปทั้งวัน)
+      }
+    }
+
+    const teardown = () => {
+      try { client?.removeAllChannels?.(); client?.realtime?.disconnect?.() } catch {}
+      client = null; channel = null
+    }
+    const onVisible = () => {
+      if (stopped || typeof document === 'undefined' || document.visibilityState !== 'visible') return
+      if (!client) retry()
+      else if (expMs && expMs - Date.now() < 15 * 60_000) refresh()
+    }
+
+    start()
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('online', onVisible)
+    return () => {
+      stopped = true
+      clearTimeout(refreshT); clearTimeout(retryT)
+      if (rtTimerRef.current) { clearTimeout(rtTimerRef.current); rtTimerRef.current = null }
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('online', onVisible)
+      teardown()
+    }
   }, [])
 
   // โหลดค่า "เปิดปุ่ม AI ช่วยตอบ" ของเพจที่กำลังเปิดแชทอยู่ (ไม่งั้นสวิตช์ในตั้งค่าไม่มีผลจริง)
@@ -788,7 +1459,7 @@ export default function InboxPage() {
       if (e.key !== 'Escape') return
       if (showMobileMenu) { setShowMobileMenu(false); return }
       if (showChatMenu) { setShowChatMenu(false); return }
-      if (renamePage) { setRenamePage(null); return }
+      if (renamePage) { setRenamePage(null); setNicknameError(null); return }
       if (showSavedReplies) { setShowSavedReplies(false); return }
       if (showSettings) { setShowSettings(false); return }
     }
@@ -796,34 +1467,82 @@ export default function InboxPage() {
     return () => document.removeEventListener('keydown', onKey)
   }, [showMobileMenu, showChatMenu, renamePage, showSavedReplies, showSettings])
 
-  // toast หายเองใน 5 วิ
+  // toast หายเองใน 5 วิ — ยกเว้น sticky ("ส่งไม่สำเร็จ") ที่แอดมินต้องกดรับรู้เอง
   useEffect(() => {
-    if (!toast) return
+    if (!toast || toast.sticky) return
     const t = setTimeout(() => setToast(null), 5000)
     return () => clearTimeout(t)
   }, [toast])
 
   // รีเฟรชทันทีเมื่อกลับมาที่แอป/แท็บ (สลับแอปแล้วกลับมา → เห็นล่าสุดเลย ไม่ต้องรอ poll)
+  // + ดึงข้อความใหม่จาก Facebook ด้วยถ้าห่างจากรอบล่าสุดเกิน 30 วิ
+  //   (เดิมอ่านจากฐานข้อมูลอย่างเดียว ปลดล็อกมือถือมาจึงเห็นลิสต์เดิม ทั้งที่ลูกค้าสั่งของไว้ตั้งแต่เมื่อกี้)
   useEffect(() => {
-    const onVisible = () => { if (typeof document === 'undefined' || document.visibilityState === 'visible') rtRefreshRef.current() }
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
+      rtRefreshRef.current()
+      maybeSyncRef.current(30 * 1000)
+    }
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('focus', onVisible)
     return () => { document.removeEventListener('visibilitychange', onVisible); window.removeEventListener('focus', onVisible) }
   }, [])
 
+  // มีข้อความใหม่เข้ามาตอนเปิดแชทอยู่:
+  // - แอดมินอยู่ท้ายสุด (หรือเป็นข้อความที่ตัวเองเพิ่งส่ง) → เลื่อนตามให้เลย
+  // - กำลังเลื่อนอ่านข้อความเก่าอยู่ → ไม่แย่งจอ แต่ขึ้นปุ่ม "มีข้อความใหม่ ↓" ให้กดลงไปดู
+  // (เดิมฟองใหม่ไปต่อท้ายใต้ขอบจอเฉยๆ จอไม่ขยับ แอดมินนึกว่าลูกค้ายังไม่ตอบ)
+  useLayoutEffect(() => {
+    const last = messages[messages.length - 1]
+    const lastId = last ? String(last.id) : null
+    const prevId = lastMsgIdRef.current
+    lastMsgIdRef.current = lastId
+    if (!lastId || lastId === prevId) return   // รอบ poll ที่ได้ข้อความชุดเดิม — ห้ามขยับจอ
+    const el = msgPaneRef.current
+    if (!el) return
+    if (prevId === null) { el.scrollTop = el.scrollHeight; return }   // เพิ่งเปิดแชท
+    if (nearBottomRef.current || last.direction === 'outbound') {
+      el.scrollTop = el.scrollHeight
+      nearBottomRef.current = true
+      setNewMsgCount(0)
+    } else if (last.direction === 'inbound') {
+      setNewMsgCount(n => n + 1)
+    }
+  }, [messages])
+
+  // id ของฟองชั่วคราว — ใส่ตัวสุ่มกันชนกันเมื่อกดส่งรัวๆ ภายในมิลลิวินาทีเดียวกัน
+  const newTempId = () => `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+
+  // อัปเดตฟองเดิม หรือใส่กลับเข้าไปถ้าไม่อยู่แล้ว
+  // (ออกจากแชทแล้วกลับเข้ามาใหม่ระหว่างรอผล ฟองเดิมถูกล้างไปตอนเปิดแชท — ผล "ส่งไม่สำเร็จ" ต้องไม่หายตาม)
+  const upsertMsg = (id: string, next: any) => setMessages(prev =>
+    prev.some(m => m.id === id) ? prev.map(m => m.id === id ? next : m) : [...prev, next])
+
+  // ส่งไม่สำเร็จตอนแอดมินออกจากแชทนั้นไปแล้ว → ต้องมีอะไรบอก ไม่ใช่เงียบหาย
+  function notifySendFailedElsewhere(convName: string, conv: any, isImage?: boolean) {
+    setToast({
+      msg: `${isImage ? 'ส่งรูปถึง' : 'ส่งข้อความถึง'} ${convName} ไม่สำเร็จ`,
+      action: { label: 'เปิดแชท', run: () => loadMessages(conv) },
+      sticky: true,
+    })
+  }
+
   // ── Send message ──
   async function handleSend(overrideText?: string) {
-    const text = (overrideText ?? draft).trim()
-    if (!activeConv || !text || sending) return
+    const text = (overrideText ?? draftValueRef.current).trim()
+    if (!activeConv || !text) return
     const convId = activeConv.id          // ผูกกับแชทนี้ — สลับแชทระหว่างส่งจะไม่เด้งผิดที่
+    if (sendingConvsRef.current.has(convId)) return   // กันกดซ้ำเฉพาะแชทนี้ แชทอื่นยังส่งได้
+    const convSnap = activeConv
+    const convName = activeConv.customer_name || 'ลูกค้า'
     const isThis = () => openReqRef.current === convId
-    setSending(true)
+    setBusy(sendingConvsRef, convId, true)
     setErrorBanner(null)
-    if (!overrideText) setDraft('')
+    if (!overrideText) { composerApiRef.current?.clear(); draftValueRef.current = ''; draftsRef.current.delete(convId) }
 
     // optimistic
     const optimistic = {
-      id: `temp-${Date.now()}`,
+      id: newTempId(),
       conversation_id: convId,
       direction: 'outbound',
       message_text: text,
@@ -832,42 +1551,59 @@ export default function InboxPage() {
       created_at: new Date().toISOString(),
     }
     setMessages(prev => [...prev, optimistic])
-    setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
 
     try {
-      const res = await fetch('/api/inbox/send', {
+      const res = await fetchWithTimeout('/api/inbox/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ conversationId: convId, text }),
-      })
+      }, SEND_TIMEOUT_MS)
       const data = await res.json().catch(() => ({}))
+      if (data.message?.id) localRowsRef.current.set(String(data.message.id), Date.now())
       if (!res.ok || !data.success) {
         const msg = friendlyError(data.error) || 'ส่งไม่สำเร็จ'
         if (isThis()) {
           setErrorBanner(msg)
           // ใช้แถวที่ server บันทึกไว้ (id จริง) แทนฟองชั่วคราว → กด "ลบ"/"ส่งอีกครั้ง" แล้วไม่เด้งกลับมา
-          setMessages(prev => prev.map(m => m.id === optimistic.id
-            ? (data.message ? { ...data.message, error_message: msg } : { ...m, delivery_status: 'failed', error_message: msg })
-            : m))
-          if (data.blockCode) setActiveConv((c: any) => c ? { ...c, send_block_code: data.blockCode } : c)
+          upsertMsg(optimistic.id, data.message
+            ? { ...data.message, error_message: msg }
+            : { ...optimistic, delivery_status: 'failed', error_message: msg, local_only: true })
+          if (data.blockCode) setActiveConv((c: any) => c && c.id === convId ? { ...c, send_block_code: data.blockCode } : c)
+        } else {
+          // server ไม่ได้บันทึกแถวไว้ → เก็บเองในเครื่อง ไม่งั้นข้อความหายถาวร
+          if (!data.message) stashFailed(convId, { ...optimistic, delivery_status: 'failed', error_message: msg, local_only: true })
+          notifySendFailedElsewhere(convName, convSnap)
         }
         loadConversations({ silent: true })
       } else {
         // data.message อาจเป็น null ได้ (insert สำเร็จแต่ select กลับไม่ได้) → ห้ามยัด null ลง array
-        if (isThis()) setMessages(prev => prev.map(m => m.id === optimistic.id
-          ? (data.message || { ...m, delivery_status: 'sent' }) : m))
+        if (isThis()) {
+          setMessages(prev => prev.map(m => m.id === optimistic.id
+            ? (data.message || { ...m, delivery_status: 'sent' }) : m))
+          // ส่งถึงลูกค้าแล้ว = ข้อจำกัด 24 ชม./#551 หมดไปแล้ว (server ก็ล้างค่าให้เหมือนกัน)
+          // ไม่ล้างตรงนี้ แถบส้ม "ห้ามตอบ" จะค้างอยู่ใต้ข้อความที่เพิ่งส่งสำเร็จ
+          setActiveConv((c: any) => c && c.id === convId ? { ...c, send_block_code: null, send_block_at: null } : c)
+        }
         loadConversations({ silent: true })
       }
     } catch (e: any) {
-      // เน็ตหลุด — server ไม่มีแถวนี้ → ต้องคง local ไว้ให้กด "ส่งอีกครั้ง" ได้ (local_only)
-      const msg = friendlyError(e?.message)
+      // หมดเวลารอ — ห้ามบอกว่า "ส่งไม่สำเร็จ" ลอยๆ เพราะ server อาจส่งถึงลูกค้าไปแล้ว
+      // (กดส่งซ้ำตรงนี้ = ลูกค้าได้ข้อความซ้ำ) → บอกว่ากำลังตรวจสอบ แล้วดึงของจริงมาเทียบ
+      const uncertain = isAbortError(e)
+      const msg = uncertain ? 'ส่งช้าผิดปกติ — ยังไม่แน่ใจว่าลูกค้าได้รับหรือยัง กำลังตรวจสอบให้' : friendlyError(e?.message)
+      const failed = { ...optimistic, delivery_status: 'failed', error_message: msg, local_only: true, uncertain }
       if (isThis()) {
         setErrorBanner(msg)
-        setMessages(prev => prev.map(m => m.id === optimistic.id
-          ? { ...m, delivery_status: 'failed', error_message: msg, local_only: true } : m))
+        upsertMsg(optimistic.id, failed)
+      } else {
+        stashFailed(convId, failed)
+        notifySendFailedElsewhere(convName, convSnap)
       }
+      loadConversations({ silent: true })
+      if (uncertain) loadMessagesSilentRef.current?.()   // ถ้า server บันทึกไว้จริง ฟองนี้จะถูกแทนที่เอง
+    } finally {
+      setBusy(sendingConvsRef, convId, false)
     }
-    setSending(false)
   }
 
   // จำว่า "ฟองนี้" ถูกกดส่งซ้ำแล้ว — ผูกกับ id ของฟอง ไม่ใช่เนื้อหา
@@ -878,13 +1614,9 @@ export default function InboxPage() {
     setRetriedTick(t => t + 1)
   }
 
-  // แทรกข้อความสำเร็จรูป/คำแนะนำ AI — ต่อท้ายของที่พิมพ์ค้างไว้ ไม่ทับทิ้ง
+  // แทรกข้อความสำเร็จรูป/คำแนะนำ AI — ต่อท้ายของที่พิมพ์ค้างไว้ ไม่ทับทิ้ง (ช่องพิมพ์อยู่ในคอมโพเนนต์ลูก)
   function insertIntoDraft(text: string) {
-    setDraft(prev => {
-      const cur = prev.trim()
-      return cur ? `${cur}\n${text}` : text
-    })
-    setTimeout(() => { const el = draftRef.current; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length) } }, 30)
+    composerApiRef.current?.insert(text)
   }
 
   // ส่งอีกครั้งจากฟองข้อความที่ส่งไม่สำเร็จ (ทั้งข้อความและรูป)
@@ -901,6 +1633,7 @@ export default function InboxPage() {
     const id = String(m.id)
     if (!id.startsWith('temp-')) retriedServerIdsRef.current.add(id)  // poll ห้ามเอากลับมา
     setMessages(prev => prev.filter(x => x.id !== m.id))
+    if (activeConv?.id) dropFromOutbox(activeConv.id, id)   // ไม่งั้นเปิดแชทใหม่แล้วฟองที่ลบไปกลับมา
     const entry = pendingFilesRef.current.get(id)
     if (entry) { pendingFilesRef.current.delete(id); try { URL.revokeObjectURL(entry.url) } catch {} }
     const ok = await deleteFailedOnServer(m)
@@ -913,10 +1646,17 @@ export default function InboxPage() {
   }
 
   async function retryMessage(m: any) {
-    if (sending || uploading || !activeConv) return
+    if (!activeConv) return
     const convId = activeConv.id
+    if (sendingConvsRef.current.has(convId) || uploadingConvsRef.current.has(convId)) return
     const id = String(m.id)
     const imgUrl = (m.attachments || []).find((a: any) => a?.type === 'image' && a.url)?.url
+
+    // ฟองที่ "หมดเวลารอ" — server อาจส่งถึงลูกค้าไปแล้ว ต้องเช็คของจริงก่อน แล้วถามให้แน่ใจ
+    if (m.uncertain) {
+      loadMessagesSilentRef.current?.()
+      if (!window.confirm('ข้อความนี้อาจส่งถึงลูกค้าไปแล้ว\n\nถ้าส่งอีกครั้ง ลูกค้าอาจได้รับข้อความซ้ำ — ยืนยันส่งซ้ำไหม?')) return
+    }
 
     // รูปที่อัปโหลดไม่สำเร็จ (ยังเป็น blob:) → ต้องอัปโหลดใหม่จากไฟล์เดิม ส่ง URL ไปตรงๆ ไม่ได้
     if (imgUrl && String(imgUrl).startsWith('blob:')) {
@@ -924,6 +1664,7 @@ export default function InboxPage() {
       if (!entry) { setErrorBanner('ส่งรูปซ้ำไม่ได้ — กรุณาเลือกรูปใหม่อีกครั้ง'); return }
       markRetried(convId, m)
       setMessages(prev => prev.filter(x => x.id !== m.id))
+      dropFromOutbox(convId, id)
       pendingFilesRef.current.delete(id)
       try { URL.revokeObjectURL(entry.url) } catch {}
       await handleSendImage(entry.file)
@@ -931,6 +1672,7 @@ export default function InboxPage() {
     }
 
     markRetried(convId, m)
+    dropFromOutbox(convId, id)
     // แถวที่มาจาก DB จะถูกดึงกลับมาตอน poll → จำ id ไว้เพื่อซ่อน + ลบใน DB (รีเฟรชแล้วจะได้ไม่กลับมา)
     if (!String(m.id).startsWith('temp-')) {
       retriedServerIdsRef.current.add(String(m.id))
@@ -942,14 +1684,18 @@ export default function InboxPage() {
   }
 
   // ── ส่งรูปที่อัปโหลดแล้ว (ใช้ทั้งตอนส่งครั้งแรกและตอนกด "ส่งอีกครั้ง") ──
-  async function sendImageUrl(imageUrl: string) {
-    if (!activeConv || sending) return
-    const convId = activeConv.id
+  // convId = แชทปลายทาง (ผูกไว้ตั้งแต่ตอนเลือกรูป) / existingId = ใช้ฟองเดิมที่โชว์รูปในเครื่องอยู่แล้ว
+  async function sendImageUrl(imageUrl: string, opts?: { convId?: string; existingId?: string; conv?: any }) {
+    const conv = opts?.conv || activeConv
+    const convId = opts?.convId || activeConv?.id
+    if (!convId) return
+    if (sendingConvsRef.current.has(convId)) return
+    const convName = conv?.customer_name || 'ลูกค้า'
     const isThis = () => openReqRef.current === convId
-    setSending(true)
-    setErrorBanner(null)
-    const optimistic = {
-      id: `temp-${Date.now()}`,
+    setBusy(sendingConvsRef, convId, true)
+    if (isThis()) setErrorBanner(null)
+    const optimistic: any = {
+      id: opts?.existingId || newTempId(),
       conversation_id: convId,
       direction: 'outbound',
       message_text: null,
@@ -958,88 +1704,136 @@ export default function InboxPage() {
       delivery_status: 'sending',
       created_at: new Date().toISOString(),
     }
-    setMessages(prev => [...prev, optimistic])
-    setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
+    // ฟองต้องขึ้นเฉพาะแชทที่เป็นเจ้าของรูปนี้ — ไม่งั้นรูปของลูกค้า A ไปค้าง "กำลังส่ง" ในแชท B
+    if (isThis()) {
+      setMessages(prev => prev.some(m => m.id === optimistic.id)
+        ? prev.map(m => m.id === optimistic.id ? { ...m, ...optimistic } : m)
+        : [...prev, optimistic])
+    }
     try {
-      const res = await fetch('/api/inbox/send', {
+      const res = await fetchWithTimeout('/api/inbox/send', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ conversationId: convId, imageUrl }),
-      })
+      }, SEND_TIMEOUT_MS)
       const data = await res.json().catch(() => ({}))
+      if (data.message?.id) localRowsRef.current.set(String(data.message.id), Date.now())
       if (!res.ok || !data.success) {
         const msg = friendlyError(data.error) || 'ส่งรูปไม่สำเร็จ'
         if (isThis()) {
           setErrorBanner(msg)
           // ใช้แถวที่ server บันทึกไว้ (id จริง) แทนฟองชั่วคราว → กด "ลบ"/"ส่งอีกครั้ง" แล้วไม่เด้งกลับมา
-          setMessages(prev => prev.map(m => m.id === optimistic.id
-            ? (data.message ? { ...data.message, error_message: msg } : { ...m, delivery_status: 'failed', error_message: msg })
-            : m))
-          if (data.blockCode) setActiveConv((c: any) => c ? { ...c, send_block_code: data.blockCode } : c)
+          upsertMsg(optimistic.id, data.message
+            ? { ...data.message, error_message: msg }
+            : { ...optimistic, delivery_status: 'failed', error_message: msg, local_only: true })
+          if (data.blockCode) setActiveConv((c: any) => c && c.id === convId ? { ...c, send_block_code: data.blockCode } : c)
+        } else {
+          if (!data.message) stashFailed(convId, { ...optimistic, delivery_status: 'failed', error_message: msg, local_only: true })
+          notifySendFailedElsewhere(convName, conv, true)
         }
         loadConversations({ silent: true })
       } else {
-        if (isThis()) setMessages(prev => prev.map(m => m.id === optimistic.id
-          ? (data.message || { ...m, delivery_status: 'sent' }) : m))
+        if (isThis()) {
+          setMessages(prev => prev.map(m => m.id === optimistic.id
+            ? (data.message || { ...m, delivery_status: 'sent' }) : m))
+          // ส่งถึงลูกค้าแล้ว → เอาแถบส้ม "ห้ามตอบ" ออก (server ก็ล้างค่าให้เหมือนกัน)
+          setActiveConv((c: any) => c && c.id === convId ? { ...c, send_block_code: null, send_block_at: null } : c)
+        }
         loadConversations({ silent: true })
       }
     } catch (e: any) {
-      const msg = friendlyError(e?.message)
+      const uncertain = isAbortError(e)
+      const msg = uncertain ? 'ส่งช้าผิดปกติ — ยังไม่แน่ใจว่าลูกค้าได้รับหรือยัง กำลังตรวจสอบให้' : friendlyError(e?.message)
+      const failed = { ...optimistic, delivery_status: 'failed', error_message: msg, local_only: true, uncertain }
       if (isThis()) {
         setErrorBanner(msg)
-        setMessages(prev => prev.map(m => m.id === optimistic.id
-          ? { ...m, delivery_status: 'failed', error_message: msg, local_only: true } : m))
+        upsertMsg(optimistic.id, failed)
+      } else {
+        stashFailed(convId, failed)
+        notifySendFailedElsewhere(convName, conv, true)
       }
+      loadConversations({ silent: true })
+      if (uncertain) loadMessagesSilentRef.current?.()
+    } finally {
+      setBusy(sendingConvsRef, convId, false)
     }
-    setSending(false)
   }
 
-  // ── ส่งรูปภาพ: อัปโหลด → ส่งผ่าน FB/LINE ──
+  // ── ส่งรูปภาพ: ย่อรูป → อัปโหลด → ส่งผ่าน FB/LINE ──
   async function handleSendImage(file: File) {
-    if (!activeConv || uploading || sending) return
+    if (!activeConv) return
+    const convId = activeConv.id
+    if (uploadingConvsRef.current.has(convId) || sendingConvsRef.current.has(convId)) return
     const okTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
     if (!okTypes.includes(file.type)) { setErrorBanner('รองรับเฉพาะรูปภาพ (jpg, png, gif, webp)'); return }
-    if (file.size > 5 * 1024 * 1024) { setErrorBanner('รูปต้องไม่เกิน 5 MB'); return }
+    // กันไฟล์ใหญ่ผิดปกติตั้งแต่ต้น (ถอดรหัสรูป 50 MP บนมือถือจะทำให้แอปค้าง)
+    if (file.size > 30 * 1024 * 1024) { setErrorBanner('ไฟล์รูปใหญ่เกินไป — ลองถ่ายหน้าจอรูปนี้แล้วส่งภาพที่แคปมาแทน'); return }
 
-    setUploading(true)
+    const convSnap = activeConv
+    const convName = activeConv.customer_name || 'ลูกค้า'
+    setBusy(uploadingConvsRef, convId, true)
     setErrorBanner(null)
-    const convId = activeConv.id
     const isThis = () => openReqRef.current === convId
     const previewUrl = URL.createObjectURL(file)
-    const tempId = `temp-${Date.now()}`
-    // โชว์ตัวอย่างรูปทันทีระหว่างอัปโหลด
+    const tempId = newTempId()
+    // โชว์ตัวอย่างรูปทันทีระหว่างย่อ/อัปโหลด — แอดมินจะได้รู้ว่าระบบกำลังทำอะไรอยู่
     setMessages(prev => [...prev, {
       id: tempId, conversation_id: convId, direction: 'outbound', message_text: null,
       attachments: [{ type: 'image', url: previewUrl }],
-      sent_by: 'page_user', delivery_status: 'sending', created_at: new Date().toISOString(),
+      sent_by: 'page_user', delivery_status: 'sending', status_note: '⏳ กำลังย่อรูป...',
+      created_at: new Date().toISOString(),
     }])
-    setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
+    const setNote = (note: string) => {
+      if (isThis()) setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status_note: note } : m))
+    }
 
+    let toSend = file
     try {
+      // รูปจากกล้องมือถือมักเกินเพดานที่ Vercel รับได้ → ย่อก่อนเสมอ (เร็วกว่าด้วยบนเน็ต 4G)
+      toSend = await prepareImageForUpload(file)
+      if (toSend.size > MAX_UPLOAD_BYTES) {
+        throw new Error('รูปใหญ่เกินไป (เกิน 4 MB) — ลองถ่ายหน้าจอรูปนี้แล้วส่งภาพที่แคปมาแทน')
+      }
+      setNote('⏳ กำลังส่งรูป...')
       const fd = new FormData()
-      fd.append('file', file)
+      fd.append('file', toSend)
       fd.append('conversationId', convId)
-      const upRes = await fetch('/api/inbox/upload', { method: 'POST', body: fd })
+      const upRes = await fetchWithTimeout('/api/inbox/upload', { method: 'POST', body: fd }, UPLOAD_TIMEOUT_MS)
+      // 413 = Vercel/route ตีกลับเพราะไฟล์ใหญ่ บางทีตอบเป็น text ไม่ใช่ JSON → บอกสาเหตุจริงให้แอดมิน
+      if (upRes.status === 413) throw new Error('รูปใหญ่เกินไป — ลองถ่ายหน้าจอรูปนี้แล้วส่งภาพที่แคปมาแทน')
       const upData = await upRes.json().catch(() => ({}))
       if (!upRes.ok || !upData.url) throw new Error(upData.error || 'อัปโหลดรูปไม่สำเร็จ')
 
-      // อัปโหลดเสร็จ → เอาฟองตัวอย่างออก แล้วส่งจริงด้วย URL ถาวร
-      setMessages(prev => prev.filter(m => m.id !== tempId))
-      URL.revokeObjectURL(previewUrl)
-      setUploading(false)
-      await sendImageUrl(upData.url)
+      // ใช้ฟองเดิมต่อ + ใช้ไฟล์ในเครื่องแสดงผล (ไม่ต้องโหลดรูปเดิมกลับมาจากเน็ตอีกรอบ)
+      rememberLocalPreview(upData.url, previewUrl)
+      setNote('')
+      setBusy(uploadingConvsRef, convId, false)
+      await sendImageUrl(upData.url, { convId, existingId: tempId, conv: convSnap })
       return
     } catch (e: any) {
-      const msg = friendlyError(e?.message)
+      const msg = isAbortError(e) ? 'อัปโหลดรูปใช้เวลานานเกินไป — ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่' : friendlyError(e?.message)
       if (isThis()) {
         setErrorBanner(msg)
-        // เก็บไฟล์ไว้ให้ "ส่งอีกครั้ง" อัปโหลดใหม่ได้ (blob: URL ส่งตรงไป server ไม่ได้)
-        pendingFilesRef.current.set(tempId, { file, url: previewUrl })
-        setMessages(prev => prev.map(m => m.id === tempId
-          ? { ...m, delivery_status: 'failed', error_message: msg, local_only: true } : m))
+        // เก็บไฟล์ที่ย่อแล้วไว้ให้ "ส่งอีกครั้ง" อัปใหม่ได้เลย (blob: URL ส่งตรงไป server ไม่ได้)
+        pendingFilesRef.current.set(tempId, { file: toSend, url: previewUrl })
+        upsertMsg(tempId, {
+          id: tempId, conversation_id: convId, direction: 'outbound', message_text: null,
+          attachments: [{ type: 'image', url: previewUrl }], sent_by: 'page_user',
+          delivery_status: 'failed', error_message: msg, local_only: true, status_note: '',
+          created_at: new Date().toISOString(),
+        })
+        // ไม่ revoke ทันที — ต้องให้ preview ยังแสดงได้ตอนรอผู้ใช้กดส่งอีกครั้ง
+      } else {
+        // ออกจากแชทไปแล้ว ฟองถูกล้างทิ้งไปพร้อมจอ → คืน blob ไม่ให้ค้างในหน่วยความจำ + บอกว่าส่งไม่ถึง
+        try { URL.revokeObjectURL(previewUrl) } catch {}
+        setToast({
+          msg: `ส่งรูปถึง ${convName} ไม่สำเร็จ — เปิดแชทแล้วเลือกรูปใหม่อีกครั้ง`,
+          action: { label: 'เปิดแชท', run: () => loadMessages(convSnap) },
+          sticky: true,
+        })
       }
-      // ไม่ revoke ทันที — ต้องให้ preview ยังแสดงได้ตอนรอผู้ใช้กดส่งอีกครั้ง
+    } finally {
+      setBusy(uploadingConvsRef, convId, false)
     }
-    setUploading(false)
   }
 
   // ── AI Suggest ──
@@ -1055,14 +1849,19 @@ export default function InboxPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ conversationId: convId, instruction }),
       })
-      const data = await res.json()
+      // route หมดเวลา (maxDuration) → Vercel ตอบเป็น HTML ไม่ใช่ JSON
+      // ถ้า parse ตรงๆ แอดมินจะเห็น "Unexpected token 'A'..." ซึ่งไม่มีใครรู้ว่าต้องทำอะไรต่อ
+      const data: any = await res.json().catch(() => null)
       if (!isThis()) return                            // เปิดแชทอื่นไปแล้ว — ทิ้งผล
-      if (data.suggestions?.length) {
+      if (res.ok && data?.suggestions?.length) {
         setAiSuggestions(data.suggestions)
         setActiveConv((c: any) => c && c.id === convId
           ? { ...c, ai_category: data.category, ai_sentiment: data.sentiment, ai_summary: data.summary } : c)
       } else {
-        setErrorBanner(friendlyError(data.error) || 'AI ยังสร้างคำแนะนำไม่ได้ ลองใหม่อีกครั้ง')
+        const fallback = (res.status === 504 || res.status === 502)
+          ? 'AI ใช้เวลานานเกินไป — ลองกดใหม่อีกครั้ง'
+          : 'AI ยังสร้างคำแนะนำไม่ได้ ลองใหม่อีกครั้ง'
+        setErrorBanner(data?.error ? friendlyError(data.error) : fallback)
       }
     } catch (e: any) {
       if (isThis()) setErrorBanner(friendlyError(e?.message))
@@ -1115,6 +1914,11 @@ export default function InboxPage() {
   const sumUnread = (arr: any[]) => arr.reduce((s, p) => s + (unreadByPage[p.id] || 0), 0)
   const channelUnread = sumUnread(channelPages)
   const channelNeedsReply = channelPages.reduce((s, p) => s + (needsReplyByPage[p.id] || 0), 0)
+  // จำนวน "แชทอื่น" ที่มีข้อความใหม่ — บนมือถือ เปิดแชทอยู่จะไม่เห็นรายการเลย
+  // ต้องมีตัวเลขบนปุ่มย้อนกลับ ไม่งั้นลูกค้าคนอื่นทักมาแล้วรอเป็นสิบนาทีกว่าแอดมินจะรู้
+  // (ตัวเลขนี้นับเป็น "จำนวนแชท" ไม่ใช่จำนวนข้อความ → แชทที่เปิดอยู่หักออก 1)
+  const activeConvRow = activeConv ? conversations.find((c: any) => c.id === activeConv.id) : null
+  const otherUnread = Math.max(0, channelUnread - (activeConvRow && (activeConvRow.unread_count || 0) > 0 && !activeConvRow.is_archived ? 1 : 0))
 
   // ขอบเขตที่แอดมิน "เห็นอยู่จริง" — เลือกเพจอยู่ = เฉพาะเพจนั้น ไม่ใช่ทั้งช่องทาง
   const scopedUnread = pageFilter ? (unreadByPage[pageFilter] || 0) : channelUnread
@@ -1149,12 +1953,35 @@ export default function InboxPage() {
   const fbPages = pages.filter(p => channelOf(p) === 'facebook')
   const linePages = pages.filter(p => channelOf(p) === 'line')
 
-  // ล้างสถานะแชทที่เปิดอยู่ทั้งหมด (รวม openReqRef กันผลโหลดเก่าเด้งเปิดเองทีหลัง)
-  const clearOpenChat = () => {
+  // ล้างสถานะแชทที่เปิดอยู่ทั้งหมด (รวม openReqRef/openSeqRef กันผลโหลดเก่าเด้งเปิดเองทีหลัง)
+  const resetOpenChat = () => {
+    stashDraft()   // กดย้อนกลับแล้วที่พิมพ์ค้างไว้ต้องอยู่ครบตอนเปิดแชทนี้ใหม่
+    openSeqRef.current++
     openReqRef.current = ''
-    setActiveConv(null); setMessages([]); setDraft('')
+    lastMsgIdRef.current = null
+    draftValueRef.current = ''
+    setNewMsgCount(0)
+    setActiveConv(null); setMessages([])
     setAiSuggestions([]); setErrorBanner(null); setShowChatMenu(false)
   }
+  // ปิดแชท + ถอยรายการ history ที่เพิ่มไว้ตอนเปิดแชท
+  // ไม่ถอย = แอดมินกดปุ่มย้อนกลับของเครื่องครั้งแรกแล้วไม่มีอะไรเกิดขึ้น (ต้องกด 2 ครั้งถึงจะออก)
+  const clearOpenChat = () => {
+    resetOpenChat()
+    try { if ((window.history.state as any)?.ibChat) window.history.back() } catch {}
+  }
+  // ปุ่มย้อนกลับของเครื่อง/ปัดขอบจอ → ปิดแชทที่เปิดอยู่ก่อน ไม่ใช่ออกจากกล่องข้อความไปเลย
+  const resetOpenChatRef = useRef(resetOpenChat)
+  resetOpenChatRef.current = resetOpenChat
+  useEffect(() => {
+    const onPop = (e: PopStateEvent) => {
+      if ((e.state as any)?.ibChat) return   // ยังอยู่ชั้น "เปิดแชท" (เช่นกดเดินหน้า)
+      if (!openReqRef.current) return
+      resetOpenChatRef.current()
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
   const pickChannel = (ch: 'facebook' | 'line') => {
     setChannelFilter(ch); setPageFilter(''); clearOpenChat()
   }
@@ -1190,17 +2017,55 @@ export default function InboxPage() {
   // กรองฝั่ง client ต่อไปจนกว่าผลจาก server จะมาถึงจริง (ไม่ใช่แค่ debounce ครบ)
   // ไม่งั้นลิสต์เก่าที่ยังไม่กรองจะเด้งขึ้นมาแทนผลค้นหา 1 จังหวะ
   const searchPending = search.trim() !== debouncedSearch || loadingList
-  const filteredConvs = conversations.filter(c => {
+  // useMemo: หน้านี้วาดใหม่บ่อยมาก (toast, ตัวเลขใหม่, กำลังส่ง ฯลฯ) — ไม่ต้องกรองรายการใหม่ทุกครั้ง
+  const filteredConvs = useMemo(() => conversations.filter(c => {
     if (channelFilter && (c.connected_pages?.channel || 'facebook') !== channelFilter) return false
     if (pageFilter && c.page_id !== pageFilter) return false
     if (!searchPending || !search.trim()) return true
     const s = search.trim().toLowerCase()
     return (c.customer_name || '').toLowerCase().includes(s)
       || (c.last_message || '').toLowerCase().includes(s)
-  })
+  }), [conversations, channelFilter, pageFilter, searchPending, search])
+
+  // ── callback ที่ "ไม่เปลี่ยนตัวตน" ให้แถวรายการแชท/ฟองข้อความที่ห่อด้วย React.memo ──
+  // ถ้าสร้างใหม่ทุกครั้งที่วาด memo จะไร้ผล (props เปลี่ยนทุกรอบ) แล้วทุกตัวอักษรที่พิมพ์
+  // จะสั่งวาดฟองข้อความเป็นร้อยฟอง + รายการแชทอีกหลายสิบแถวใหม่ทั้งหมด
+  const openConvRef = useRef<(c: any) => void>(() => {})
+  openConvRef.current = (c: any) => {
+    rememberListScroll()
+    // แตะแชทที่เปิดอยู่แล้ว = ไม่ต้องล้างจอ/ลบที่พิมพ์ค้างไว้ แค่ดึงข้อความใหม่เงียบๆ
+    // (ยกเว้นตอนโหลดไม่สำเร็จ — ตรงนั้นแอดมินตั้งใจกดเพื่อ "ลองเข้าแชทใหม่")
+    if (activeConv?.id === c.id && !errorBanner) { loadMessagesSilentRef.current?.(); return }
+    loadMessages(c)
+  }
+  const onOpenConv = useCallback((c: any) => openConvRef.current(c), [])
+  const retryRef = useRef<(m: any) => void>(() => {})
+  retryRef.current = retryMessage
+  const onRetryMsg = useCallback((m: any) => { retryRef.current(m) }, [])
+  const discardRef = useRef<(m: any) => void>(() => {})
+  discardRef.current = discardFailed
+  const onDiscardMsg = useCallback((m: any) => { discardRef.current(m) }, [])
+  // ค่าที่ทุกฟองใช้ร่วมกัน — คำนวณครั้งเดียวต่อแชท ไม่ใช่ทุกฟองทุกครั้งที่วาด
+  const activeCustomerPic = useMemo(() => customerAvatarSrc(activeConv), [activeConv])
+  const activeFbInboxUrl = useMemo(() => facebookInboxUrl(activeConv), [activeConv])
+  // ข้อความบันทึกที่ "ผูกกับเพจ" ต้องขึ้นเฉพาะแชทของเพจนั้น
+  // แอดมินที่ดูแล 2 ร้าน เดิมเห็นของร้าน A ตอนตอบลูกค้าร้าน B → ส่งเลขบัญชีผิดร้านให้ลูกค้า
+  // (ข้อความที่ไม่ได้ผูกเพจยังขึ้นทุกแชทเหมือนเดิม — ฝั่ง API ยังไม่ได้บอกว่าเพจนี้เจ้าของคือใคร)
+  const repliesForActive = useMemo(
+    () => (activeConv?.page_id ? quickReplies.filter(qr => !qr.page_id || qr.page_id === activeConv.page_id) : quickReplies),
+    [quickReplies, activeConv?.page_id],
+  )
+  // ช่องพิมพ์: โฟกัสแล้วเลื่อนลงท้ายแชท (เลื่อนตัวคอลัมน์เอง ไม่ใช่ scrollIntoView ที่ลาก .ib-main ไปด้วย)
+  const onComposerFocus = useCallback(() => {
+    setTimeout(() => { const el = msgPaneRef.current; if (el) el.scrollTop = el.scrollHeight }, 350)
+  }, [])
+  const sendRef = useRef<() => void>(() => {})
+  sendRef.current = () => { handleSend() }
+  const onComposerSend = useCallback(() => { sendRef.current() }, [])
 
   return (
     <div className="ib-root" data-active={activeConv ? '1' : '0'} style={{ minHeight: '100vh', width: '100%', maxWidth: '100vw', background: BG, color: TEXT, fontFamily: 'Inter, "Sarabun", system-ui, sans-serif', position: 'relative', overflow: 'hidden', overscrollBehavior: 'none' }}>
+      <style dangerouslySetInnerHTML={{ __html: INBOX_CSS }} />
       {/* Background pattern */}
       <div style={{ position: 'fixed', inset: 0, zIndex: 0, pointerEvents: 'none', backgroundImage: `linear-gradient(rgba(24,119,242,0.045) 1px, transparent 1px), linear-gradient(90deg, rgba(24,119,242,0.045) 1px, transparent 1px)`, backgroundSize: '48px 48px' }} />
 
@@ -1238,7 +2103,7 @@ export default function InboxPage() {
         <div style={{ fontSize: 10, color: MUTED, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.8, padding: '6px 10px 4px' }}>เมนูหลัก</div>
 
         <NavItem icon={<MessageSquare size={15} />} label="กล่องข้อความ" active badge={channelUnread} />
-        <button onClick={() => setShowSettings(true)} style={{ all: 'unset', display: 'block', cursor: 'pointer' }}>
+        <button onClick={() => { setSettingsTab('general'); setShowSettings(true) }} style={{ all: 'unset', display: 'block', cursor: 'pointer' }}>
           <NavItem icon={<Settings size={15} />} label="ตั้งค่าแชท" />
         </button>
         {canManageChannels && (
@@ -1360,7 +2225,7 @@ export default function InboxPage() {
                 })}
               </div>
             )}
-            <div style={{
+            <div ref={pagebarScrollRef} style={{
               display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8,
               maxWidth: 980,
             }}>
@@ -1477,15 +2342,25 @@ export default function InboxPage() {
                 </div>
                 <h1 style={{ fontSize: 17, fontWeight: 900, margin: 0, color: TEXT, letterSpacing: '-0.3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>กล่องข้อความ</h1>
               </div>
-              {(syncing || pageSyncing) && (
-                <div title="กำลัง sync จาก Facebook" style={{
-                  display: 'flex', alignItems: 'center', gap: 5,
-                  fontSize: 10, color: MUTED, fontWeight: 700, flexShrink: 0,
-                }}>
-                  <RefreshCw size={11} style={{ animation: 'spin 1s linear infinite' }} />
-                  ซิงค์...
-                </div>
-              )}
+              {/* ดึงข้อความใหม่เดี๋ยวนี้ — ระบบดึงให้เองทุก ~1 นาทีอยู่แล้ว แต่ช่วงลูกค้าสั่งรัวๆ แอดมินอยากกดเองให้แน่ใจ
+                  (หน้านี้ล็อกการเลื่อนไว้ "ลากลงเพื่อรีเฟรช" แบบแอปอื่นจึงใช้ไม่ได้) */}
+              <button
+                onClick={manualSync}
+                disabled={syncing || pageSyncing}
+                title="ดึงข้อความใหม่จาก Facebook"
+                aria-label="ดึงข้อความใหม่จาก Facebook"
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0,
+                  padding: '8px 11px', minHeight: 38, borderRadius: 10,
+                  border: `1.5px solid ${BORDER2}`, background: SURFACE2,
+                  color: syncing || pageSyncing ? MUTED : PRIMARY,
+                  fontSize: 11.5, fontWeight: 800, fontFamily: 'inherit',
+                  cursor: syncing || pageSyncing ? 'wait' : 'pointer', whiteSpace: 'nowrap',
+                }}
+              >
+                <RefreshCw size={13} style={(syncing || pageSyncing) ? { animation: 'spin 1s linear infinite' } : undefined} />
+                {(syncing || pageSyncing) ? 'ซิงค์...' : 'ดึงข้อความใหม่'}
+              </button>
               {/* ปุ่ม "อ่านแล้ว" ใช้เฉพาะ LINE (LINE ไม่ส่งสถานะอ่านจาก OA Manager มาให้) — Facebook ไม่ต้องมี */}
               {LINE_ENABLED && channelFilter === 'line' && scopedUnread > 0 && (
                 <button
@@ -1584,8 +2459,36 @@ export default function InboxPage() {
             </div>
           </div>
 
+          {/* แจ้งปัญหาการดึงข้อมูลเบื้องหลัง — อยู่เหนือรายการแชท ไม่ไปทับแบนเนอร์ในห้องแชท */}
+          {syncNotice && (
+            <div style={{
+              display: 'flex', alignItems: 'flex-start', gap: 8,
+              padding: '10px 14px', background: '#fff4e5', borderBottom: '1px solid rgba(245,158,11,0.35)',
+              fontSize: 12, color: '#92400e', fontWeight: 700, lineHeight: 1.55,
+            }}>
+              <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 2 }} />
+              <div style={{ flex: 1 }}>{syncNotice.text}</div>
+              <button
+                onClick={() => { dismissedSyncSigRef.current = syncNotice.sig; setSyncNotice(null) }}
+                aria-label="ปิดข้อความแจ้งเตือน" title="ปิด"
+                style={{ all: 'unset', cursor: 'pointer', padding: 4, display: 'flex', flexShrink: 0 }}
+              ><X size={15} /></button>
+            </div>
+          )}
+          {/* โหลดรายการแชทไม่สำเร็จ ทั้งที่ยังมีรายการเก่าค้างอยู่บนจอ — บอกว่าที่เห็นอาจไม่ใช่ล่าสุด */}
+          {listError && filteredConvs.length > 0 && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '9px 14px', background: RED_L, borderBottom: `1px solid ${RED}33`,
+              fontSize: 12, color: RED, fontWeight: 700,
+            }}>
+              <AlertCircle size={14} style={{ flexShrink: 0 }} />
+              <div style={{ flex: 1 }}>{listError}</div>
+            </div>
+          )}
+
           {/* List */}
-          <div style={{ flex: 1, overflowY: 'auto' }}>
+          <div ref={listScrollRef} style={{ flex: 1, overflowY: 'auto' }}>
             {(loadingList || pageSyncing) && filteredConvs.length === 0 && !search.trim() ? (
               <div style={{ padding: 40, textAlign: 'center', color: MUTED, fontSize: 12 }}>
                 <RefreshCw size={18} style={{ animation: 'spin 1s linear infinite', marginBottom: 8 }} />
@@ -1610,12 +2513,28 @@ export default function InboxPage() {
                   title="ไม่มีแชทในตัวกรองนี้"
                   hint="ลองกด 'ทั้งหมด' เพื่อดูแชททุกรายการ"
                 />
+              ) : listError && !listEverLoadedRef.current ? (
+                // โหลดรอบแรกไม่สำเร็จ ≠ ไม่มีเพจ — เดิมขึ้น "ยังไม่มีเพจที่เชื่อมต่อ" ทำให้เข้าใจผิดว่าเพจหลุด
+                <div style={{ padding: 40, textAlign: 'center', color: MUTED }}>
+                  <div style={{ marginBottom: 10, opacity: 0.45 }}><AlertCircle size={36} /></div>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: TEXT, marginBottom: 4 }}>โหลดรายการแชทไม่สำเร็จ</div>
+                  <div style={{ fontSize: 11, lineHeight: 1.6, maxWidth: 240, margin: '0 auto 12px' }}>
+                    ตรวจสอบอินเทอร์เน็ตแล้วกด "ลองใหม่" — ข้อมูลแชทยังอยู่ครบ
+                  </div>
+                  <button
+                    onClick={() => loadConvRef.current()}
+                    style={{ ...btnPrimary, padding: '10px 20px', fontSize: 13, minHeight: 42 }}
+                  >ลองใหม่</button>
+                </div>
               ) : (
                 <EmptyState
                   icon={<Inbox size={36} />}
                   title={pages.length === 0 ? 'ยังไม่มีเพจที่เชื่อมต่อ' : 'ยังไม่มีข้อความ'}
                   hint={pages.length === 0
-                    ? (canManageChannels ? (LINE_ENABLED ? 'ไปที่เมนู "ช่องทางแชท" เพื่อเชื่อมต่อเพจหรือ LINE OA' : 'ไปที่เมนู "ช่องทางแชท" เพื่อเชื่อมเพจ Facebook') : 'ให้เจ้าของเพจมอบสิทธิ์เพจให้คุณก่อน')
+                    // canManageChannels = null คือยังไม่รู้สิทธิ์ (กำลังถาม server อยู่) — ห้ามบอกว่าไม่มีสิทธิ์
+                    ? (canManageChannels === null ? 'กำลังตรวจสอบสิทธิ์ของคุณ — สักครู่'
+                      : canManageChannels ? (LINE_ENABLED ? 'ไปที่เมนู "ช่องทางแชท" เพื่อเชื่อมต่อเพจหรือ LINE OA' : 'ไปที่เมนู "ช่องทางแชท" เพื่อเชื่อมเพจ Facebook')
+                      : 'ให้เจ้าของเพจมอบสิทธิ์เพจให้คุณก่อน')
                     : 'เพจนี้ยังไม่มีบทสนทนา หรือลูกค้ายังไม่ได้ทักเข้ามา'}
                 />
               )
@@ -1626,7 +2545,7 @@ export default function InboxPage() {
                     key={c.id}
                     conv={c}
                     active={activeConv?.id === c.id}
-                    onClick={() => loadMessages(c)}
+                    onOpen={onOpenConv}
                   />
                 ))}
                 {/* โหลดเพิ่ม — เดิมตันที่ 50 รายการ เลื่อนสุดแล้วจบดื้อๆ หาลูกค้าเก่าไม่เจอ */}
@@ -1670,15 +2589,16 @@ export default function InboxPage() {
                 borderBottom: `1.5px solid ${BORDER}`,
                 borderTop: `4px solid ${pageColor(activeConv.page_id).border}`,
                 display: 'flex', alignItems: 'center', gap: 10, boxShadow: SHADOW_SM,
-                position: 'relative',
+                position: 'relative', flexShrink: 0,
               }}>
                 <button
                   onClick={clearOpenChat}
                   className="ib-back"
-                  title="กลับไปเลือกแชทอื่น"
-                  aria-label="กลับไปเลือกแชทอื่น"
+                  title={otherUnread > 0 ? `กลับไปเลือกแชทอื่น (มีแชทใหม่ ${otherUnread})` : 'กลับไปเลือกแชทอื่น'}
+                  aria-label={otherUnread > 0 ? `กลับไปเลือกแชทอื่น มีแชทใหม่ ${otherUnread} แชท` : 'กลับไปเลือกแชทอื่น'}
                   style={{
                     display: 'none', alignItems: 'center', justifyContent: 'center',
+                    position: 'relative',
                     width: 40, height: 40, flexShrink: 0, borderRadius: 11,
                     background: pageColor(activeConv.page_id).bg,
                     color: pageColor(activeConv.page_id).text,
@@ -1687,6 +2607,15 @@ export default function InboxPage() {
                   }}
                 >
                   <ChevronLeft size={22} strokeWidth={2.6} />
+                  {/* บนมือถือ เปิดแชทอยู่จะไม่เห็นรายการเลย — ตัวเลขนี้คือสัญญาณเดียวว่ามีลูกค้าคนอื่นรออยู่ */}
+                  {otherUnread > 0 && (
+                    <span style={{
+                      position: 'absolute', top: -6, right: -6, minWidth: 18, height: 18, padding: '0 5px',
+                      borderRadius: 999, background: RED, color: 'white', fontSize: 10.5, fontWeight: 900,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      border: '2px solid white', lineHeight: 1,
+                    }}>{otherUnread > 99 ? '99+' : otherUnread}</span>
+                  )}
                 </button>
                 <Avatar name={activeConv.customer_name} src={customerAvatarSrc(activeConv)} size={40} ringColor={pageColor(activeConv.page_id).border} />
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -1837,8 +2766,17 @@ export default function InboxPage() {
               )}
 
               {/* Messages */}
-              <div style={{ flex: 1, overflowY: 'auto', padding: '20px 18px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {loadingMessages ? (
+              <div
+                ref={msgPaneRef}
+                onScroll={e => {
+                  const el = e.currentTarget
+                  nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+                  if (nearBottomRef.current && newMsgCount > 0) setNewMsgCount(0)
+                }}
+                style={{ flex: 1, overflowY: 'auto', padding: '20px 18px', display: 'flex', flexDirection: 'column', gap: 8, position: 'relative' }}
+              >
+                {/* ระหว่างโหลดประวัติแชท ยังส่งข้อความได้ → ถ้ามีฟองอยู่แล้วต้องโชว์ ไม่ใช่ขึ้นสปินเนอร์ทับ */}
+                {loadingMessages && messages.length === 0 ? (
                   <div style={{ textAlign: 'center', padding: 40, color: MUTED }}>
                     <RefreshCw size={18} style={{ animation: 'spin 1s linear infinite' }} />
                   </div>
@@ -1851,12 +2789,34 @@ export default function InboxPage() {
                     key={m.id || i}
                     message={m}
                     customerName={activeConv.customer_name}
-                    customerPic={customerAvatarSrc(activeConv)}
-                    fbInboxUrl={facebookInboxUrl(activeConv)}
-                    onDiscard={discardFailed}
-                    onRetry={(retriedTick >= 0 && retriedRef.current.has(retryKeyOf(activeConv.id, m))) ? undefined : retryMessage}
+                    customerPic={activeCustomerPic}
+                    fbInboxUrl={activeFbInboxUrl}
+                    onDiscard={onDiscardMsg}
+                    onRetry={onRetryMsg}
+                    // ส่งเป็น true/false แทนการสลับ callback → props ของฟองไม่เปลี่ยนตัวตนทุกครั้งที่วาด
+                    canRetry={!(retriedTick >= 0 && retriedRef.current.has(retryKeyOf(activeConv.id, m)))}
+                    onMediaReady={onMediaReady}
                   />
                 ))}
+                {/* ลูกค้าตอบมาตอนกำลังเลื่อนอ่านข้อความเก่า → ไม่กระชากจอ แต่ต้องรู้ว่ามีของใหม่อยู่ข้างล่าง */}
+                {newMsgCount > 0 && (
+                  <button
+                    onClick={() => {
+                      const el = msgPaneRef.current
+                      if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+                      nearBottomRef.current = true
+                      setNewMsgCount(0)
+                    }}
+                    style={{
+                      position: 'sticky', bottom: 8, alignSelf: 'center', zIndex: 5,
+                      padding: '9px 16px', minHeight: 40, borderRadius: 999, border: 'none',
+                      background: PRIMARY, color: 'white', fontWeight: 800, fontSize: 12.5,
+                      fontFamily: 'inherit', cursor: 'pointer', boxShadow: '0 6px 18px rgba(11,95,204,0.4)',
+                    }}
+                  >
+                    มีข้อความใหม่ {newMsgCount > 99 ? '99+' : newMsgCount} ข้อความ ↓
+                  </button>
+                )}
                 <div ref={messagesEndRef} />
               </div>
 
@@ -1865,6 +2825,11 @@ export default function InboxPage() {
                 <div style={{
                   padding: '12px 18px', background: 'linear-gradient(135deg, #eaf2fd, #dcebff)',
                   borderTop: `1px solid ${BORDER2}`,
+                  // คำแนะนำ 3 ข้อสูงเกือบ 300px — พอคีย์บอร์ดเด้ง จอเหลือ ~360px
+                  // ถ้าไม่จำกัดความสูง แถวช่องพิมพ์กับปุ่ม "ส่ง" จะถูกดันตกจอ พิมพ์ต่อเองไม่ได้
+                  flex: '0 1 auto', minHeight: 0,
+                  maxHeight: 'calc(var(--app-height, 100vh) * 0.4)',
+                  overflowY: 'auto', WebkitOverflowScrolling: 'touch',
                 }}>
                   <div style={{ fontSize: 12, fontWeight: 800, color: PRIMARY, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 5 }}>
                     <Sparkles size={13} />
@@ -1907,7 +2872,7 @@ export default function InboxPage() {
                   padding: '10px 18px', background: '#fff4e5',
                   borderTop: '1px solid rgba(245,158,11,0.3)',
                   fontSize: 12, color: '#92400e', fontWeight: 600, lineHeight: 1.55,
-                  display: 'flex', gap: 8, alignItems: 'flex-start',
+                  display: 'flex', gap: 8, alignItems: 'flex-start', flexShrink: 0,
                 }}>
                   <AlertCircle size={15} style={{ flexShrink: 0, marginTop: 1 }} />
                   <div>
@@ -1918,8 +2883,8 @@ export default function InboxPage() {
                 </div>
               )}
 
-              {/* Composer */}
-              <div style={{ padding: '10px 14px 14px', background: SURFACE, borderTop: `1.5px solid ${BORDER}` }}>
+              {/* Composer — flexShrink: 0 กันโดนบีบตกจอตอนคีย์บอร์ดเปิด */}
+              <div style={{ padding: '10px 14px 14px', background: SURFACE, borderTop: `1.5px solid ${BORDER}`, flexShrink: 0 }}>
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -1932,7 +2897,12 @@ export default function InboxPage() {
                   <div className="ib-composer-actions">
                     {/* ข้อความตอบกลับที่บันทึกไว้ (saved replies) */}
                     <button
-                      onClick={() => setShowSavedReplies(true)}
+                      onClick={() => {
+                        setShowSavedReplies(true)
+                        // โหลดรอบก่อนพลาด (เน็ตหลุดตอนเปิดแอป) หรือรายการที่ถืออยู่เป็นของเพจอื่น → โหลดใหม่ตามเพจของแชทนี้
+                        const qrPage = activeConv.page_id || ''
+                        if (qrLoadFailed || quickReplies.length === 0 || qrLoadedForRef.current !== qrPage) loadQuickReplies(qrPage)
+                      }}
                       className="ib-composer-grow"
                       title="ข้อความตอบกลับที่บันทึกไว้"
                       aria-label="ข้อความตอบกลับที่บันทึกไว้"
@@ -1982,45 +2952,17 @@ export default function InboxPage() {
                     )}
                   </div>
 
-                  <div className="ib-composer-input">
-                    <textarea
-                      ref={draftRef}
-                      value={draft}
-                      onChange={e => setDraft(e.target.value)}
-                      onKeyDown={e => {
-                        // Enter = ส่ง เฉพาะบนคอม (มีเมาส์/คีย์บอร์ดจริง)
-                        // บนมือถือ Enter = ขึ้นบรรทัดใหม่ (ไม่งั้นพิมพ์หลายบรรทัดไม่ได้)
-                        if (e.key === 'Enter' && !e.shiftKey && isDesktop) {
-                          e.preventDefault()
-                          handleSend()
-                        }
-                      }}
-                      onFocus={() => { setTimeout(() => messagesEndRef.current?.scrollIntoView({ block: 'end' }), 350) }}
-                      placeholder="พิมพ์ข้อความ..."
-                      rows={1}
-                      aria-label="ช่องพิมพ์ข้อความตอบลูกค้า"
-                      className="ib-chat-input"
-                      style={{
-                        flex: 1, minWidth: 0, padding: '11px 14px', borderRadius: 12,
-                        border: `1.5px solid ${BORDER}`, background: SURFACE2,
-                        fontSize: 16, fontFamily: 'inherit', resize: 'none', outline: 'none',
-                        maxHeight: 140, overflowY: 'auto', color: TEXT, lineHeight: 1.5,
-                      }}
-                    />
-                    <button
-                      onClick={() => handleSend()}
-                      disabled={!draft.trim() || sending}
-                      style={{
-                        ...btnPrimary, padding: '11px 18px', display: 'flex', alignItems: 'center', gap: 6,
-                        fontSize: 13.5, flexShrink: 0, minHeight: 44,
-                        opacity: !draft.trim() || sending ? 0.5 : 1,
-                        cursor: !draft.trim() || sending ? 'not-allowed' : 'pointer',
-                      }}
-                    >
-                      {sending ? <RefreshCw size={15} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={15} />}
-                      ส่ง
-                    </button>
-                  </div>
+                  {/* key = ล้างช่องพิมพ์ให้เองเมื่อสลับแชท (ค่าเริ่มต้นดึงจากร่างที่เก็บไว้ของแชทนั้น) */}
+                  <Composer
+                    key={activeConv.id}
+                    initialText={draftsRef.current.get(activeConv.id) || ''}
+                    isDesktop={isDesktop}
+                    sending={sending}
+                    onSend={onComposerSend}
+                    onTextChange={onDraftChange}
+                    onFocusScroll={onComposerFocus}
+                    apiRef={composerApiRef}
+                  />
                 </div>
               </div>
             </>
@@ -2120,8 +3062,11 @@ export default function InboxPage() {
       {showSettings && (
         <SettingsModal
           pages={pages}
+          isOwner={isOwner === true}
+          initialTab={settingsTab}
           onClose={() => {
             setShowSettings(false)
+            setSettingsTab('general')
             // บังคับดึงค่าใหม่ → สวิตช์ "เปิดปุ่ม AI ช่วยตอบ" มีผลทันที แม้ยังเปิดแชทเดิมค้างอยู่
             setSettingsVer(v => v + 1)
           }}
@@ -2132,22 +3077,45 @@ export default function InboxPage() {
       {/* ข้อความตอบกลับที่บันทึกไว้ (saved replies) — เปิดจากปุ่ม + ในแถบพิมพ์ */}
       {showSavedReplies && (
         <div onClick={() => setShowSavedReplies(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.5)', zIndex: 210, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: SURFACE, width: '100%', maxWidth: 520, maxHeight: '72dvh', borderRadius: '20px 20px 0 0', display: 'flex', flexDirection: 'column', boxShadow: '0 -10px 40px rgba(15,23,42,0.25)' }}>
+          {/* --app-height มาจาก visualViewport: ใช้แทน dvh เพราะ iOS ต่ำกว่า 15.4 ไม่รู้จัก dvh
+              → ความสูงไม่ถูกจำกัด แผ่นจะสูงเลยขอบบน ปุ่ม "ยกเลิก"/"+ สร้าง" หลุดจอกดไม่ได้
+              ข้อดีอีกอย่าง: ค่านี้หดตามคีย์บอร์ดด้วย */}
+          <div onClick={e => e.stopPropagation()} style={{ background: SURFACE, width: '100%', maxWidth: 520, maxHeight: 'calc(var(--app-height, 100vh) * 0.72)', borderRadius: '20px 20px 0 0', display: 'flex', flexDirection: 'column', boxShadow: '0 -10px 40px rgba(15,23,42,0.25)' }}>
             <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 10 }}>
               <div style={{ width: 44, height: 5, borderRadius: 3, background: '#cbd5e1' }} />
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 18px 12px', borderBottom: `1px solid ${BORDER}` }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 18px 12px', borderBottom: `1px solid ${BORDER}`, flexShrink: 0 }}>
               <button onClick={() => setShowSavedReplies(false)} style={{ background: 'transparent', border: 'none', color: MUTED, fontWeight: 800, fontSize: 14, cursor: 'pointer', fontFamily: 'inherit' }}>ยกเลิก</button>
               <div style={{ fontSize: 14.5, fontWeight: 900, color: TEXT }}>ข้อความตอบกลับที่บันทึกไว้</div>
-              <button onClick={() => { setShowSavedReplies(false); setShowSettings(true) }} style={{ background: 'transparent', border: 'none', color: PRIMARY, fontWeight: 800, fontSize: 14, cursor: 'pointer', fontFamily: 'inherit' }}>+ สร้าง</button>
+              {/* เพิ่ม/ลบข้อความบันทึกได้เฉพาะเจ้าของเพจ (API ตีกลับ 403) — ลูกทีมกดแล้วจะงงว่าทำไมไม่มีอะไรเกิดขึ้น */}
+              {isOwner
+                ? <button onClick={() => { setShowSavedReplies(false); setSettingsTab('qr'); setShowSettings(true) }} style={{ background: 'transparent', border: 'none', color: PRIMARY, fontWeight: 800, fontSize: 14, cursor: 'pointer', fontFamily: 'inherit' }}>+ สร้าง</button>
+                : <span style={{ width: 52 }} />}
             </div>
-            <div style={{ overflowY: 'auto', padding: '4px 0 calc(16px + env(safe-area-inset-bottom))' }}>
-              {quickReplies.length === 0 ? (
+            {/* minHeight: 0 → ส่วนนี้คือส่วนที่ย่อและเลื่อนเอง หัวแผ่นกับปุ่มด้านบนจะไม่ถูกดันหลุดจอ */}
+            <div style={{ overflowY: 'auto', minHeight: 0, flex: 1, padding: '4px 0 calc(16px + env(safe-area-inset-bottom))' }}>
+              {repliesForActive.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '40px 24px', color: MUTED, fontSize: 13, lineHeight: 1.8 }}>
-                  ยังไม่มีข้อความบันทึกไว้<br />
-                  <span style={{ fontSize: 12 }}>กด "+ สร้าง" เพื่อเพิ่มข้อความตอบกลับที่ใช้บ่อย</span>
+                  {qrLoadFailed ? (
+                    <>
+                      โหลดข้อความบันทึกไม่สำเร็จ<br />
+                      <button
+                        onClick={() => loadQuickReplies(activeConv?.page_id || '')}
+                        style={{ marginTop: 10, padding: '9px 16px', minHeight: 40, fontSize: 12.5, fontWeight: 800, borderRadius: 10, border: `1.5px solid ${BORDER}`, background: SURFACE2, color: PRIMARY, cursor: 'pointer', fontFamily: 'inherit' }}
+                      >
+                        ลองใหม่อีกครั้ง
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      ยังไม่มีข้อความบันทึกไว้<br />
+                      <span style={{ fontSize: 12 }}>
+                        {isOwner ? 'กด "+ สร้าง" เพื่อเพิ่มข้อความตอบกลับที่ใช้บ่อย' : 'ให้เจ้าของเพจเพิ่มให้ที่เมนู "ตั้งค่าแชท"'}
+                      </span>
+                    </>
+                  )}
                 </div>
-              ) : quickReplies.map(qr => (
+              ) : repliesForActive.map(qr => (
                 <button
                   key={qr.id}
                   onClick={() => { insertIntoDraft(qr.message); setShowSavedReplies(false) }}
@@ -2168,7 +3136,7 @@ export default function InboxPage() {
       {/* Rename page nickname modal */}
       {renamePage && (
         <div
-          onClick={() => setRenamePage(null)}
+          onClick={() => { setRenamePage(null); setNicknameError(null) }}
           style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', backdropFilter: 'blur(6px)', zIndex: 250, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
         >
           <div onClick={(e) => e.stopPropagation()} style={{ background: SURFACE, borderRadius: 20, padding: 24, width: '100%', maxWidth: 400, boxShadow: '0 24px 70px rgba(15,23,42,0.3)' }}>
@@ -2191,7 +3159,11 @@ export default function InboxPage() {
               type="text"
               value={nicknameDraft}
               onChange={(e) => setNicknameDraft(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') saveNickname() }}
+              onKeyDown={(e) => {
+                // ยัง "เลือกคำ" จาก IME อยู่ → Enter คือยืนยันคำ ไม่ใช่กดบันทึก
+                if (e.nativeEvent.isComposing || e.keyCode === 229) return
+                if (e.key === 'Enter') saveNickname()
+              }}
               placeholder={renamePage.page_name}
               maxLength={60}
               style={{
@@ -2200,6 +3172,16 @@ export default function InboxPage() {
                 fontFamily: 'inherit', background: SURFACE2, boxSizing: 'border-box', marginBottom: 14, color: TEXT,
               }}
             />
+            {nicknameError && (
+              <div role="alert" style={{
+                display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12,
+                padding: '9px 11px', background: RED_L, border: `1px solid ${RED}44`, borderRadius: 10,
+                fontSize: 12, fontWeight: 700, color: RED, lineHeight: 1.5,
+              }}>
+                <AlertCircle size={14} style={{ flexShrink: 0 }} />
+                <span style={{ flex: 1 }}>{nicknameError}</span>
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 8 }}>
               <button
                 onClick={() => { setNicknameDraft(''); }}
@@ -2209,7 +3191,7 @@ export default function InboxPage() {
                 ล้าง
               </button>
               <button
-                onClick={() => setRenamePage(null)}
+                onClick={() => { setRenamePage(null); setNicknameError(null) }}
                 style={{ flex: 1, padding: '11px 14px', fontSize: 13, fontWeight: 800, background: SURFACE2, color: TEXT, border: `1.5px solid ${BORDER}`, borderRadius: 11, cursor: 'pointer', fontFamily: 'inherit' }}
               >
                 ยกเลิก
@@ -2257,7 +3239,7 @@ export default function InboxPage() {
               </div>
             )}
             <button
-              onClick={() => { setShowMobileMenu(false); setShowSettings(true) }}
+              onClick={() => { setShowMobileMenu(false); setSettingsTab('general'); setShowSettings(true) }}
               style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '14px 12px', background: 'transparent', border: 'none', borderBottom: `1px solid ${BORDER}`, cursor: 'pointer', fontFamily: 'inherit', fontSize: 14, fontWeight: 700, color: TEXT, textAlign: 'left' }}
             >
               <Settings size={17} color={PRIMARY} /> ตั้งค่าแชท
@@ -2346,174 +3328,24 @@ export default function InboxPage() {
               เลิกทำ
             </button>
           )}
+          {toast.action && (
+            <button
+              onClick={() => { const a = toast.action!; setToast(null); a.run() }}
+              style={{
+                background: 'transparent', border: 'none', color: '#7fb8ff',
+                fontSize: 13, fontWeight: 900, cursor: 'pointer', fontFamily: 'inherit',
+                padding: '4px 2px', flexShrink: 0, minHeight: 32, whiteSpace: 'nowrap',
+              }}
+            >
+              {toast.action.label}
+            </button>
+          )}
           <button onClick={() => setToast(null)} aria-label="ปิด" style={{ background: 'transparent', border: 'none', color: 'rgba(255,255,255,0.6)', cursor: 'pointer', display: 'flex', flexShrink: 0 }}>
             <X size={15} />
           </button>
         </div>
       )}
 
-      {/* Responsive CSS — เหมือน Messenger บนมือถือ */}
-      <style jsx global>{`
-        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-
-        /* ── Fix body: กันเลื่อนซ้าย-ขวา + rubber-band ทุกอุปกรณ์ ── */
-        * { box-sizing: border-box; }
-        html, body {
-          overflow-x: hidden !important;
-          max-width: 100%;
-          width: 100%;
-          position: relative;
-          overscroll-behavior: none;
-          overscroll-behavior-x: none;
-          -webkit-text-size-adjust: 100%;
-        }
-        .ib-main, .ib-pagebar, .ib-col1, .ib-col2, .ib-col3 { max-width: 100%; min-width: 0; }
-
-        /* Tablet — hide right panel + ซ่อนปุ่มเปิดแผงขวาด้วย (ไม่งั้นกดแล้วไม่มีอะไรเกิดขึ้น) */
-        @media (max-width: 1280px) {
-          .ib-col3 { display: none !important; }
-          .ib-toggle-right { display: none !important; }
-        }
-
-        /* Narrow tablet — narrower col1 + page tiles 2 cols */
-        @media (max-width: 980px) {
-          .ib-col1 { width: 290px !important; }
-          .ib-pagebar > div { grid-template-columns: repeat(2, 1fr) !important; }
-        }
-
-        /* Mobile/tablet — hide sidebar + ล็อก viewport (กันเลื่อน/เด้ง) */
-        @media (max-width: 820px) {
-          html, body {
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            width: 100%; height: 100%;
-            overflow: hidden !important;
-            overscroll-behavior: none;
-            touch-action: pan-y;
-          }
-          .ib-sidebar { transform: translateX(-100%); transition: transform 0.25s; }
-          /* ใช้ความสูง+offset จริงจาก visualViewport (--app-height/--app-offset)
-             → คีย์บอร์ดเด้งแล้ว composer ยังอยู่เหนือคีย์บอร์ดเป๊ะ ไม่หลุดขึ้นบน */
-          .ib-root {
-            height: var(--app-height, 100svh) !important;
-            min-height: 0 !important;
-            max-height: var(--app-height, 100svh) !important;
-            transform: translateY(var(--app-offset, 0px));
-          }
-          .ib-main { margin-left: 0 !important; padding-top: 0 !important; height: var(--app-height, 100svh) !important; width: 100% !important; }
-          .ib-mobile-bar { display: flex !important; }
-          /* หน้าเลือกช่องทาง — เต็มจอบนมือถือ
-             ต้องดันลงใต้ mobile bar (fixed สูง 52px, z-40) เพราะ gate อยู่ใน <main>
-             ที่มี z-index 1 จึงชนะ mobile bar ด้วย z-index ไม่ได้ */
-          .ib-channel-gate { left: 0 !important; top: 52px !important; }
-          /* รายการแชท (ยังไม่เปิดแชท): mobile bar เป็น fixed → ดันเนื้อหาลงมาไม่ให้โดนบัง */
-          .ib-root[data-active="0"] .ib-main { padding-top: 52px !important; }
-          /* page bar เลื่อนแนวนอนได้ (เฉพาะตัวมันเอง) */
-          .ib-pagebar > div { touch-action: pan-x; }
-        }
-
-        /* Mobile/tablet — Messenger-like UX (≤820 ครอบทุกมือถือ + แท็บเล็ตเล็ก/in-app browser) */
-        @media (max-width: 820px) {
-          /* Single column toggle */
-          .ib-col1 { width: 100% !important; }
-          .ib-main[data-active="1"] .ib-col1 { display: none !important; }
-          .ib-main[data-active="0"] .ib-col2 { display: none !important; }
-          /* เปิดแชท → ซ่อน mobile bar (sibling ของ .ib-main จึงใช้ .ib-root) + โชว์ปุ่มกลับ */
-          .ib-root[data-active="1"] .ib-mobile-bar { display: none !important; }
-          .ib-back { display: flex !important; }
-          .ib-only-mobile-flex { display: flex !important; }
-
-          /* Page bar — แนวนอน scroll (เหมือน stories) เห็นทุกเพจ */
-          .ib-pagebar { padding: 8px 10px !important; }
-          .ib-pagebar > div {
-            display: flex !important;
-            grid-template-columns: none !important;
-            overflow-x: auto !important;
-            scroll-snap-type: x mandatory;
-            gap: 6px !important;
-            -webkit-overflow-scrolling: touch;
-            scrollbar-width: none;
-          }
-          .ib-pagebar > div::-webkit-scrollbar { display: none; }
-          /* ครอบทั้งปุ่ม "ทุกเพจ" และ wrapper ของไทล์เพจ (ที่มีปุ่มแก้ชื่อแยก) */
-          .ib-pagebar > div > button,
-          .ib-pagebar > div > div {
-            scroll-snap-align: start;
-            flex-shrink: 0 !important;
-            max-width: 220px;
-          }
-
-          /* ซ่อน page bar + mobile bar เมื่อเปิดแชท → เห็นแชทเต็มจอ
-             ใช้ .ib-root (พ่อร่วมของทั้งคู่) เพราะ .ib-mobile-bar เป็น sibling ของ .ib-main */
-          .ib-root[data-active="1"] .ib-pagebar { display: none !important; }
-          .ib-root[data-active="1"] .ib-mobile-bar { display: none !important; }
-
-          /* Mobile back button — แสดงในหัว chat เพื่อกลับ list */
-          .ib-back {
-            min-width: 38px !important; min-height: 38px !important;
-            padding: 8px !important;
-          }
-
-          /* Touch targets ใหญ่ขึ้น */
-          .ib-col1 button, .ib-col1 a { min-height: 36px; }
-        }
-
-        /* iOS safe area — กัน composer ทับแถบ home
-           ใช้ --kb-open (ตั้งจาก visualViewport) → คีย์บอร์ดเปิดแล้วตัด padding ทิ้ง
-           ไม่งั้นจะมีช่องว่างขาวคั่นระหว่างช่องพิมพ์กับคีย์บอร์ด */
-        @supports (padding: env(safe-area-inset-bottom)) {
-          @media (max-width: 820px) {
-            .ib-main { padding-bottom: calc(env(safe-area-inset-bottom) * var(--kb-open, 1)) !important; }
-          }
-        }
-
-        /* iOS zoom prevention — input fontSize ≥ 16 */
-        @media (max-width: 820px) {
-          /* ครอบ input ทุกชนิดที่พิมพ์ได้ (เดิมระบุเฉพาะ type="text" → ช่องที่ไม่ระบุ type หลุด) */
-          input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
-          textarea, select {
-            font-size: 16px !important;
-          }
-          /* ซ่อนปุ่มที่ไม่จำเป็นบนมือถือ (right panel ใช้ไม่ได้อยู่แล้ว) */
-          .ib-hide-mobile { display: none !important; }
-        }
-        /* ── Composer ──
-           มือถือ: 2 แถว (ปุ่มแถวบน / ช่องพิมพ์+ส่ง แถวล่าง) → ช่องพิมพ์ได้พื้นที่เต็ม
-           จอใหญ่: แถวเดียวเหมือนเดิม */
-        .ib-composer { display: flex; flex-direction: column; gap: 8px; }
-        .ib-composer-actions { display: flex; gap: 8px; align-items: center; }
-        .ib-composer-input { display: flex; gap: 8px; align-items: flex-end; }
-        .ib-only-mobile { display: none; }
-        @media (max-width: 820px) {
-          .ib-only-mobile { display: inline; }
-          /* ปุ่มที่มีข้อความกระจายเต็มแถว กดง่ายด้วยนิ้วโป้ง (ปุ่มไอคอนล้วนคงขนาดเดิม) */
-          .ib-composer-grow { flex: 1; justify-content: center; }
-        }
-        /* แถวเดียวเฉพาะตอนคอลัมน์แชทกว้างพอจริง — ที่ 821-1080px ยังมี sidebar 244 + ลิสต์ 290
-           ทำให้เหลือที่ช่องพิมพ์แค่ไม่กี่ px ถ้าบังคับแถวเดียว */
-        @media (min-width: 1100px) {
-          /* flex-wrap: ถ้าที่ไม่พอ (เช่น 1281-1350px ตอนแผงขวาเปิด) ให้ตกลงมาเป็น 2 แถวเอง
-             ไม่งั้นปุ่ม "ส่ง" ล้นออกนอกคอลัมน์แล้วโดนตัด กดไม่ได้ */
-          .ib-composer { flex-direction: row; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
-          .ib-composer-input { flex: 1; min-width: 240px; }
-        }
-
-        /* toast ต้องไม่ทับแถวช่องพิมพ์ตอนเปิดแชทอยู่บนมือถือ */
-        @media (max-width: 820px) {
-          /* 240px = composer 2 แถวตอนช่องพิมพ์ขยายสูงสุด (140px) + ปุ่ม + ระยะขอบ */
-          .ib-toast-above-composer {
-            bottom: calc(env(safe-area-inset-bottom, 0px) + 240px) !important;
-          }
-        }
-        /* จอแคบสุด (iPhone SE 320px / in-app browser ที่บีบความกว้าง) */
-        @media (max-width: 400px) {
-          .ib-hide-narrow { display: none !important; }
-        }
-        @media (max-width: 360px) {
-          /* เหลือแต่ไอคอน — ป้าย "ข้อความบันทึก" ทำให้ปุ่มตัดบรรทัดสูงไม่เท่ากัน */
-          .ib-only-mobile { display: none !important; }
-        }
-      `}</style>
     </div>
   )
 }
@@ -2548,13 +3380,18 @@ function NavItem({ icon, label, active, badge }: { icon: ReactNode; label: strin
 // → ขอผ่าน /api/inbox/avatar ให้ระบบดึงมาเก็บใหม่ (ครั้งเดียว รอบถัดไปได้ URL ถาวรจากรายการเลย)
 function customerAvatarSrc(conv: any): string | undefined {
   const pic: string | null = conv?.customer_picture || null
-  if (pic && pic.includes('/storage/v1/object/public/chat-uploads/avatars/')) return pic
-  if (pic && pic.startsWith('none:')) return undefined
-  if (!conv?.id || String(conv.id).startsWith('temp-')) return pic || undefined
-  return `/api/inbox/avatar/${encodeURIComponent(conv.id)}`
+  // ยังไม่มีรูปเลย (Facebook ไม่ให้สิทธิ์ดึงรูปโปรไฟล์) → ขึ้นตัวอักษรย่อทันที
+  // เดิมยิง /api/inbox/avatar ให้ทุกแถวที่ยังไม่มีรูป = เปิดกล่องข้อความทีเดียว 50 request
+  // แต่ละอันปลุก serverless + query DB + ยิง Graph ไปแย่งเน็ตกับการส่งข้อความของแอดมินเอง
+  // (ฝั่ง sync/webhook เก็บรูปให้อยู่แล้ว พอมีรูปแถวนี้จะมี URL จริงเอง)
+  if (!pic) return undefined
+  if (pic.includes('/storage/v1/object/public/chat-uploads/avatars/')) return pic
+  if (pic.startsWith('none:')) return undefined
+  if (!conv?.id || String(conv.id).startsWith('temp-')) return pic
+  return `/api/inbox/avatar/${encodeURIComponent(conv.id)}`   // ลิงก์ FB เดิมที่หมดอายุ → ให้ระบบดึงมาเก็บใหม่
 }
 
-function Avatar({ name, src, size = 40, ringColor }: { name?: string; src?: string; size?: number; ringColor?: string }) {
+const Avatar = memo(function Avatar({ name, src, size = 40, ringColor }: { name?: string; src?: string; size?: number; ringColor?: string }) {
   const ring = ringColor ? `2px solid ${ringColor}` : '1.5px solid white'
   // ตัวอักษรย่ออยู่ข้างล่างเสมอ รูปซ้อนทับเมื่อโหลดเสร็จ — ระหว่างรอรูป (หรือรูปแตก) จะไม่เห็นวงกลมว่างๆ
   const [broken, setBroken] = useState(false)
@@ -2576,6 +3413,9 @@ function Avatar({ name, src, size = 40, ringColor }: { name?: string; src?: stri
         <img
           src={src}
           alt=""
+          // แถวที่ยังไม่เลื่อนมาถึงไม่ต้องโหลด — รายการแชทยาวได้ถึง 500 แถว
+          loading="lazy"
+          decoding="async"
           onLoad={() => setLoaded(true)}
           onError={() => setBroken(true)}
           style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: loaded ? 1 : 0, transition: 'opacity .15s' }}
@@ -2583,9 +3423,130 @@ function Avatar({ name, src, size = 40, ringColor }: { name?: string; src?: stri
       )}
     </div>
   )
-}
+})
 
-function ConvItem({ conv, active, onClick }: { conv: any; active: boolean; onClick: () => void }) {
+// ── ช่องพิมพ์ข้อความ + ปุ่มส่ง ──
+// แยกเป็นคอมโพเนนต์ของตัวเอง และเก็บ "ข้อความที่กำลังพิมพ์" ไว้ในนี้เอง
+// เดิมเก็บใน state ของทั้งหน้า → ทุกตัวอักษรที่พิมพ์สั่งวาดใหม่ทั้งกล่องข้อความ
+// (ฟองแชทได้ถึง 200 ฟอง + รายการแชทอีกได้ถึง 500 แถว ที่ยังอยู่ในจอแค่ถูก CSS ซ่อนไว้)
+// มือถือรุ่นประหยัดจึงพิมพ์แล้วตัวอักษรขึ้นเป็นชุดๆ ตามไม่ทัน
+// ตอนนี้พิมพ์ = วาดใหม่เฉพาะแถวนี้ ส่วนหน้าแม่รู้ค่าล่าสุดผ่าน onTextChange (เขียนลง ref ไม่ใช่ state)
+type ComposerApi = { insert: (text: string) => void; clear: () => void }
+
+// Facebook ไม่รับข้อความยาวเกิน 2,000 ตัวอักษร (api/inbox/send ตีกลับ 400 ตั้งแต่ยังไม่ยิงไป Graph)
+// ห้ามใช้ maxLength ของ textarea — มันตัดท้ายข้อความที่วางมาแบบเงียบๆ แอดมินจะไม่รู้ว่าหายไปท่อนไหน
+const FB_TEXT_LIMIT = 2000
+const FB_TEXT_WARN_AT = 1800
+
+const Composer = memo(function Composer({ initialText, isDesktop, sending, onSend, onTextChange, onFocusScroll, apiRef }: {
+  initialText: string
+  isDesktop: boolean
+  sending: boolean
+  onSend: () => void
+  onTextChange: (text: string) => void
+  onFocusScroll: () => void
+  apiRef: React.MutableRefObject<ComposerApi | null>
+}) {
+  const [text, setText] = useState(initialText)
+  const taRef = useRef<HTMLTextAreaElement>(null)
+  const textRef = useRef(text)
+  textRef.current = text
+  const changeRef = useRef(onTextChange)
+  changeRef.current = onTextChange
+  const set = (v: string) => { textRef.current = v; setText(v); changeRef.current(v) }
+
+  // ช่องพิมพ์ขยายตามจำนวนบรรทัด (สูงสุด 140px) — เดิม rows=1 ตายตัว พิมพ์ยาวแล้วอ่านไม่ออก
+  useEffect(() => {
+    const el = taRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    // scrollHeight ไม่รวมเส้นขอบ แต่ทั้งหน้าใช้ box-sizing: border-box → สูงขาดไป ~3px
+    // ผลคือพิมพ์บรรทัดเดียวก็มีแถบเลื่อนโผล่ (เห็นชัดบน Windows)
+    const border = el.offsetHeight - el.clientHeight
+    const needed = el.scrollHeight + border
+    el.style.height = `${Math.min(needed, 140)}px`
+    el.style.overflowY = needed > 140 ? 'auto' : 'hidden'
+  }, [text])
+
+  // ให้หน้าแม่สั่งแทรกข้อความ (ข้อความบันทึก/คำแนะนำ AI) และล้างช่องหลังส่งสำเร็จได้
+  useEffect(() => {
+    apiRef.current = {
+      insert: (t: string) => {
+        const cur = textRef.current.trim()
+        set(cur ? `${cur}\n${t}` : t)
+        setTimeout(() => { const el = taRef.current; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length) } }, 30)
+      },
+      clear: () => set(''),
+    }
+    return () => { apiRef.current = null }
+  }, [apiRef])
+
+  // นับแบบเดียวกับฝั่ง server (text.trim()) ไม่งั้นตัวเลขบนจอกับที่ Facebook เห็นไม่ตรงกัน
+  const len = text.trim().length
+  const empty = len === 0
+  const tooLong = len > FB_TEXT_LIMIT
+  const cantSend = empty || sending || tooLong
+  return (
+    // flexWrap + flexBasis:100% ที่ตัวนับ → ตัวนับได้บรรทัดของตัวเอง ช่องพิมพ์กับปุ่มส่งยังอยู่แถวเดิม
+    <div className="ib-composer-input" style={{ flexWrap: 'wrap' }}>
+      {len >= FB_TEXT_WARN_AT && (
+        <div role="status" style={{ flexBasis: '100%', order: -1, fontSize: 12, fontWeight: 800, lineHeight: 1.5, color: tooLong ? RED : MUTED }}>
+          {tooLong
+            ? `ข้อความยาว ${len}/2,000 ตัวอักษร — Facebook ไม่รับ ต้องลบให้สั้นลง หรือแบ่งส่งเป็นหลายข้อความ`
+            : `${len}/2,000 ตัวอักษร`}
+        </div>
+      )}
+      <textarea
+        ref={taRef}
+        value={text}
+        onChange={e => set(e.target.value)}
+        onKeyDown={e => {
+          // Enter = ส่ง เฉพาะบนคอม (มีเมาส์/คีย์บอร์ดจริง)
+          // บนมือถือ Enter = ขึ้นบรรทัดใหม่ (ไม่งั้นพิมพ์หลายบรรทัดไม่ได้)
+          if (e.key !== 'Enter' || e.shiftKey || !isDesktop) return
+          // ยังเลือกคำจาก IME อยู่ (จีน/ญี่ปุ่น/เวียดนาม หรือคำแนะนำของ macOS)
+          // Enter ตรงนี้คือ "ยืนยันคำ" ไม่ใช่ "ส่ง" — Safari รายงานเป็น keyCode 229
+          if (e.nativeEvent.isComposing || e.keyCode === 229) return
+          e.preventDefault()
+          if (textRef.current.trim().length > FB_TEXT_LIMIT) return   // ยาวเกินลิมิต — กด Enter ก็ห้ามส่ง เหมือนปุ่มส่งที่ปิดอยู่
+          onSend()
+        }}
+        onFocus={onFocusScroll}
+        placeholder="พิมพ์ข้อความ..."
+        rows={1}
+        aria-label="ช่องพิมพ์ข้อความตอบลูกค้า"
+        className="ib-chat-input"
+        style={{
+          flex: 1, minWidth: 0, padding: '11px 14px', borderRadius: 12,
+          border: `1.5px solid ${BORDER}`, background: SURFACE2,
+          fontSize: 16, fontFamily: 'inherit', resize: 'none', outline: 'none',
+          maxHeight: 140, overflowY: 'auto', color: TEXT, lineHeight: 1.5,
+        }}
+      />
+      <button
+        type="button"
+        // กันปุ่มแย่งโฟกัสไปจากช่องพิมพ์ — บน Android คีย์บอร์ดจะปิดทุกครั้งที่กดส่ง
+        // แล้วจอเด้ง ต้องแตะช่องพิมพ์ใหม่ทุกข้อความ
+        onMouseDown={e => e.preventDefault()}
+        onClick={onSend}
+        disabled={cantSend}
+        // บอกเหตุผลที่กดไม่ได้ — ปุ่มจางเฉยๆ แอดมินจะนึกว่าแอปค้าง
+        title={tooLong ? 'ข้อความยาวเกิน 2,000 ตัวอักษร — Facebook ไม่รับ' : undefined}
+        style={{
+          ...btnPrimary, padding: '11px 18px', display: 'flex', alignItems: 'center', gap: 6,
+          fontSize: 13.5, flexShrink: 0, minHeight: 44,
+          opacity: cantSend ? 0.5 : 1,
+          cursor: cantSend ? 'not-allowed' : 'pointer',
+        }}
+      >
+        {sending ? <RefreshCw size={15} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={15} />}
+        ส่ง
+      </button>
+    </div>
+  )
+})
+
+const ConvItem = memo(function ConvItem({ conv, active, onOpen }: { conv: any; active: boolean; onOpen: (conv: any) => void }) {
   const unread = conv.unread_count > 0
   const pc = pageColor(conv.page_id)
   const isLine = conv.connected_pages?.channel === 'line'
@@ -2593,7 +3554,7 @@ function ConvItem({ conv, active, onClick }: { conv: any; active: boolean; onCli
   const bgFor = () => active ? PRIMARY_LIGHT : (unread ? `linear-gradient(90deg, ${pc.bg} 0%, ${pc.bg}55 40%, white 100%)` : 'white')
   return (
     <button
-      onClick={onClick}
+      onClick={() => onOpen(conv)}
       aria-current={active ? 'true' : undefined}
       aria-label={`แชทกับ ${conv.customer_name || 'ลูกค้า'} เพจ ${pageName || ''}${unread ? ` ยังไม่อ่าน ${conv.unread_count} ข้อความ` : ''}`}
       style={{
@@ -2670,10 +3631,10 @@ function ConvItem({ conv, active, onClick }: { conv: any; active: boolean; onCli
       </div>
     </button>
   )
-}
+})
 
 // ทำลิงก์/เบอร์โทรในข้อความลูกค้าให้กดได้ (เดิมเป็น text ต้องกดค้าง copy เอง)
-function Linkify({ text, onDark }: { text: string; onDark?: boolean }) {
+const Linkify = memo(function Linkify({ text, onDark }: { text: string; onDark?: boolean }) {
   const linkStyle: any = {
     color: onDark ? '#d6e9ff' : PRIMARY,
     textDecoration: 'underline',
@@ -2682,7 +3643,10 @@ function Linkify({ text, onDark }: { text: string; onDark?: boolean }) {
   const src = String(text ?? '')
   // ห้ามใช้ lookbehind ((?<!...)) — iOS Safari ต่ำกว่า 16.4 โยน SyntaxError ตอน parse
   // ทำให้ทั้งหน้าจอขาว → ใช้ exec loop แล้วเช็คอักขระข้างหน้าด้วย JS แทน
-  const re = /(?:https?:\/\/|www\.)[^\s]*[^\s.,!?;:)\]}"'…]|0\d{1,2}[-\s]?\d{3}[-\s]?\d{3,4}/g
+  // ฀-๿ = อักษรไทย: ต้องตัดออกจากตัว URL เพราะภาษาไทยไม่เว้นวรรคระหว่างคำ
+  // ("สั่งได้ที่ https://lin.ee/abc123นะคะ" เดิมลากคำว่า "นะคะ" เข้าไปในลิงก์ → กดแล้ว 404)
+  // ลิงก์ที่มีภาษาไทยในพาธจริงๆ จะถูกตัดสั้น แต่ลิงก์ที่ลูกค้าก๊อปมามักเป็น %E0%B8.. (ASCII) อยู่แล้ว
+  const re = /(?:https?:\/\/|www\.)[^\s฀-๿]*[^\s฀-๿.,!?;:)\]}"'…]|0\d{1,2}[-\s]?\d{3}[-\s]?\d{3,4}/g
   const nodes: ReactNode[] = []
   let last = 0
   let m: RegExpExecArray | null
@@ -2712,18 +3676,25 @@ function Linkify({ text, onDark }: { text: string; onDark?: boolean }) {
   }
   if (last < src.length) nodes.push(<span key={`t${k++}`}>{src.slice(last)}</span>)
   return <>{nodes}</>
-}
+})
 
 // รูปในแชท — แตะเพื่อดูเต็มจอ (สลิปโอนเงิน/ที่อยู่ ต้องอ่านออก)
 // ถ้าโหลดไม่ขึ้น (เช่น URL สติ๊กเกอร์ LINE ไม่ทางการ) → fallback เป็นข้อความ
-function MsgImage({ url, name, withText }: { url: string; name?: string; withText?: boolean }) {
+function MsgImage({ url, name, withText, onReady }: { url: string; name?: string; withText?: boolean; onReady?: () => void }) {
   const [err, setErr] = useState(false)
   const [open, setOpen] = useState(false)
+  const [loaded, setLoaded] = useState(false)
+  const [zoomed, setZoomed] = useState(false)   // ดูเต็มจอแล้วแตะรูปอีกครั้ง = ขยาย (อ่านเลขสลิปโอนเงิน)
   const isSticker = name === 'sticker'
+  // รูปที่เพิ่งอัปจากเครื่องนี้ → ใช้ไฟล์ในเครื่องแสดงเลย ไม่ต้องโหลดกลับมาจากเน็ตอีกรอบ
+  // (ถ้า blob ถูกคืนไปแล้ว รูปจะ error → สลับไปใช้ URL จริงให้อัตโนมัติ)
+  const [src, setSrc] = useState<string>(() => localPreviews.get(url) || url)
+  useEffect(() => { setSrc(localPreviews.get(url) || url); setErr(false); setLoaded(false) }, [url])
 
   // ปิดด้วยปุ่ม Esc
   useEffect(() => {
     if (!open) return
+    setZoomed(false)
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
@@ -2735,11 +3706,29 @@ function MsgImage({ url, name, withText }: { url: string; name?: string; withTex
   return (
     <>
       <img
-        src={url}
-        onError={() => setErr(true)}
+        src={src}
+        // lazy + async: แชทที่มีสลิป/รูปเมนู 20-30 รูป เดิมโหลดพร้อมกันหมดตั้งแต่เปิดแชท
+        // กินเน็ตมือถือหลาย MB และแย่งคิวกับการส่งข้อความของแอดมินเอง
+        loading="lazy"
+        decoding="async"
+        onLoad={() => { setLoaded(true); onReady?.() }}
+        onError={() => {
+          if (src !== url) { localPreviews.delete(url); setSrc(url); return }   // blob หมดอายุ → ใช้ URL จริง
+          setErr(true)
+          onReady?.()
+        }}
         onClick={() => { if (!isSticker) setOpen(true) }}
         style={{
           maxWidth: isSticker ? 130 : 240, width: '100%',
+          // จองพื้นที่ไว้ก่อนรูปมาถึง — ไม่งั้นทุกฟองสูง 0 แล้วพอรูปโหลดเสร็จจะดันข้อความล่าสุดหลุดจอ
+          // (minHeight เผื่อ iOS เก่าที่ยังไม่รองรับ aspect-ratio) · โหลดเสร็จแล้วปล่อยเป็นสัดส่วนจริง
+          // ไม่ครอบตัดถาวร เพราะสลิปโอนเงินแนวตั้งต้องอ่านยอด/เลขอ้างอิงได้ครบ
+          ...(loaded ? {} : {
+            aspectRatio: isSticker ? '1 / 1' : '4 / 3',
+            minHeight: isSticker ? 110 : 160,
+            objectFit: 'cover' as const,
+            background: SURFACE2,
+          }),
           marginTop: withText ? 6 : 0, borderRadius: 10, display: 'block',
           cursor: isSticker ? 'default' : 'zoom-in',
         }}
@@ -2753,11 +3742,28 @@ function MsgImage({ url, name, withText }: { url: string; name?: string; withTex
           aria-label="ดูรูปภาพเต็มจอ"
           style={{
             position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,0.93)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12,
-            overflow: 'auto', touchAction: 'pinch-zoom',
+            display: 'flex', padding: 12,
+            // ทั้งหน้าถูกตั้งไว้ห้ามซูมด้วยสองนิ้ว (ไม่งั้นคีย์บอร์ดเด้งแล้ว layout เพี้ยน)
+            // → ให้ "แตะรูปเพื่อขยาย" แทน แล้วลากดูได้ทั้งแนวตั้ง-แนวนอน
+            overflow: 'auto', WebkitOverflowScrolling: 'touch', touchAction: 'pan-x pan-y',
           }}
         >
-          <img src={url} alt="รูปภาพขนาดเต็ม" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+          <img
+            src={src}
+            alt="รูปภาพขนาดเต็ม"
+            onClick={(e) => { e.stopPropagation(); setZoomed(z => !z) }}
+            // margin: auto = จัดกลางแบบที่ยังลากไปดูขอบบน/ซ้ายได้ตอนรูปใหญ่เกินจอ
+            style={zoomed
+              ? { margin: 'auto', maxWidth: 'none', maxHeight: 'none', width: '250%', cursor: 'zoom-out' }
+              : { margin: 'auto', maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', cursor: 'zoom-in' }}
+          />
+          <div style={{
+            position: 'fixed', bottom: 'calc(env(safe-area-inset-bottom, 0px) + 64px)', left: '50%',
+            transform: 'translateX(-50%)', color: 'rgba(255,255,255,0.85)', fontSize: 12, fontWeight: 700,
+            whiteSpace: 'nowrap', pointerEvents: 'none',
+          }}>
+            {zoomed ? 'แตะรูปอีกครั้งเพื่อย่อ · ลากเพื่อเลื่อนดู' : 'แตะรูปเพื่อขยาย'}
+          </div>
           <button
             onClick={(e) => { e.stopPropagation(); setOpen(false) }}
             aria-label="ปิด"
@@ -2798,7 +3804,47 @@ function facebookInboxUrl(conv: any): string | undefined {
   return `https://business.facebook.com/latest/inbox/all/?${qs.toString()}`
 }
 
-function MessageBubble({ message: m, customerName, customerPic, onRetry, onDiscard, fbInboxUrl }: { message: any; customerName?: string; customerPic?: string; onRetry?: (m: any) => void; onDiscard?: (m: any) => void; fbInboxUrl?: string }) {
+// ไฟล์แนบที่ไม่ใช่รูป — ข้อความเสียง / วิดีโอ / ไฟล์ / ลิงก์ที่ลูกค้าแชร์มา
+// เดิมขึ้นเป็นข้อความ "📎 ไฟล์แนบ" เฉยๆ กดอะไรไม่ได้เลย ทั้งที่มีลิงก์อยู่แล้ว
+// ลูกค้าสั่งของด้วยข้อความเสียง = แอดมินต้องไปเปิดแอป Facebook อ่านเองว่าสั่งอะไร
+function FileAttachment({ a, onDark, withText, fbInboxUrl }: { a: any; onDark?: boolean; withText?: boolean; fbInboxUrl?: string }) {
+  const [err, setErr] = useState(false)
+  const url = String(a?.url || '')
+  const safe = /^https?:\/\//i.test(url)   // กัน href แปลกๆ เช่น javascript:
+  const name = a?.name || 'ไฟล์แนบ'
+  const mime = String(a?.mime_type || '')
+  // แถวเก่าในฐานข้อมูลเก็บแค่ type:'file' → เดาชนิดจาก mime/นามสกุล/ชื่อไฟล์ของ Facebook (audioclip.mp4)
+  const kind = a?.kind
+    || (/^audio\//i.test(mime) || /audioclip|\.(m4a|aac|mp3|ogg|wav|opus)(\?|$)/i.test(name + url) ? 'audio'
+      : /^video\//i.test(mime) || /\.(mp4|mov|webm|3gp)(\?|$)/i.test(name + url) ? 'video'
+      : 'file')
+  const mt = withText ? 6 : 0
+  const linkStyle: React.CSSProperties = {
+    marginTop: mt, display: 'inline-flex', alignItems: 'center', gap: 5, minHeight: 34,
+    fontSize: 12.5, fontWeight: 800, textDecoration: 'underline', wordBreak: 'break-all',
+    color: onDark ? 'white' : PRIMARY,
+  }
+  // ลิงก์ของ Facebook หมดอายุได้ → บอกตรงๆ แล้วพาไปเปิดใน Facebook แทน
+  if (!safe || err) {
+    return fbInboxUrl
+      ? <a href={fbInboxUrl} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} style={linkStyle}>📎 {name} — เปิดดูใน Facebook</a>
+      : <div style={{ marginTop: mt, fontSize: 12 }}>📎 {name}</div>
+  }
+  // preload: ไม่ต้องโหลดล่วงหน้าทั้งไฟล์ — แอดมินกดฟังเองเมื่อต้องการ (ประหยัดเน็ตมือถือ)
+  if (kind === 'audio') {
+    return <audio controls preload="none" src={url} onError={() => setErr(true)} style={{ marginTop: mt, width: 240, maxWidth: '100%', display: 'block' }} />
+  }
+  if (kind === 'video') {
+    return <video controls playsInline preload="metadata" src={url} onError={() => setErr(true)} style={{ marginTop: mt, maxWidth: 240, maxHeight: 320, borderRadius: 10, display: 'block' }} />
+  }
+  return (
+    <a href={url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} style={linkStyle}>
+      {kind === 'link' ? '🔗' : '📎'} {name}
+    </a>
+  )
+}
+
+const MessageBubble = memo(function MessageBubble({ message: m, customerName, customerPic, onRetry, onDiscard, canRetry, fbInboxUrl, onMediaReady }: { message: any; customerName?: string; customerPic?: string; onRetry?: (m: any) => void; onDiscard?: (m: any) => void; canRetry?: boolean; fbInboxUrl?: string; onMediaReady?: () => void }) {
   const out = m.direction === 'outbound'
   const failed = m.delivery_status === 'failed'
   const sending = m.delivery_status === 'sending'
@@ -2843,9 +3889,9 @@ function MessageBubble({ message: m, customerName, customerPic, onRetry, onDisca
             const filtered = stickerAtt ? [stickerAtt] : (hasImage ? atts.filter(a => a.type === 'image' && a.url) : atts)
             return filtered.map((a, i) => (
               a.type === 'image' && a.url ? (
-                <MsgImage key={i} url={a.url} name={a.name} withText={!!m.message_text} />
+                <MsgImage key={i} url={a.url} name={a.name} withText={!!m.message_text} onReady={onMediaReady} />
               ) : a.url ? (
-                <div key={i} style={{ marginTop: m.message_text ? 6 : 0, fontSize: 11 }}>📎 {a.name || 'ไฟล์แนบ'}</div>
+                <FileAttachment key={i} a={a} onDark={out && !failed} withText={!!m.message_text} fbInboxUrl={fbInboxUrl} />
               ) : null
             ))
           })()}
@@ -2877,11 +3923,11 @@ function MessageBubble({ message: m, customerName, customerPic, onRetry, onDisca
           )}
         </div>
         <div style={{ fontSize: 11, color: MUTED, padding: '0 4px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: out ? 'flex-end' : 'flex-start' }}>
-          {sending && '⏳ กำลังส่ง...'}
+          {sending && (m.status_note || '⏳ กำลังส่ง...')}
           {failed && (
             <>
               <span style={{ color: RED, fontWeight: 700 }}>❌ ส่งไม่สำเร็จ {m.error_message ? `(${m.error_message})` : ''}</span>
-              {onRetry && (
+              {onRetry && canRetry !== false && (
                 <button
                   onClick={() => onRetry(m)}
                   style={{
@@ -2915,7 +3961,7 @@ function MessageBubble({ message: m, customerName, customerPic, onRetry, onDisca
       </div>
     </div>
   )
-}
+})
 
 function EmptyState({ icon, title, hint }: { icon: ReactNode; title: string; hint?: string }) {
   return (
@@ -2928,69 +3974,133 @@ function EmptyState({ icon, title, hint }: { icon: ReactNode; title: string; hin
 }
 
 // ─── Settings Modal ───────────────────────────────────────────
-function SettingsModal({ pages, onClose, onSaved }: { pages: any[]; onClose: () => void; onSaved: () => void }) {
+const DEFAULT_SETTINGS = {
+  ai_assist_enabled: true,
+  ai_auto_categorize: true,
+  ai_tone: 'friendly',
+  auto_reply_enabled: false,
+  auto_reply_message: 'ขอบคุณที่ติดต่อเรา ทีมงานจะรีบตอบกลับโดยเร็วที่สุดค่ะ 🙏',
+  business_hours_enabled: false,
+  off_hours_message: 'ขณะนี้นอกเวลาทำการ ทีมงานจะติดต่อกลับในเวลาทำการนะคะ ⏰',
+  knowledge_base: '',
+  business_hours: { mon:{start:'09:00',end:'18:00',off:false},tue:{start:'09:00',end:'18:00',off:false},wed:{start:'09:00',end:'18:00',off:false},thu:{start:'09:00',end:'18:00',off:false},fri:{start:'09:00',end:'18:00',off:false},sat:{start:'09:00',end:'18:00',off:true},sun:{start:'09:00',end:'18:00',off:true} },
+}
+
+function SettingsModal({ pages, isOwner, initialTab = 'general', onClose, onSaved }: { pages: any[]; isOwner: boolean; initialTab?: 'general'|'auto'|'kb'|'qr'; onClose: () => void; onSaved: () => void }) {
   const [selectedPage, setSelectedPage] = useState<string>(pages[0]?.id || '')
   const [settings, setSettings] = useState<any>({})
   const [quickReplies, setQuickReplies] = useState<any[]>([])
   const [newQR, setNewQR] = useState({ shortcut: '', title: '', message: '' })
   const [saving, setSaving] = useState(false)
-  const [tab, setTab] = useState<'general'|'auto'|'kb'|'qr'>('general')
+  const [tab, setTab] = useState<'general'|'auto'|'kb'|'qr'>(initialTab)
   const [origin, setOrigin] = useState('')
   const [linkCopied, setLinkCopied] = useState(false)
+  // โหลดค่าของเพจที่เลือกยังไม่เสร็จ/ไม่สำเร็จ → ห้ามกดบันทึก ไม่งั้นค่าของเพจเก่า (หรือค่าตั้งต้น)
+  // จะถูกเขียนทับลงเพจใหม่ → ลูกค้าเพจ B ได้ข้อความตอบอัตโนมัติของเพจ A / ข้อมูลร้านที่พิมพ์ไว้หายเกลี้ยง
+  const [loadState, setLoadState] = useState<'loading' | 'ok' | 'error'>('loading')
+  const [loadTick, setLoadTick] = useState(0)   // ปุ่ม "ลองใหม่อีกครั้ง" → สั่งโหลดซ้ำ
+  const loadingSettings = loadState !== 'ok'    // กดบันทึกได้เฉพาะตอนที่โหลดค่าจริงมาแล้วเท่านั้น
+  const [dirty, setDirty] = useState(false)
+  const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [qrBusy, setQrBusy] = useState(false)
+  const [qrErr, setQrErr] = useState<string | null>(null)
   useEffect(() => { if (typeof window !== 'undefined') setOrigin(window.location.origin) }, [])
   const inboxLink = `${origin}/dashboard/inbox`
 
+  // แก้ค่าทีละช่อง + จำว่ามีของที่ยังไม่บันทึก
+  const edit = (patch: any) => { setSettings((s: any) => ({ ...s, ...patch })); setDirty(true); setSaveMsg(null) }
+
   useEffect(() => {
     if (!selectedPage) return
-    fetch(`/api/inbox/settings?pageId=${selectedPage}`)
-      .then(r => r.json())
-      .then(d => {
-        const s = d.settings?.[0] || {
-          ai_assist_enabled: true,
-          ai_auto_categorize: true,
-          ai_tone: 'friendly',
-          auto_reply_enabled: false,
-          auto_reply_message: 'ขอบคุณที่ติดต่อเรา ทีมงานจะรีบตอบกลับโดยเร็วที่สุดค่ะ 🙏',
-          business_hours_enabled: false,
-          off_hours_message: 'ขณะนี้นอกเวลาทำการ ทีมงานจะติดต่อกลับในเวลาทำการนะคะ ⏰',
-          knowledge_base: '',
-          business_hours: { mon:{start:'09:00',end:'18:00',off:false},tue:{start:'09:00',end:'18:00',off:false},wed:{start:'09:00',end:'18:00',off:false},thu:{start:'09:00',end:'18:00',off:false},fri:{start:'09:00',end:'18:00',off:false},sat:{start:'09:00',end:'18:00',off:true},sun:{start:'09:00',end:'18:00',off:true} },
-        }
-        setSettings(s)
+    let cancelled = false
+    setLoadState('loading'); setSettings({}); setDirty(false); setSaveMsg(null)
+    fetch(`/api/inbox/settings?pageId=${encodeURIComponent(selectedPage)}`)
+      .then(async r => {
+        const d = await r.json().catch(() => ({} as any))
+        if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`)
+        // 502/504 ของ Vercel ตอบเป็น HTML → d ว่าง ไม่ใช่ array
+        // เติมค่าตั้งต้นได้เฉพาะตอน server ตอบ "ไม่มีแถว" จริงๆ เท่านั้น (เพจนี้ยังไม่เคยตั้งค่า)
+        if (!Array.isArray(d.settings)) throw new Error('bad response')
+        return d
       })
-    fetch('/api/inbox/quick-replies').then(r => r.json()).then(d => setQuickReplies(d.replies || []))
-  }, [selectedPage])
+      .then(d => {
+        if (cancelled) return   // สลับเพจไปแล้ว — ผลเก่าห้ามขึ้นจอ (ไม่งั้นเห็นค่าเพจ B ทั้งที่เลือกเพจ C)
+        setSettings(d.settings[0] || DEFAULT_SETTINGS)
+        setLoadState('ok')
+      })
+      .catch(() => {
+        // ไม่ใช่ 'ok' → ปุ่มบันทึกยังกดไม่ได้ ค่าตั้งต้นจะไม่ทับข้อมูลจริงของร้าน
+        if (!cancelled) setLoadState('error')
+      })
+    return () => { cancelled = true }
+  }, [selectedPage, loadTick])
+
+  // ข้อความบันทึกใช้ร่วมกันทุกเพจ → โหลดครั้งเดียวพอ ไม่ต้องยิงใหม่ทุกครั้งที่สลับเพจ
+  useEffect(() => {
+    fetch('/api/inbox/quick-replies')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d && Array.isArray(d.replies)) setQuickReplies(d.replies) })
+      .catch(() => {})
+  }, [])
 
   async function save() {
-    if (!selectedPage) return
-    setSaving(true)
-    await fetch('/api/inbox/settings', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pageId: selectedPage, ...settings }),
-    })
-    setSaving(false)
-    onSaved()
-  }
-
-  async function addQR() {
-    if (!newQR.shortcut || !newQR.title || !newQR.message) return
-    const r = await fetch('/api/inbox/quick-replies', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newQR),
-    }).then(r => r.json())
-    if (r.success) {
-      setQuickReplies([r.reply, ...quickReplies])
-      setNewQR({ shortcut: '', title: '', message: '' })
+    if (!selectedPage || saving || loadingSettings) return
+    const pageId = selectedPage          // ผูกไว้ — สลับเพจระหว่างบันทึกจะได้ไม่เขียนผิดเพจ
+    setSaving(true); setSaveMsg(null)
+    try {
+      const res = await fetch('/api/inbox/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...settings, pageId }),
+      })
+      const data = await res.json().catch(() => ({} as any))
+      if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`)
+      setDirty(false)
+      setSaveMsg({ ok: true, text: 'บันทึกแล้ว ✓' })
       onSaved()
+    } catch {
+      setSaveMsg({ ok: false, text: 'บันทึกไม่สำเร็จ — ตรวจอินเทอร์เน็ตแล้วกดบันทึกอีกครั้ง' })
+    } finally {
+      setSaving(false)
     }
   }
 
-  async function deleteQR(id: string) {
-    await fetch(`/api/inbox/quick-replies?id=${id}`, { method: 'DELETE' })
-    setQuickReplies(quickReplies.filter(q => q.id !== id))
-    onSaved()
+  async function addQR() {
+    if (qrBusy) return
+    if (!newQR.shortcut.trim() || !newQR.title.trim() || !newQR.message.trim()) { setQrErr('กรอกให้ครบทั้ง 3 ช่อง'); return }
+    setQrBusy(true); setQrErr(null)
+    try {
+      const res = await fetch('/api/inbox/quick-replies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newQR),
+      })
+      const r = await res.json().catch(() => ({} as any))
+      // เดิมเงียบสนิทเมื่อ server ตีกลับ (เช่นลูกทีมไม่มีสิทธิ์) แอดมินกรอกครบแล้วกดเพิ่มแล้วไม่มีอะไรเกิดขึ้น
+      if (!res.ok || !r.success) { setQrErr(friendlyError(r.error) || 'เพิ่มไม่สำเร็จ ลองใหม่อีกครั้ง'); return }
+      setQuickReplies(prev => [r.reply, ...prev])
+      setNewQR({ shortcut: '', title: '', message: '' })
+      onSaved()
+    } catch {
+      setQrErr('เชื่อมต่อไม่ได้ — ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่')
+    } finally {
+      setQrBusy(false)
+    }
+  }
+
+  async function deleteQR(qr: any) {
+    if (!window.confirm(`ลบข้อความบันทึก "${qr.title}" ใช่ไหม?\n\nลบแล้วเอากลับมาไม่ได้`)) return
+    setQrErr(null)
+    try {
+      const res = await fetch(`/api/inbox/quick-replies?id=${encodeURIComponent(qr.id)}`, { method: 'DELETE' })
+      const r = await res.json().catch(() => ({} as any))
+      // เอาออกจากจอหลังรู้ผลจริงเท่านั้น — เดิมลบบนจอก่อน พอ server ปฏิเสธก็เด้งกลับมาตอนเปิดใหม่
+      if (!res.ok || !r.success) { setQrErr(friendlyError(r.error) || 'ลบไม่สำเร็จ ลองใหม่อีกครั้ง'); return }
+      setQuickReplies(prev => prev.filter(q => q.id !== qr.id))
+      onSaved()
+    } catch {
+      setQrErr('เชื่อมต่อไม่ได้ — ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่')
+    }
   }
 
   const updateBH = (day: string, field: string, value: any) => {
@@ -2998,6 +4108,7 @@ function SettingsModal({ pages, onClose, onSaved }: { pages: any[]; onClose: () 
       ...s,
       business_hours: { ...s.business_hours, [day]: { ...s.business_hours?.[day], [field]: value } }
     }))
+    setDirty(true); setSaveMsg(null)
   }
 
   const days = [
@@ -3007,7 +4118,10 @@ function SettingsModal({ pages, onClose, onSaved }: { pages: any[]; onClose: () 
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(6px)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }} onClick={onClose}>
-      <div onClick={e => e.stopPropagation()} style={{ background: SURFACE, borderRadius: 18, width: '100%', maxWidth: 720, maxHeight: '92dvh', overflow: 'hidden', boxShadow: SHADOW_LG, display: 'flex', flexDirection: 'column' }}>
+      {/* maxHeight 100% = เท่ากับกรอบ overlay (หักช่องว่าง 12px รอบด้าน)
+          บนมือถือกรอบนี้หดตามคีย์บอร์ดอยู่แล้ว → แก้ไขข้อมูลร้านแล้วยังเห็นปุ่ม "บันทึก" กับปุ่มปิด
+          (เดิม 92dvh: iOS ต่ำกว่า 15.4 ไม่รู้จัก dvh เลยไม่จำกัดความสูง และ dvh ก็ไม่หดตามคีย์บอร์ด) */}
+      <div onClick={e => e.stopPropagation()} style={{ background: SURFACE, borderRadius: 18, width: '100%', maxWidth: 720, maxHeight: '100%', overflow: 'hidden', boxShadow: SHADOW_LG, display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '16px 22px', borderBottom: `1.5px solid ${BORDER}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ fontWeight: 900, fontSize: 16 }}>⚙️ ตั้งค่ากล่องข้อความ</div>
           <button onClick={onClose} style={{ ...btnGhost, padding: 8 }}><X size={16} /></button>
@@ -3017,7 +4131,16 @@ function SettingsModal({ pages, onClose, onSaved }: { pages: any[]; onClose: () 
         {pages.length > 0 && (
           <div style={{ padding: '12px 22px', borderBottom: `1px solid ${BORDER}`, background: SURFACE2 }}>
             <div style={{ fontSize: 11, color: MUTED, fontWeight: 700, marginBottom: 5 }}>เลือกเพจที่จะตั้งค่า</div>
-            <select value={selectedPage} onChange={e => setSelectedPage(e.target.value)} style={{ width: '100%', padding: '8px 10px', borderRadius: 10, border: `1.5px solid ${BORDER}`, fontFamily: 'inherit', fontSize: 13, fontWeight: 700 }}>
+            <select
+              value={selectedPage}
+              disabled={saving}
+              // เตือนก่อนทิ้งของที่ยังไม่บันทึก — เดิมสลับเพจแล้วที่แก้ไว้หายเงียบๆ
+              onChange={e => {
+                if (dirty && !window.confirm('ยังไม่ได้บันทึกการตั้งค่าของเพจนี้ เปลี่ยนเพจเลยไหม?')) return
+                setSelectedPage(e.target.value)
+              }}
+              style={{ width: '100%', padding: '8px 10px', borderRadius: 10, border: `1.5px solid ${BORDER}`, fontFamily: 'inherit', fontSize: 13, fontWeight: 700 }}
+            >
               {pages.map(p => <option key={p.id} value={p.id}>📄 {p.page_name}</option>)}
             </select>
           </div>
@@ -3025,7 +4148,8 @@ function SettingsModal({ pages, onClose, onSaved }: { pages: any[]; onClose: () 
 
         {/* Tabs */}
         <div style={{ display: 'flex', gap: 0, borderBottom: `1px solid ${BORDER}`, padding: '0 22px' }}>
-          {([['general','🤖 AI'],['auto','💬 ตอบอัตโนมัติ'],['kb','📚 ความรู้'],['qr','⚡ Quick Reply']] as const).map(([k,l]) => (
+          {/* ชื่อแท็บต้องตรงกับปุ่มในแถบพิมพ์ ("ข้อความบันทึก") ไม่งั้นแอดมินหาไม่เจอ */}
+          {([['general','🤖 AI'],['auto','💬 ตอบอัตโนมัติ'],['kb','📚 ความรู้'],['qr','⚡ ข้อความบันทึก']] as const).map(([k,l]) => (
             <button
               key={k}
               onClick={() => setTab(k)}
@@ -3039,16 +4163,16 @@ function SettingsModal({ pages, onClose, onSaved }: { pages: any[]; onClose: () 
           ))}
         </div>
 
-        <div style={{ padding: 22, flex: 1, overflowY: 'auto' }}>
+        <div style={{ padding: 22, flex: 1, minHeight: 0, overflowY: 'auto' }}>
           {tab === 'general' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <Toggle label="✨ เปิดปุ่ม 'AI ช่วยตอบ'" checked={settings.ai_assist_enabled} onChange={v => setSettings({...settings, ai_assist_enabled: v})} />
-              <Toggle label="🏷️ ให้ AI จัดหมวดหมู่อัตโนมัติ" checked={settings.ai_auto_categorize} onChange={v => setSettings({...settings, ai_auto_categorize: v})} />
+              <Toggle label="✨ เปิดปุ่ม 'AI ช่วยตอบ'" checked={settings.ai_assist_enabled} onChange={v => edit({ ai_assist_enabled: v })} />
+              <Toggle label="🏷️ ให้ AI จัดหมวดหมู่อัตโนมัติ" checked={settings.ai_auto_categorize} onChange={v => edit({ ai_auto_categorize: v })} />
               <div>
                 <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>🎭 โทนการตอบ</div>
                 <div style={{ display: 'flex', gap: 6 }}>
                   {[['friendly','😊 เป็นกันเอง'],['professional','💼 ทางการ'],['casual','😎 สบายๆ']].map(([v,l]) => (
-                    <button key={v} onClick={() => setSettings({...settings, ai_tone: v})} style={{
+                    <button key={v} onClick={() => edit({ ai_tone: v })} style={{
                       flex: 1, padding: '10px 8px', borderRadius: 10, border: settings.ai_tone === v ? `2px solid ${PRIMARY}` : `1.5px solid ${BORDER}`,
                       background: settings.ai_tone === v ? PRIMARY_LIGHT : 'white', cursor: 'pointer',
                       fontSize: 12, fontWeight: 800, color: settings.ai_tone === v ? PRIMARY : TEXT, fontFamily: 'inherit',
@@ -3061,17 +4185,17 @@ function SettingsModal({ pages, onClose, onSaved }: { pages: any[]; onClose: () 
 
           {tab === 'auto' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <Toggle label="💬 เปิดตอบกลับอัตโนมัติ (เมื่อมีข้อความใหม่)" checked={settings.auto_reply_enabled} onChange={v => setSettings({...settings, auto_reply_enabled: v})} />
+              <Toggle label="💬 เปิดตอบกลับอัตโนมัติ (เมื่อมีข้อความใหม่)" checked={settings.auto_reply_enabled} onChange={v => edit({ auto_reply_enabled: v })} />
               {settings.auto_reply_enabled && (
-                <textarea value={settings.auto_reply_message || ''} onChange={e => setSettings({...settings, auto_reply_message: e.target.value})} rows={3} placeholder="ข้อความตอบกลับอัตโนมัติ" style={{ width: '100%', padding: 10, borderRadius: 10, border: `1.5px solid ${BORDER}`, fontFamily: 'inherit', fontSize: 13, resize: 'vertical', boxSizing: 'border-box' }} />
+                <textarea value={settings.auto_reply_message || ''} onChange={e => edit({ auto_reply_message: e.target.value })} rows={3} placeholder="ข้อความตอบกลับอัตโนมัติ" style={{ width: '100%', padding: 10, borderRadius: 10, border: `1.5px solid ${BORDER}`, fontFamily: 'inherit', fontSize: 13, resize: 'vertical', boxSizing: 'border-box' }} />
               )}
 
               <div style={{ height: 1, background: BORDER, margin: '4px 0' }} />
 
-              <Toggle label="⏰ ตั้งเวลาทำการ (นอกเวลาส่งข้อความอัตโนมัติ)" checked={settings.business_hours_enabled} onChange={v => setSettings({...settings, business_hours_enabled: v})} />
+              <Toggle label="⏰ ตั้งเวลาทำการ (นอกเวลาส่งข้อความอัตโนมัติ)" checked={settings.business_hours_enabled} onChange={v => edit({ business_hours_enabled: v })} />
               {settings.business_hours_enabled && (
                 <>
-                  <textarea value={settings.off_hours_message || ''} onChange={e => setSettings({...settings, off_hours_message: e.target.value})} rows={2} placeholder="ข้อความนอกเวลาทำการ" style={{ width: '100%', padding: 10, borderRadius: 10, border: `1.5px solid ${BORDER}`, fontFamily: 'inherit', fontSize: 13, resize: 'vertical', boxSizing: 'border-box' }} />
+                  <textarea value={settings.off_hours_message || ''} onChange={e => edit({ off_hours_message: e.target.value })} rows={2} placeholder="ข้อความนอกเวลาทำการ" style={{ width: '100%', padding: 10, borderRadius: 10, border: `1.5px solid ${BORDER}`, fontFamily: 'inherit', fontSize: 13, resize: 'vertical', boxSizing: 'border-box' }} />
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                     {days.map(d => {
                       const bh = settings.business_hours?.[d.k] || { start: '09:00', end: '18:00', off: false }
@@ -3104,7 +4228,7 @@ function SettingsModal({ pages, onClose, onSaved }: { pages: any[]; onClose: () 
               </div>
               <textarea
                 value={settings.knowledge_base || ''}
-                onChange={e => setSettings({...settings, knowledge_base: e.target.value})}
+                onChange={e => edit({ knowledge_base: e.target.value })}
                 rows={14}
                 placeholder={'ตัวอย่าง:\n- เปิดทำการ จ-ศ 9:00-18:00\n- ส่งฟรี EMS เมื่อสั่งครบ 1,000 บาท\n- สินค้ามีรับประกัน 1 ปี\n- คืนสินค้าได้ภายใน 7 วัน...'}
                 style={{ width: '100%', padding: 12, borderRadius: 10, border: `1.5px solid ${BORDER}`, fontFamily: 'inherit', fontSize: 13, lineHeight: 1.6, resize: 'vertical', boxSizing: 'border-box' }}
@@ -3114,15 +4238,29 @@ function SettingsModal({ pages, onClose, onSaved }: { pages: any[]; onClose: () 
 
           {tab === 'qr' && (
             <div>
-              <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 10 }}>⚡ ข้อความสำเร็จรูป (ใช้ได้ทุกเพจ)</div>
+              <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 10 }}>⚡ ข้อความบันทึก (ใช้ได้ทุกเพจ)</div>
 
-              {/* Add new */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 12, background: SURFACE2, borderRadius: 12, marginBottom: 14 }}>
-                <input value={newQR.shortcut} onChange={e => setNewQR({...newQR, shortcut: e.target.value})} placeholder="คำสั่ง เช่น /ราคา" style={{ padding: 8, borderRadius: 8, border: `1px solid ${BORDER}`, fontFamily: 'inherit', fontSize: 12 }} />
-                <input value={newQR.title} onChange={e => setNewQR({...newQR, title: e.target.value})} placeholder="ชื่อแสดง เช่น ตอบราคา" style={{ padding: 8, borderRadius: 8, border: `1px solid ${BORDER}`, fontFamily: 'inherit', fontSize: 12 }} />
-                <textarea value={newQR.message} onChange={e => setNewQR({...newQR, message: e.target.value})} placeholder="ข้อความเต็ม" rows={3} style={{ padding: 8, borderRadius: 8, border: `1px solid ${BORDER}`, fontFamily: 'inherit', fontSize: 12, resize: 'vertical', boxSizing: 'border-box' }} />
-                <button onClick={addQR} style={{ ...btnPrimary, padding: '8px 12px', fontSize: 12 }}><Plus size={12} style={{ display: 'inline', marginRight: 4 }} />เพิ่ม</button>
-              </div>
+              {/* เพิ่ม/ลบได้เฉพาะเจ้าของเพจ — API ตีกลับ 403 ให้ลูกทีม ถ้าโชว์ฟอร์มไว้จะกดแล้วงงว่าไม่มีอะไรเกิดขึ้น */}
+              {isOwner ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 12, background: SURFACE2, borderRadius: 12, marginBottom: 14 }}>
+                  <input value={newQR.shortcut} onChange={e => setNewQR({...newQR, shortcut: e.target.value})} placeholder="คำสั่ง เช่น /ราคา" style={{ padding: 8, borderRadius: 8, border: `1px solid ${BORDER}`, fontFamily: 'inherit', fontSize: 12 }} />
+                  <input value={newQR.title} onChange={e => setNewQR({...newQR, title: e.target.value})} placeholder="ชื่อแสดง เช่น ตอบราคา" style={{ padding: 8, borderRadius: 8, border: `1px solid ${BORDER}`, fontFamily: 'inherit', fontSize: 12 }} />
+                  <textarea value={newQR.message} onChange={e => setNewQR({...newQR, message: e.target.value})} placeholder="ข้อความเต็ม" rows={3} style={{ padding: 8, borderRadius: 8, border: `1px solid ${BORDER}`, fontFamily: 'inherit', fontSize: 12, resize: 'vertical', boxSizing: 'border-box' }} />
+                  <button onClick={addQR} disabled={qrBusy} style={{ ...btnPrimary, padding: '8px 12px', fontSize: 12, opacity: qrBusy ? 0.6 : 1, cursor: qrBusy ? 'wait' : 'pointer' }}>
+                    <Plus size={12} style={{ display: 'inline', marginRight: 4 }} />{qrBusy ? 'กำลังเพิ่ม...' : 'เพิ่ม'}
+                  </button>
+                </div>
+              ) : (
+                <div style={{ padding: 12, background: SURFACE2, borderRadius: 12, marginBottom: 14, fontSize: 12, color: MUTED, fontWeight: 700, lineHeight: 1.6 }}>
+                  เฉพาะเจ้าของเพจเท่านั้นที่เพิ่ม/ลบข้อความบันทึกได้ — คุณใช้ข้อความด้านล่างตอบลูกค้าได้ตามปกติ
+                </div>
+              )}
+
+              {qrErr && (
+                <div role="alert" style={{ marginBottom: 12, padding: '9px 11px', background: RED_L, border: `1px solid ${RED}44`, borderRadius: 10, fontSize: 12, fontWeight: 700, color: RED, lineHeight: 1.5 }}>
+                  {qrErr}
+                </div>
+              )}
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {quickReplies.map(qr => (
@@ -3131,10 +4269,20 @@ function SettingsModal({ pages, onClose, onSaved }: { pages: any[]; onClose: () 
                       <div style={{ fontSize: 12, fontWeight: 800, color: PRIMARY, marginBottom: 2 }}>⚡ {qr.title} <span style={{ fontSize: 10, color: MUTED, fontWeight: 600 }}>{qr.shortcut}</span></div>
                       <div style={{ fontSize: 11, color: MUTED, lineHeight: 1.5 }}>{qr.message}</div>
                     </div>
-                    <button onClick={() => deleteQR(qr.id)} style={{ ...btnGhost, padding: 6, color: RED, alignSelf: 'flex-start' }}><X size={12} /></button>
+                    {/* can_delete จาก API = ข้อความที่ตัวเองสร้าง (ของ owner เพจอื่นลบไม่ได้) */}
+                    {isOwner && qr.can_delete !== false && (
+                      // ปุ่มเดิมเล็ก 24px นิ้วโป้งบนมือถือกดโดนโดยไม่ตั้งใจ → ขยายเป็น 40px + ถามยืนยันก่อนลบ
+                      <button
+                        onClick={() => deleteQR(qr)}
+                        aria-label={`ลบข้อความบันทึก ${qr.title}`}
+                        style={{ ...btnGhost, minWidth: 40, minHeight: 40, padding: 0, color: RED, alignSelf: 'flex-start', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    )}
                   </div>
                 ))}
-                {quickReplies.length === 0 && <div style={{ textAlign: 'center', padding: 20, color: MUTED, fontSize: 12 }}>ยังไม่มี Quick Reply</div>}
+                {quickReplies.length === 0 && <div style={{ textAlign: 'center', padding: 20, color: MUTED, fontSize: 12 }}>ยังไม่มีข้อความบันทึก</div>}
               </div>
             </div>
           )}
@@ -3166,12 +4314,34 @@ function SettingsModal({ pages, onClose, onSaved }: { pages: any[]; onClose: () 
         </div>
 
         {/* Footer */}
-        <div style={{ padding: '14px 22px', borderTop: `1.5px solid ${BORDER}`, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        <div style={{ padding: '14px 22px', borderTop: `1.5px solid ${BORDER}`, display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {/* โหลดค่าของเพจนี้ไม่สำเร็จ → ปุ่มบันทึกยังปิดอยู่ (กดได้ = ทับข้อมูลร้านด้วยค่าว่าง) ต้องมีปุ่มให้ลองใหม่ */}
+          {tab !== 'qr' && loadState === 'error' && (
+            <div role="alert" style={{ flex: 1, minWidth: 140, fontSize: 12, fontWeight: 800, lineHeight: 1.5, color: RED, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              โหลดการตั้งค่าไม่สำเร็จ — ลองใหม่อีกครั้ง
+              <button
+                onClick={() => setLoadTick(t => t + 1)}
+                style={{ padding: '7px 14px', minHeight: 36, fontSize: 12, fontWeight: 800, borderRadius: 9, border: `1.5px solid ${BORDER}`, background: SURFACE2, color: PRIMARY, cursor: 'pointer', fontFamily: 'inherit' }}
+              >
+                ลองใหม่
+              </button>
+            </div>
+          )}
+          {/* บอกผลการบันทึกตรงนี้ — เดิมสปินเนอร์หยุดแล้วเงียบ แอดมินไม่รู้ว่าบันทึกติดไหม */}
+          {tab !== 'qr' && loadState !== 'error' && saveMsg && (
+            <div role="alert" style={{ flex: 1, minWidth: 140, fontSize: 12, fontWeight: 800, lineHeight: 1.5, color: saveMsg.ok ? GREEN : RED }}>
+              {saveMsg.text}
+            </div>
+          )}
           <button onClick={onClose} style={{ ...btnGhost, padding: '9px 16px', fontSize: 12, fontWeight: 700 }}>ยกเลิก</button>
           {tab !== 'qr' && (
-            <button onClick={save} disabled={saving} style={{ ...btnPrimary, padding: '9px 18px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
-              {saving ? <RefreshCw size={12} style={{ animation: 'spin 1s linear infinite' }} /> : <CheckCircle2 size={12} />}
-              บันทึก
+            <button
+              onClick={save}
+              disabled={saving || loadingSettings}
+              style={{ ...btnPrimary, padding: '9px 18px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6, opacity: (saving || loadingSettings) ? 0.55 : 1, cursor: (saving || loadingSettings) ? 'not-allowed' : 'pointer' }}
+            >
+              {(saving || loadState === 'loading') ? <RefreshCw size={12} style={{ animation: 'spin 1s linear infinite' }} /> : <CheckCircle2 size={12} />}
+              {loadState === 'loading' ? 'กำลังโหลด...' : 'บันทึก'}
             </button>
           )}
         </div>

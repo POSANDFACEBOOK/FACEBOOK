@@ -10,11 +10,13 @@ export const dynamic = 'force-dynamic'
 
 export async function GET(req: Request) {
   try {
+    // ทุกกรณีที่ "โหลดไม่ได้" ต้องไม่ตอบ settings: [] เพราะหน้าตั้งค่าจะแปลว่า "ยังไม่เคยตั้งค่า"
+    // แล้วเติมค่า default ลงฟอร์ม — กด "บันทึก" ทีเดียวข้อมูลร้าน (knowledge_base) หายถาวร
     const session = await getServerSession(authOptions)
-    if (!session) return NextResponse.json({ settings: [] })
+    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const ctx = await getCurrentUserContext(session)
-    if (!ctx) return NextResponse.json({ settings: [] })
+    if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const accessible = Array.from(ctx.accessiblePageIds)
     if (accessible.length === 0) return NextResponse.json({ settings: [] })
@@ -25,14 +27,18 @@ export async function GET(req: Request) {
     const sb = supabaseAdmin()
     let q = sb.from('inbox_settings').select('*').in('page_id', accessible)
     if (pageId) {
-      if (!ctx.accessiblePageIds.has(pageId)) return NextResponse.json({ settings: [] })
+      if (!ctx.accessiblePageIds.has(pageId)) {
+        return NextResponse.json({ error: 'ไม่มีสิทธิ์ดูการตั้งค่าของเพจนี้' }, { status: 403 })
+      }
       q = q.eq('page_id', pageId)
     }
-    const { data } = await q
+    const { data, error } = await q
+    if (error) throw error
 
     return NextResponse.json({ settings: data || [] })
   } catch (err: any) {
-    return NextResponse.json({ error: err.message, settings: [] }, { status: 500 })
+    console.error('[inbox/settings] GET error:', err)
+    return NextResponse.json({ error: err.message }, { status: 500 })
   }
 }
 

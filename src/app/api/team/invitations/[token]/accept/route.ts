@@ -40,6 +40,30 @@ export async function POST(_req: Request, { params }: { params: { token: string 
       return NextResponse.json({ error: 'คำเชิญหมดอายุแล้ว' }, { status: 410 })
     }
 
+    // 1.5) ให้สิทธิ์เฉพาะเพจที่ "คนเชิญ" ยังเป็นเจ้าของอยู่จริง (ทางอีเมล+รหัสผ่านใน lib/auth.ts ก็กรองแบบเดียวกัน)
+    // เจ้าของอาจถอดเพจออก/ย้ายเจ้าของหลังส่งลิงก์เชิญไปแล้ว — ถ้าไม่กรอง ลูกทีมจะได้สิทธิ์เพจที่คนเชิญไม่มีสิทธิ์ให้
+    // เช็คก่อนสร้างบัญชี เพื่อไม่ให้คำเชิญที่ใช้ไม่ได้ทิ้งบัญชีค้างไว้ในระบบ
+    const requestedPageIds: string[] = inv.page_ids || []
+    let allowedPageIds: string[] = []
+    if (requestedPageIds.length > 0) {
+      const { data: ownerPages, error: ownerErr } = await sb
+        .from('page_members')
+        .select('page_id')
+        .eq('user_id', inv.owner_user_id)
+        .eq('role', 'owner')
+        .in('page_id', requestedPageIds)
+      if (ownerErr) {
+        // ต่อฐานข้อมูลไม่ได้ ≠ คำเชิญใช้ไม่ได้ — ห้ามตอบ 403 ให้คนถูกเชิญเข้าใจผิดว่าโดนถอดสิทธิ์
+        return NextResponse.json({ error: 'ตรวจสอบคำเชิญไม่สำเร็จ ลองใหม่อีกครั้ง' }, { status: 503 })
+      }
+      allowedPageIds = (ownerPages || []).map((r: any) => r.page_id)
+    }
+    if (allowedPageIds.length === 0) {
+      return NextResponse.json({
+        error: 'คำเชิญนี้ใช้ไม่ได้แล้ว — คนที่เชิญไม่ได้เป็นเจ้าของเพจในคำเชิญแล้ว ขอลิงก์เชิญใหม่จากเจ้าของเพจ',
+      }, { status: 403 })
+    }
+
     // 2) Upsert invitee user row
     const sessionUser = session.user as any
     const { data: existingUser } = await sb
@@ -84,8 +108,8 @@ export async function POST(_req: Request, { params }: { params: { token: string 
       return NextResponse.json({ error: 'คุณคือเจ้าของอยู่แล้ว — ไม่ต้องรับคำเชิญ' }, { status: 400 })
     }
 
-    // 4) Bulk insert page_members (ON CONFLICT DO NOTHING ถ้ามีอยู่แล้ว)
-    const memberRows = (inv.page_ids || []).map((pageId: string) => ({
+    // 4) Bulk insert page_members (ON CONFLICT DO NOTHING ถ้ามีอยู่แล้ว) — เฉพาะเพจที่กรองไว้ในข้อ 1.5
+    const memberRows = allowedPageIds.map((pageId: string) => ({
       user_id: inviteeUserId,
       page_id: pageId,
       role: inv.role,

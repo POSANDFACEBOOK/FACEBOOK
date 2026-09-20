@@ -12,7 +12,10 @@ export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 export const maxDuration = 30
 
-const MAX_BYTES = 5 * 1024 * 1024
+// 4 MB — ต้องต่ำกว่าเพดาน body ของ Vercel (4.5 MB) เผื่อ overhead ของ multipart
+// ไม่งั้นไฟล์ 4.5-5 MB จะโดน Vercel ตีกลับเป็น 413 ข้อความดิบ (ไม่ใช่ JSON) แอดมินเห็นแค่ "อัปโหลดรูปไม่สำเร็จ"
+// ฝั่ง browser ย่อรูปให้เล็กกว่านี้อยู่แล้ว (prepareImageForUpload) — ค่านี้เป็นด่านสุดท้าย
+const MAX_BYTES = 4 * 1024 * 1024
 const EXT: Record<string, string> = {
   'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp',
 }
@@ -45,8 +48,14 @@ export async function POST(req: Request) {
     if (!conversationId) {
       return NextResponse.json({ error: 'ไม่พบ conversationId' }, { status: 400 })
     }
-    if (file.size <= 0 || file.size > MAX_BYTES) {
-      return NextResponse.json({ error: 'ไฟล์ต้องไม่เกิน 5 MB' }, { status: 400 })
+    if (file.size <= 0) {
+      return NextResponse.json({ error: 'ไฟล์เสียหรือว่างเปล่า — กรุณาเลือกรูปใหม่อีกครั้ง' }, { status: 400 })
+    }
+    if (file.size > MAX_BYTES) {
+      return NextResponse.json(
+        { error: 'รูปใหญ่เกินไป (เกิน 4 MB) — ลองถ่ายหน้าจอรูปนี้แล้วส่งภาพที่แคปมาแทน' },
+        { status: 413 },
+      )
     }
 
     const sb = supabaseAdmin()

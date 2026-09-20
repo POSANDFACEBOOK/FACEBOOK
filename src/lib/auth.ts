@@ -62,6 +62,25 @@ async function authorizeCredentials(creds: any): Promise<{ id: string; name: str
     const okInv = await bcrypt.compare(password, inv.initial_password_hash)
     if (!okInv) return null
 
+    // 2.5) ให้สิทธิ์เฉพาะเพจที่ "คนเชิญ" ยังเป็นเจ้าของอยู่จริง
+    // เช็คก่อนสร้าง user เพื่อให้คำเชิญที่ใช้ไม่ได้ ไม่ทิ้งบัญชีค้างไว้ในระบบ
+    // (เจ้าของถอดเพจออกหลังส่งคำเชิญ / แถวคำเชิญถูกใส่มาจากทางอื่น)
+    const requestedPageIds: string[] = inv.page_ids || []
+    let allowedPageIds: string[] = []
+    if (requestedPageIds.length > 0) {
+      const { data: ownerPages } = await sb
+        .from('page_members')
+        .select('page_id')
+        .eq('user_id', inv.owner_user_id)
+        .eq('role', 'owner')
+        .in('page_id', requestedPageIds)
+      allowedPageIds = (ownerPages || []).map((r: any) => r.page_id)
+    }
+    if (allowedPageIds.length === 0) {
+      console.warn('[authorizeCredentials] refused — inviter no longer owns invited pages:', inv.id)
+      return null
+    }
+
     // 3) Activate invitation
     let userId: string
     if (user) {
@@ -93,19 +112,17 @@ async function authorizeCredentials(creds: any): Promise<{ id: string; name: str
       userId = created.id
     }
 
-    // 4) Add page_members
-    const rows = (inv.page_ids || []).map((pid: string) => ({
+    // 4) Add page_members (เฉพาะเพจที่กรองไว้ในข้อ 2.5)
+    const rows = allowedPageIds.map((pid: string) => ({
       user_id: userId,
       page_id: pid,
       role: inv.role,
       invited_by: inv.owner_user_id,
     }))
-    if (rows.length > 0) {
-      const { error: memErr } = await sb
-        .from('page_members')
-        .upsert(rows, { onConflict: 'user_id,page_id', ignoreDuplicates: true })
-      if (memErr) console.error('[authorizeCredentials] page_members upsert failed:', memErr.message)
-    }
+    const { error: memErr } = await sb
+      .from('page_members')
+      .upsert(rows, { onConflict: 'user_id,page_id', ignoreDuplicates: true })
+    if (memErr) console.error('[authorizeCredentials] page_members upsert failed:', memErr.message)
 
     // 5) Mark invitation accepted (atomic flip)
     await sb
@@ -119,6 +136,32 @@ async function authorizeCredentials(creds: any): Promise<{ id: string; name: str
     console.error('[authorizeCredentials] threw:', e?.message)
     return null
   }
+}
+
+/**
+ * กัน "ยิง Facebook ทุก request" เมื่อ token ตายแล้ว
+ * jwt callback ที่ถูกเรียกจาก API route เขียน cookie กลับไม่ได้ (next-auth ตัดทิ้ง)
+ * → ถ้า exchange ล้ม แล้วไม่จำไว้ ทุก request (poll ทุก 7 วิ) จะรอ Graph API ใหม่ทุกครั้ง
+ * จำไว้ใน memory ของ instance (Vercel ใช้ instance ซ้ำหลาย request) — cold start แล้วลองใหม่เองได้
+ */
+const EXCHANGE_COOLDOWN_MS = 6 * 60 * 60 * 1000
+const exchangeCooldown = new Map<string, number>()
+
+function exchangeKey(token: string): string {
+  return token.slice(-16)
+}
+function inExchangeCooldown(key: string): boolean {
+  const until = exchangeCooldown.get(key)
+  if (!until) return false
+  if (Date.now() >= until) {
+    exchangeCooldown.delete(key)
+    return false
+  }
+  return true
+}
+function startExchangeCooldown(key: string) {
+  if (exchangeCooldown.size > 200) exchangeCooldown.clear()  // กัน map โตไม่จำกัด
+  exchangeCooldown.set(key, Date.now() + EXCHANGE_COOLDOWN_MS)
 }
 
 async function exchangeForLongLivedToken(
@@ -290,13 +333,19 @@ export const authOptions = {
           return token
         }
 
-        // ถ้ายังไม่ได้ exchange (ครั้งแรก fail) → ลองใหม่
+        // ถ้ายังไม่ได้ exchange (ครั้งแรก fail) → ลองใหม่ (เว้นช่วงถ้าเพิ่งล้มไป)
         if (token?.needsExchange && token?.accessToken) {
-          const longLived = await exchangeForLongLivedToken(token.accessToken as string, 5000)
-          if (longLived) {
-            token.accessToken = longLived
-            token.tokenIssuedAt = Date.now()
-            token.needsExchange = false
+          const key = exchangeKey(token.accessToken as string)
+          if (!inExchangeCooldown(key)) {
+            const longLived = await exchangeForLongLivedToken(token.accessToken as string, 5000)
+            if (longLived) {
+              exchangeCooldown.delete(key)
+              token.accessToken = longLived
+              token.tokenIssuedAt = Date.now()
+              token.needsExchange = false
+            } else {
+              startExchangeCooldown(key)
+            }
           }
         }
 
@@ -304,11 +353,17 @@ export const authOptions = {
         const REFRESH_AFTER_MS = 25 * 24 * 60 * 60 * 1000
         if (!token?.needsExchange && token?.accessToken && token?.tokenIssuedAt) {
           const age = Date.now() - (token.tokenIssuedAt as number)
-          if (age > REFRESH_AFTER_MS) {
+          const key = exchangeKey(token.accessToken as string)
+          if (age > REFRESH_AFTER_MS && !inExchangeCooldown(key)) {
             const refreshed = await exchangeForLongLivedToken(token.accessToken as string, 5000)
             if (refreshed) {
+              exchangeCooldown.delete(key)
               token.accessToken = refreshed
               token.tokenIssuedAt = Date.now()
+            } else {
+              // token หมดอายุ/ถูกเพิกถอน → แอปยังทำงานด้วย page token เดิม
+              // แต่ห้ามยิง Graph ซ้ำทุก request (แชทจะหน่วงทุกครั้งที่ poll)
+              startExchangeCooldown(key)
             }
           }
         }

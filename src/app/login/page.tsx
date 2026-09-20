@@ -3,6 +3,25 @@ import { Suspense, useState, useEffect } from 'react'
 import { signIn, signOut, useSession } from 'next-auth/react'
 import { useSearchParams, useRouter } from 'next/navigation'
 
+/**
+ * รับเฉพาะเส้นทางภายในระบบเท่านั้น
+ * ถ้าไม่กรอง ลิงก์หลอก /login?callbackUrl=https://เว็บปลอม จะพาแอดมินออกไปหน้า login ปลอมทันที
+ * ใช้ new URL() ตัวเดียวกับที่ router ใช้ → //evil, /\evil, javascript: ถูกตัดทิ้งหมด
+ * (เรียกตอน client เท่านั้น เพราะใช้ window)
+ */
+function safeCallbackUrl(raw: string | null): string {
+  const fallback = '/dashboard/inbox'
+  if (!raw) return fallback
+  try {
+    const origin = window.location.origin
+    const u = new URL(raw, origin)
+    if (u.origin !== origin) return fallback
+    return u.pathname + u.search + u.hash
+  } catch {
+    return fallback
+  }
+}
+
 export default function LoginPage() {
   return (
     <Suspense fallback={<div style={{ minHeight: '100vh', background: '#eaf2fd' }} />}>
@@ -15,12 +34,12 @@ function LoginInner() {
   const { data: session, status } = useSession()
   const searchParams = useSearchParams()
   const router = useRouter()
-  const callbackUrl = searchParams.get('callbackUrl') || '/dashboard/inbox'
+  const rawCallback = searchParams.get('callbackUrl')
 
   // login อยู่แล้ว → ข้ามหน้านี้ เข้าหน้าปลายทางเลย (เช่น ลิงก์แชท /dashboard/inbox)
   useEffect(() => {
-    if (status === 'authenticated') router.replace(callbackUrl)
-  }, [status, callbackUrl, router])
+    if (status === 'authenticated') router.replace(safeCallbackUrl(rawCallback))
+  }, [status, rawCallback, router])
 
   const [mode, setMode] = useState<'owner' | 'agent'>('owner')
   const [email, setEmail] = useState('')
@@ -35,6 +54,7 @@ function LoginInner() {
     setError(null)
     setBusy(true)
     try {
+      const callbackUrl = safeCallbackUrl(rawCallback)
       const res = await signIn('credentials', {
         email: email.trim(),
         password: password.trim(),
@@ -46,7 +66,7 @@ function LoginInner() {
         setBusy(false)
         return
       }
-      router.push(res.url || callbackUrl)
+      router.push(res.url ? safeCallbackUrl(res.url) : callbackUrl)
     } catch (err: any) {
       setError('เกิดข้อผิดพลาด: ' + (err?.message || 'unknown'))
       setBusy(false)
@@ -153,7 +173,7 @@ function LoginInner() {
                   </p>
                   <button
                     className="fbtap"
-                    onClick={() => signIn('facebook', { callbackUrl })}
+                    onClick={() => signIn('facebook', { callbackUrl: safeCallbackUrl(rawCallback) })}
                     style={{
                       width: '100%', padding: '14px 22px',
                       background: 'linear-gradient(135deg, #1877f2 0%, #0d65d9 100%)',
