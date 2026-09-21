@@ -7,7 +7,7 @@ import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { rehostUrlToStorage } from '@/lib/media'
 import { hostProfilePic, ensureCustomerPicture, avatarIsFresh } from '@/lib/customer-avatar'
-import { isFbSystemText } from '@/lib/fb-system-messages'
+import { isFbSystemText, isFbAutoReplyText } from '@/lib/fb-system-messages'
 import {
   verifyWebhookSignature,
   getUserProfile,
@@ -20,6 +20,11 @@ import {
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 export const maxDuration = 30
+
+// ดึงรูป/ไฟล์จาก CDN ของ FB นานสุดเท่านี้ — FB รอคำตอบ webhook ~20 วิ ถ้าช้ากว่านี้ข้อความลูกค้าจะไม่ถูกบันทึก
+const REHOST_TIMEOUT_MS = 8000
+// ข้อความล่าสุดของแชทที่ลูกค้าโทรมาแล้วไม่มีคนรับ (Facebook ตอบขออภัยแทนเพจ) — แอดมินต้องรู้ว่าต้องโทรกลับ
+const MISSED_CALL_PREVIEW = '📞 ลูกค้าโทรมาแต่ไม่มีคนรับ'
 
 // ─────────────────────────────────────────────
 // GET — Webhook verification handshake
@@ -124,15 +129,17 @@ async function processMessagingEvent(pageId: string, event: WebhookMessagingEven
   // ─── หา/สร้าง conversation ───
   let { data: conv } = await sb
     .from('conversations')
-    .select('id, customer_name, unread_count, customer_picture')
+    .select('id, customer_name, unread_count, customer_picture, is_archived, is_resolved')
     .eq('fb_page_id', pageId)
     .eq('fb_psid', customerPsid)
     .single()
 
-  const isNewConv = !conv
+  let isNewConv = !conv
   const eventAt = new Date(event.timestamp).toISOString()
   // ข้อความระบบของ Facebook (แจ้งเตือนการโทร, ป้ายอัตโนมัติ ฯลฯ) → เก็บไว้ (หน้าแชทซ่อนเอง) แต่ไม่นับเป็นข้อความใหม่
-  const isSystem = isFbSystemText(msg.text, direction, conv?.customer_name)
+  let isSystem = isFbSystemText(msg.text, direction, conv?.customer_name)
+  // Facebook ตอบแทนเพจเอง "ขออภัยที่ไม่ได้รับสายของคุณ..." → แสดงในแชท แต่ไม่ใช่คนตอบ (ดู fb-system-messages.ts)
+  const isFbAuto = isFbAutoReplyText(msg.text, direction)
   // แชทใหม่ที่เริ่มด้วยข้อความระบบ → ไม่ต้องสร้าง (ไม่มีอะไรให้แอดมินตอบ; sync จะดึงแชทมาเองเมื่อมีข้อความจริง)
   if (!conv && isSystem) return
   if (!conv) {
@@ -141,23 +148,43 @@ async function processMessagingEvent(pageId: string, event: WebhookMessagingEven
     const hostedPic = await hostProfilePic(sb, page.id, customerPsid, profile?.profile_pic)
     // User Profile API ใช้ไม่ได้ (แอปยังไม่ได้สิทธิ์) → ชื่อจากรายชื่อผู้ร่วมแชทแทน ไม่งั้นขึ้นว่า "ลูกค้า"
     const fallbackName = profile?.name ? null : await getCustomerNameFromConversation(pageId, customerPsid, pageToken)
-    const { data: newConv } = await sb
+    // upsert กัน race: ลูกค้าใหม่ทักติดๆ กัน (ข้อความ + รูป) webhook 2 ตัวทำงานพร้อมกัน ทั้งคู่เห็นว่ายังไม่มีแชท
+    // ignoreDuplicates = ตัวที่ช้ากว่าจะไม่ทับแถวของตัวแรก (ไม่งั้น unread/ข้อความล่าสุดถอยหลัง) แต่ต้องไม่ return ทิ้ง
+    const { data: newConv, error: convErr } = await sb
       .from('conversations')
-      .insert({
-        user_id: page.user_id,
-        page_id: page.id,
-        fb_page_id: pageId,
-        fb_psid: customerPsid,
-        customer_name: profile?.name || fallbackName || 'ลูกค้า',
-        customer_picture: hostedPic || profile?.profile_pic || null,
-        last_message: msg.text || '(ไฟล์แนบ)',
-        last_message_at: new Date(event.timestamp).toISOString(),
-        last_sender: direction === 'inbound' ? 'customer' : 'page',
-        unread_count: direction === 'inbound' ? 1 : 0,
-      })
-      .select('id, customer_name, unread_count, customer_picture')
-      .single()
-    conv = newConv
+      .upsert(
+        {
+          user_id: page.user_id,
+          page_id: page.id,
+          fb_page_id: pageId,
+          fb_psid: customerPsid,
+          customer_name: profile?.name || fallbackName || 'ลูกค้า',
+          customer_picture: hostedPic || profile?.profile_pic || null,
+          last_message: isFbAuto ? MISSED_CALL_PREVIEW : (msg.text || '(ไฟล์แนบ)'),
+          last_message_at: eventAt,
+          last_sender: direction === 'inbound' || isFbAuto ? 'customer' : 'page',
+          unread_count: direction === 'inbound' ? 1 : 0,
+        },
+        { onConflict: 'fb_page_id,fb_psid', ignoreDuplicates: true },
+      )
+      .select('id, customer_name, unread_count, customer_picture, is_archived, is_resolved')
+      .maybeSingle()  // ชนกัน = ไม่คืนแถว (ห้ามใช้ .single() จะกลายเป็น error)
+    if (newConv) conv = newConv
+    else {
+      if (convErr) console.error('[messenger webhook] conversation upsert failed:', convErr.message)
+      // webhook อีกตัวสร้างแชทนี้ไปแล้ว → ใช้แถวเดิม แล้วทำงานต่อแบบ "แชทเดิม" (ไม่งั้นข้อความนี้หายไปเลย)
+      const { data: raced } = await sb
+        .from('conversations')
+        .select('id, customer_name, unread_count, customer_picture, is_archived, is_resolved')
+        .eq('fb_page_id', pageId)
+        .eq('fb_psid', customerPsid)
+        .maybeSingle()
+      if (raced) {
+        conv = raced
+        isNewConv = false
+        isSystem = isFbSystemText(msg.text, direction, raced.customer_name)  // เพิ่งรู้ชื่อลูกค้า → เช็ครูปแบบข้อความระบบใหม่
+      }
+    }
   }
 
   if (!conv) return
@@ -171,7 +198,7 @@ async function processMessagingEvent(pageId: string, event: WebhookMessagingEven
       const srcUrl = a.payload?.url
       const isSticker = !!a.payload?.sticker_id || !!msg.sticker_id
       if ((a.type === 'image' || isSticker) && srcUrl) {
-        const hosted = await rehostUrlToStorage(sb, srcUrl, {}, `fb/${page.id}`)
+        const hosted = await rehostUrlToStorage(sb, srcUrl, {}, `fb/${page.id}`, { timeoutMs: REHOST_TIMEOUT_MS })
         return { type: 'image', url: hosted || srcUrl, ...(isSticker ? { name: 'sticker' } : {}) }
       }
       if (!srcUrl) return { type: 'unavailable' }
@@ -220,24 +247,52 @@ async function processMessagingEvent(pageId: string, event: WebhookMessagingEven
 
   // ─── อัปเดต conversation (แชทที่มีอยู่แล้ว) ───
   if (!isNewConv && inserted && !isSystem) {
-    await sb
-      .from('conversations')
-      .update({
-        last_message: msg.text || '(ไฟล์แนบ)',
-        last_message_at: eventAt,
-        last_sender: direction === 'inbound' ? 'customer' : 'page',
-        // เพจตอบแล้ว (แม้ตอบจากแอป Facebook/Business Suite) = แอดมินอ่านแล้ว → ล้างตัวเลข "ใหม่"
-        unread_count: direction === 'inbound' ? (conv.unread_count || 0) + 1 : 0,
-        // ลูกค้าทักกลับ → ส่งได้แล้ว → ล้างป้ายเตือน
-        ...(direction === 'inbound' ? { send_block_code: null, send_block_at: null } : {}),
+    const preview = msg.text || '(ไฟล์แนบ)'
+    // event ที่มาช้ากว่าข้อความล่าสุดในแชท (เช่นแอดมินตอบไปแล้ว) ห้ามทับสถานะใหม่กว่า
+    const notOlder = `last_message_at.is.null,last_message_at.lte."${eventAt}"`
+    if (isFbAuto) {
+      // Facebook ขออภัยแทนเพจตอนไม่มีคนรับสาย = ลูกค้ากำลังตามเรื่อง ไม่ใช่เพจตอบ
+      // → ค้างไว้ใน "ยังไม่ตอบ" และไม่ล้างตัวเลข "ใหม่" (ตัวเลขเดิมของแชทไม่ถูกแตะ)
+      await sb
+        .from('conversations')
+        .update({ last_message: MISSED_CALL_PREVIEW, last_message_at: eventAt, last_sender: 'customer' })
+        .eq('id', conv.id)
+        .or(notOlder)
+    } else {
+      // นับ unread ด้วย SQL (unread_count + 1 ในคำสั่งเดียว) — ลูกค้าส่งรัวๆ หลาย webhook พร้อมกันจะไม่ทับตัวเลขกัน
+      const { error: bumpErr } = await sb.rpc('bump_conversation_on_message', {
+        p_conv: conv.id,
+        p_at: eventAt,
+        p_preview: preview,
+        p_inbound: direction === 'inbound',
       })
-      .eq('id', conv.id)
-      // event ที่มาช้ากว่าข้อความล่าสุดในแชท (เช่นแอดมินตอบไปแล้ว) ห้ามทับสถานะใหม่กว่า
-      .or(`last_message_at.is.null,last_message_at.lte."${eventAt}"`)
+      if (bumpErr) {
+        // ยังไม่ได้รัน supabase/migration_webhook_concurrency.sql → ใช้วิธีเดิมไปก่อน (ข้อความไม่หาย แต่ตัวเลข "ใหม่" อาจนับพลาด)
+        console.warn('[messenger webhook] bump_conversation_on_message failed:', bumpErr.message)
+        await sb
+          .from('conversations')
+          .update({
+            last_message: preview,
+            last_message_at: eventAt,
+            last_sender: direction === 'inbound' ? 'customer' : 'page',
+            // เพจตอบแล้ว (แม้ตอบจากแอป Facebook/Business Suite) = แอดมินอ่านแล้ว → ล้างตัวเลข "ใหม่"
+            unread_count: direction === 'inbound' ? (conv.unread_count || 0) + 1 : 0,
+            // ลูกค้าทักกลับ → ส่งได้แล้ว → ล้างป้ายเตือน
+            ...(direction === 'inbound' ? { send_block_code: null, send_block_at: null } : {}),
+          })
+          .eq('id', conv.id)
+          .or(notOlder)
+      }
+    }
   }
 
   // ─── Auto-reply (ถ้าเปิด + เป็น inbound + นอกเวลาทำการ หรือ enable auto-reply เสมอ) ───
   if (direction === 'inbound' && inserted && !isSystem) {
+    // ลูกค้าทักมาใหม่ในแชทที่ "จัดเก็บ"/"จบบทสนทนา" ไว้ → เอากลับเข้ากล่องข้อความ ไม่งั้นแอดมินไม่เห็นข้อความนี้เลย
+    // เช็คจากแถวที่อ่านมาแล้วค่อยเขียน = แชททั่วไปไม่ต้องเสีย query เพิ่ม · echo/เพจตอบ ห้ามปลุกแชทที่ปิดไปแล้ว
+    if ((conv as any).is_archived || (conv as any).is_resolved) {
+      await sb.from('conversations').update({ is_archived: false, is_resolved: false }).eq('id', conv.id)
+    }
     await maybeAutoReply(page.id, page.user_id, pageId, pageToken, customerPsid)
   }
 
@@ -282,7 +337,6 @@ async function maybeAutoReply(
 
   if (!replyText) return
 
-  // Throttle: อย่าตอบซ้ำถ้าตอบไปแล้วใน 1 ชม.
   const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString()
   const { data: convo } = await sb
     .from('conversations')
@@ -290,8 +344,19 @@ async function maybeAutoReply(
     .eq('fb_page_id', fbPageId)
     .eq('fb_psid', customerPsid)
     .single()
+  if (!convo) return
 
-  if (convo) {
+  // Throttle: อย่าตอบซ้ำถ้าตอบไปแล้วใน 1 ชม. — "จอง" สิทธิ์ก่อนส่ง (UPDATE เดียวจบ)
+  // ลูกค้าพิมพ์ติดๆ กัน 2 ข้อความ = webhook 2 ตัวพร้อมกัน ถ้าเช็คก่อนแล้วค่อยส่ง ทั้งคู่จะส่ง → ลูกค้าได้ข้อความบอทซ้ำ
+  const { data: claimed, error: claimErr } = await sb
+    .from('conversations')
+    .update({ auto_reply_at: new Date().toISOString() })
+    .eq('id', convo.id)
+    .or(`auto_reply_at.is.null,auto_reply_at.lt."${oneHourAgo}"`)
+    .select('id')
+  if (claimErr) {
+    // ยังไม่ได้รัน supabase/migration_webhook_concurrency.sql → ใช้วิธีเดิมไปก่อน (กันซ้ำได้ไม่ 100%)
+    console.warn('[auto-reply] claim failed (run supabase/migration_webhook_concurrency.sql):', claimErr.message)
     const { data: recentAuto } = await sb
       .from('inbox_messages')
       .select('id')
@@ -299,49 +364,65 @@ async function maybeAutoReply(
       .eq('sent_by', 'page_auto')
       .gte('created_at', oneHourAgo)
       .limit(1)
-
     if (recentAuto && recentAuto.length > 0) return  // ตอบ auto ไปแล้ว
+  } else if (!claimed || claimed.length === 0) {
+    return  // ตอบ auto ไปแล้วใน 1 ชม. (หรือ webhook อีกตัวกำลังตอบอยู่)
   }
 
   // ส่งข้อความ
   const result = await sendTextMessage(pageToken, customerPsid, replyText)
-  if (result.success && convo) {
-    await sb.from('inbox_messages').insert({
-      conversation_id: convo.id,
-      fb_message_id: result.message_id,
-      fb_sender_id: fbPageId,
-      direction: 'outbound',
-      message_text: replyText,
-      sent_by: 'page_auto',
-      delivery_status: 'sent',
-    })
-    await sb
-      .from('conversations')
-      .update({
-        last_message: replyText,
-        last_message_at: new Date().toISOString(),
-        last_sender: 'page',
-      })
-      .eq('id', convo.id)
+  if (!result.success) {
+    // ส่งไม่สำเร็จ → คืนสิทธิ์ ให้ข้อความถัดไปของลูกค้าลองใหม่ได้
+    if (!claimErr) await sb.from('conversations').update({ auto_reply_at: null }).eq('id', convo.id)
+    return
   }
+  await sb.from('inbox_messages').insert({
+    conversation_id: convo.id,
+    fb_message_id: result.message_id,
+    fb_sender_id: fbPageId,
+    direction: 'outbound',
+    message_text: replyText,
+    sent_by: 'page_auto',
+    delivery_status: 'sent',
+  })
+  await sb
+    .from('conversations')
+    .update({
+      last_message: replyText,
+      last_message_at: new Date().toISOString(),
+      last_sender: 'page',
+    })
+    .eq('id', convo.id)
 }
 
 // helper — ดูว่าตอนนี้อยู่นอกเวลาทำการมั้ย (timezone: Asia/Bangkok)
+// รองรับร้านที่ปิดหลังเที่ยงคืน เช่น 10:00–00:00 หรือ 17:00–02:00 (เวลาปิด <= เวลาเปิด = ปิดของวันถัดไป)
+// ช่อง <input type="time"> พิมพ์ 24:00 ไม่ได้ ร้านที่ปิดเที่ยงคืนจึงกรอก 00:00 — ถ้าคิดตรงๆ จะกลายเป็น "ปิดทั้งวัน"
+// แล้วลูกค้าโดนตอบ "นอกเวลาทำการ" ตอนร้านขายอยู่
 function isOutsideBusinessHours(hours: any): boolean {
   if (!hours) return false
-  const now = new Date()
   // แปลงเป็นเวลาไทย
-  const bangkokTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }))
+  const bangkokTime = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }))
   const dayKeys = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
-  const dayKey = dayKeys[bangkokTime.getDay()]
-  const today = hours[dayKey]
-  if (!today || today.off) return true
-  const hh = bangkokTime.getHours()
-  const mm = bangkokTime.getMinutes()
-  const cur = hh * 60 + mm
-  const [sh, sm] = (today.start || '09:00').split(':').map(Number)
-  const [eh, em] = (today.end || '18:00').split(':').map(Number)
-  const startMin = sh * 60 + sm
-  const endMin = eh * 60 + em
-  return cur < startMin || cur > endMin
+  const cur = bangkokTime.getHours() * 60 + bangkokTime.getMinutes()
+
+  // เปิดอยู่มั้ยตามตารางของวันนั้น — minutes นับจากเที่ยงคืนของวันนั้น (ใส่ +1440 = ข้ามเที่ยงคืนมาแล้ว)
+  // null = เวลาในตารางเพี้ยน → ถือว่าเปิด ดีกว่าตอบ "นอกเวลาทำการ" ใส่ลูกค้าทั้งวัน
+  const openOn = (dayIndex: number, minutes: number): boolean | null => {
+    const d = hours[dayKeys[(dayIndex + 7) % 7]]
+    if (!d || d.off) return false
+    const [sh, sm] = String(d.start || '09:00').split(':').map(Number)
+    const [eh, em] = String(d.end || '18:00').split(':').map(Number)
+    if ([sh, sm, eh, em].some(n => !Number.isFinite(n))) return null
+    const startMin = sh * 60 + sm
+    let endMin = eh * 60 + em
+    if (endMin <= startMin) endMin += 1440  // ปิด 00:00 / ปิดหลังเที่ยงคืน = วันถัดไป
+    return minutes >= startMin && minutes < endMin
+  }
+
+  const dow = bangkokTime.getDay()
+  const openToday = openOn(dow, cur)
+  const openFromYesterday = openOn(dow - 1, cur + 1440)  // ช่วงของเมื่อวานที่ลากข้ามเที่ยงคืนมาถึงตอนนี้
+  if (openToday === null || openFromYesterday === null) return false
+  return !(openToday || openFromYesterday)
 }

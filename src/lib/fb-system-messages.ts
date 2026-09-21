@@ -41,13 +41,19 @@ const RULES: Rule[] = [
   { start: 'The video call ended', maxLen: 25 },
 ]
 
+// Facebook ตอบแทนเพจเองเมื่อไม่มีคนรับสาย — ลูกค้าเห็นข้อความนี้จริง (ต้องแสดง)
+// แต่ "ไม่ใช่คนตอบ" → ห้ามนับว่าเพจตอบแล้ว ไม่งั้นแชทที่ลูกค้าโทรมาแล้วไม่มีคนรับ จะหลุดจาก "ยังไม่ตอบ"
+const AUTO_REPLY: Rule[] = [
+  { dir: 'outbound', start: 'ขออภัยที่ไม่ได้รับสายของคุณ' },
+  { dir: 'outbound', start: 'Sorry that we missed your call' },
+]
+
 // แสดงเสมอ (ข้อมูลที่แอดมินต้องรู้ / ข้อความที่ลูกค้าได้รับจริง)
 const KEEP: Rule[] = [
   { dir: 'inbound', has: ' ส่งการชำระเงินจำนวน ฿', maxLen: 120 },
   { dir: 'inbound', end: ' ส่งการชำระเงิน', maxLen: 80 },
   { dir: 'inbound', has: ' sent a payment', maxLen: 120 },
-  { dir: 'outbound', start: 'ขออภัยที่ไม่ได้รับสายของคุณ' },
-  { dir: 'outbound', start: 'Sorry that we missed your call' },
+  ...AUTO_REPLY,
 ]
 
 const normName = (s: string) => s.toLowerCase().replace(/\./g, ' ').split(/\s+/).filter(Boolean)
@@ -89,6 +95,15 @@ export function isFbSystemText(text: string | null | undefined, direction?: stri
   const t = (text || '').trim()
   if (!t || isKept(t, direction)) return false
   return RULES.some(r => matches(r, t, direction, customerName))
+}
+
+/**
+ * เป็นข้อความที่ Facebook ตอบแทนเพจเองไหม (ตอบสายที่ไม่ได้รับ)
+ * แสดงในแชทตามปกติ แต่คนเรียกต้องไม่นับเป็น "เพจตอบแล้ว" (last_sender = 'page')
+ */
+export function isFbAutoReplyText(text: string | null | undefined, direction?: string | null): boolean {
+  const t = (text || '').trim()
+  return !!t && AUTO_REPLY.some(r => matches(r, t, direction))
 }
 
 type GraphMsg = { message?: string | null; from?: { id?: string } | null; tags?: { data?: Array<{ name?: string }> } | null }

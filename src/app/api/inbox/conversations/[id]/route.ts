@@ -4,7 +4,7 @@ import { getServerSession } from 'next-auth'
 import { NextResponse } from 'next/server'
 import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase'
-import { getCurrentUserContext } from '@/lib/team'
+import { getCurrentUserContext, contextErrorStatus } from '@/lib/team'
 import { isFbSystemText, isHiddenInboxMessage } from '@/lib/fb-system-messages'
 
 export const dynamic = 'force-dynamic'
@@ -63,16 +63,27 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     }
 
     // Mark conversation as read (reset unread count)
+    // เทียบก่อนเขียน (lte): ถ้ามีข้อความใหม่เข้ามาระหว่างอ่าน→เขียน (sync/webhook เพิ่ม unread)
+    // จะไม่ล้างทิ้ง ไม่งั้นข้อความนั้นถูกทำเป็น "อ่านแล้ว" ให้ทั้งทีมทั้งที่ยังไม่มีใครเห็น
+    // รอบ poll ถัดไป (7 วิ) จะเคลียร์ให้เองหลังข้อความขึ้นจอแล้ว
     if (conversation.unread_count > 0) {
-      await sb
+      // ลูกค้าเก่าทักกลับมาในแชทที่ "จัดเก็บ" ไว้ → เอากลับเข้ากล่องข้อความ
+      // ไม่งั้นพออ่านแล้วเลขเป็น 0 แชทจะหายกลับไปซ่อนอีก ทั้งที่ยังไม่ได้ตอบลูกค้า
+      const unarchive = !!conversation.is_archived
+      const patch: Record<string, any> = { unread_count: 0 }
+      if (unarchive) patch.is_archived = false
+      const { data: cleared } = await sb
         .from('conversations')
-        .update({ unread_count: 0 })
+        .update(patch)
         .eq('id', params.id)
+        .lte('unread_count', conversation.unread_count)
+        .select('id')
+      if (unarchive && cleared && cleared.length > 0) conversation.is_archived = false
     }
 
     return NextResponse.json({ conversation, messages: outMessages })
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 })
+    return NextResponse.json({ error: err.message }, { status: contextErrorStatus(err) })
   }
 }
 
@@ -101,6 +112,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     for (const k of ['is_archived', 'is_resolved', 'is_starred', 'unread_count', 'tags', 'ai_category', 'ai_sentiment', 'ai_summary']) {
       if (k in body) allowed[k] = body[k]
     }
+    // "จัดเก็บ" = จัดการแชทนี้จบแล้ว → เคลียร์เลขข้อความใหม่ด้วย
+    // (รายการแชทแสดงแชทที่จัดเก็บซึ่งยังมีข้อความใหม่ ถ้าไม่เคลียร์ แชทสแปมที่กดจัดเก็บทั้งที่ยังไม่ได้เปิด จะไม่หายไปไหน)
+    if (allowed.is_archived === true && !('unread_count' in allowed)) allowed.unread_count = 0
 
     const { error } = await sb
       .from('conversations')
@@ -110,6 +124,6 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     if (error) throw error
     return NextResponse.json({ success: true })
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 })
+    return NextResponse.json({ error: err.message }, { status: contextErrorStatus(err) })
   }
 }

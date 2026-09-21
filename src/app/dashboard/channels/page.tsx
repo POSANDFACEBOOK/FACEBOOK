@@ -18,6 +18,8 @@ type FbManagedPage = { id: string; name: string; picture: string | null; categor
 export default function ChannelsPage() {
   const [loading, setLoading] = useState(true)
   const [forbidden, setForbidden] = useState(false)
+  // แยก "โหลดไม่สำเร็จ" ออกจาก "ไม่มีสิทธิ์" — เน็ตหลุด/เซิร์ฟเวอร์สะดุด ต้องกดลองใหม่ได้ ไม่ใช่ขึ้นจอ 🔒 ให้เจ้าของเพจนึกว่าเสียสิทธิ์
+  const [loadError, setLoadError] = useState<'auth' | 'network' | null>(null)
   const [channels, setChannels] = useState<Channel[]>([])
   const [origin, setOrigin] = useState('')
   const [showAdd, setShowAdd] = useState(false)
@@ -49,12 +51,25 @@ export default function ChannelsPage() {
 
   // silent = โหลดข้อมูลใหม่หลังเชื่อม/ยกเลิก โดยไม่เปลี่ยนทั้งจอเป็น "กำลังโหลด..."
   async function load(silent = false) {
-    if (!silent) setLoading(true)
+    if (!silent) { setLoading(true); setLoadError(null) }
     try {
-      const me = await fetch('/api/me').then(r => r.json()).catch(() => null)
-      const owner = !!me?.role?.isOwner
-      const fb = !!me?.user?.facebookId
-      const agentOnly = !!me?.role?.isAgentOnly
+      let status = 0
+      let me: any = null
+      try {
+        const r = await fetch('/api/me', { cache: 'no-store' })
+        status = r.status
+        if (r.ok) me = await r.json().catch(() => null)   // ตอบกลับไม่ใช่ JSON = ถือว่าโหลดไม่สำเร็จ
+      } catch { /* เน็ตหลุด → status ยังเป็น 0 */ }
+
+      // ตอบไม่สำเร็จ = ยังตัดสินสิทธิ์ไม่ได้ ห้ามเหมาว่า "ไม่มีสิทธิ์"
+      if (!me?.authenticated) {
+        if (silent) setNotice({ ok: false, text: 'โหลดรายการช่องทางใหม่ไม่สำเร็จ — เช็กสัญญาณเน็ตแล้วรีเฟรชหน้านี้อีกครั้ง' })
+        else setLoadError(status === 401 ? 'auth' : 'network')
+        return
+      }
+      const owner = !!me.role?.isOwner
+      const fb = !!me.user?.facebookId
+      const agentOnly = !!me.role?.isAgentOnly
       // เข้าได้: เจ้าของเพจ หรือเจ้าของร้านที่ล็อกอินด้วย Facebook แต่ยังไม่เคยเชื่อมช่องทาง
       // ลูกทีม (ทั้งแบบอีเมลและแบบ Facebook) จัดการช่องทางไม่ได้
       if (!owner && !(fb && !agentOnly)) { setForbidden(true); return }
@@ -117,6 +132,43 @@ export default function ChannelsPage() {
   const connectedFbIds = new Set(fbPages.map(c => c.page_id))
   const lineChannels = channels.filter(c => c.channel === 'line')
 
+  // โหลดไม่สำเร็จ ≠ ไม่มีสิทธิ์ — บอกให้ชัดว่าเกิดอะไร แล้วให้กดลองใหม่ได้เลย
+  if (loadError) {
+    const isAuth = loadError === 'auth'
+    return (
+      <div style={{ minHeight: '100vh', background: BG, fontFamily: "'Sarabun', sans-serif", padding: 40 }}>
+        <div style={{ maxWidth: 460, margin: '60px auto', background: SURFACE, borderRadius: 22, padding: 36, textAlign: 'center', border: `1.5px solid ${BORDER}` }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>{isAuth ? '🔑' : '📡'}</div>
+          <h1 style={{ fontSize: 20, fontWeight: 900, color: TEXT, margin: '0 0 8px' }}>
+            {isAuth ? 'เซสชันหมดอายุ' : 'โหลดหน้าช่องทางไม่สำเร็จ'}
+          </h1>
+          <p style={{ color: MUTED, fontSize: 13, margin: '0 0 18px', lineHeight: 1.6 }}>
+            {isAuth
+              ? 'เข้าสู่ระบบด้วย Facebook อีกครั้งแล้วเปิดหน้านี้ได้เลย — สิทธิ์ของคุณยังอยู่เหมือนเดิม'
+              : 'เน็ตอาจหลุดชั่วคราว กดลองใหม่ได้เลย — สิทธิ์ของคุณยังอยู่เหมือนเดิม'}
+          </p>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+            {isAuth && (
+              <Link href="/login" className="fbtap" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minHeight: 44, padding: '12px 22px', fontSize: 14, fontWeight: 900, background: PRIMARY, color: 'white', borderRadius: 13, textDecoration: 'none' }}>
+                เข้าสู่ระบบใหม่
+              </Link>
+            )}
+            <button
+              className="fbtap"
+              onClick={() => load()}
+              style={{ minHeight: 44, padding: '12px 22px', fontSize: 14, fontWeight: 900, background: isAuth ? SURFACE2 : PRIMARY, color: isAuth ? TEXT : 'white', border: isAuth ? `1.5px solid ${BORDER}` : 'none', borderRadius: 13, cursor: 'pointer', fontFamily: 'inherit' }}
+            >
+              ลองใหม่
+            </button>
+          </div>
+          <div style={{ marginTop: 18 }}>
+            <Link href="/dashboard/inbox" style={{ color: MUTED, fontWeight: 800, textDecoration: 'none', fontSize: 13 }}>← กลับกล่องข้อความ</Link>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   if (forbidden) {
     return (
       <div style={{ minHeight: '100vh', background: BG, fontFamily: "'Sarabun', sans-serif", padding: 40 }}>
@@ -124,7 +176,17 @@ export default function ChannelsPage() {
           <div style={{ fontSize: 48, marginBottom: 12 }}>🔒</div>
           <h1 style={{ fontSize: 20, fontWeight: 900, color: TEXT, margin: '0 0 8px' }}>เฉพาะเจ้าของเพจ</h1>
           <p style={{ color: MUTED, fontSize: 13, margin: '0 0 14px', lineHeight: 1.6 }}>{LINE_ENABLED ? 'การเชื่อมเพจ/LINE' : 'การเชื่อมเพจ'} ต้องเข้าสู่ระบบด้วย Facebook ของเจ้าของเพจ</p>
-          <Link href="/dashboard/inbox" style={{ color: PRIMARY, fontWeight: 800, textDecoration: 'none' }}>← กลับกล่องข้อความ</Link>
+          {/* เผื่อระบบอ่านสิทธิ์พลาดชั่วคราว — เจ้าของเพจตัวจริงกดตรวจสอบใหม่ได้ ไม่ต้องออกจากระบบ */}
+          <button
+            className="fbtap"
+            onClick={() => { setForbidden(false); load() }}
+            style={{ minHeight: 44, padding: '11px 20px', fontSize: 13.5, fontWeight: 900, background: SURFACE2, color: TEXT, border: `1.5px solid ${BORDER}`, borderRadius: 13, cursor: 'pointer', fontFamily: 'inherit', marginBottom: 16 }}
+          >
+            ตรวจสอบสิทธิ์อีกครั้ง
+          </button>
+          <div>
+            <Link href="/dashboard/inbox" style={{ color: PRIMARY, fontWeight: 800, textDecoration: 'none' }}>← กลับกล่องข้อความ</Link>
+          </div>
         </div>
       </div>
     )

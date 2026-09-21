@@ -12,7 +12,7 @@
 // - credentials: session.userId → users.id (สำหรับ agent ที่ใช้ email+password)
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { supabaseAdmin, getUserIdFromFbToken } from './supabase'
+import { supabaseAdmin, getFbUserIdFromToken } from './supabase'
 import { LINE_ENABLED } from './features'
 
 export type Role = 'owner' | 'agent'
@@ -45,8 +45,27 @@ export interface UserContext {
 }
 
 /**
+ * ระบบขัดข้องชั่วคราว (ต่อฐานข้อมูลไม่ได้) — คนละเรื่องกับ "ผู้ใช้ไม่มีสิทธิ์"
+ * getCurrentUserContext จะ throw ตัวนี้แทนการคืน context ที่ว่างเปล่า
+ * route ที่ catch ทั่วไปจะตอบ 500 พร้อมข้อความไทยนี้เอง (ไม่ใช่ 401/403 ที่ทำให้แอดมินนึกว่าถูกถอดสิทธิ์)
+ */
+export class UserContextUnavailableError extends Error {
+  readonly status = 503
+  constructor(public readonly detail?: string) {
+    super('โหลดสิทธิ์การใช้งานไม่สำเร็จ ลองใหม่อีกครั้ง')
+    this.name = 'UserContextUnavailableError'
+  }
+}
+
+/** ใช้ในบล็อก catch ของ route: ระบบล่ม = 503 (ลองใหม่ได้), อย่างอื่น = 500 */
+export function contextErrorStatus(err: any): number {
+  return err instanceof UserContextUnavailableError ? err.status : 500
+}
+
+/**
  * โหลด context หลักจาก NextAuth session
  * - returns null ถ้าหา user ไม่เจอ
+ * - throws UserContextUnavailableError ถ้าอ่านสิทธิ์จากฐานข้อมูลไม่ได้ (ชั่วคราว)
  * - รองรับทั้ง facebook session (session.accessToken) และ credentials session (session.userId)
  */
 export async function getCurrentUserContext(session: any): Promise<UserContext | null> {
@@ -56,6 +75,8 @@ export async function getCurrentUserContext(session: any): Promise<UserContext |
   let authMethod: 'facebook' | 'credentials' = 'facebook'
   let fbUserId: string | null = null
 
+  const sb = supabaseAdmin()
+
   if (session.userId) {
     // Credentials path — userId เก็บใน JWT ตอน sign in
     userId = String(session.userId)
@@ -64,16 +85,36 @@ export async function getCurrentUserContext(session: any): Promise<UserContext |
     // Facebook OAuth path
     authMethod = 'facebook'
     fbUserId = (session.fbUserId as string | undefined) || null
-    userId = await getUserIdFromFbToken(session.accessToken as string, fbUserId)
+    const fbId = fbUserId || await getFbUserIdFromToken(session.accessToken as string)
+    if (!fbId) return null
+    // อ่าน users เองแทน getUserIdFromFbToken เพราะตัวนั้นกลืน error ของฐานข้อมูล
+    // ฐานข้อมูลสะดุดแค่วินาทีเดียว → ได้ null → route ตอบ 401 → แอปขึ้น "เซสชันหมดอายุ" ทั้งที่ยังล็อกอินอยู่
+    // maybeSingle: ไม่มีแถวจริงๆ = data null + ไม่มี error (คนล็อกอิน FB ครั้งแรก ให้ ensureFbUser สร้างให้ต่อ)
+    const { data: u, error: uErr } = await sb
+      .from('users')
+      .select('id')
+      .eq('facebook_id', fbId)
+      .maybeSingle()
+    if (uErr) {
+      console.error('[team] users lookup failed:', uErr.message)
+      throw new UserContextUnavailableError(uErr.message)
+    }
+    userId = u?.id || null
   }
 
   if (!userId) return null
 
-  const sb = supabaseAdmin()
-  const { data } = await sb
+  const { data, error } = await sb
     .from('page_members')
     .select('page_id, role, connected_pages!inner(user_id, channel)')
     .eq('user_id', userId)
+
+  // ห้ามกลืน error นี้ — ถ้าฐานข้อมูลสะดุดแล้วคืน memberships ว่าง
+  // ทุก route จะมองว่า "ผู้ใช้คนนี้ไม่มีเพจเลย" → กล่องข้อความว่าง + หน้าทีมขึ้นแม่กุญแจ ทั้งที่ข้อมูลยังอยู่ครบ
+  if (error) {
+    console.error('[team] page_members query failed:', error.message)
+    throw new UserContextUnavailableError(error.message)
+  }
 
   const allMemberships: Membership[] = (data || []).map((r: any) => ({
     pageId: r.page_id,

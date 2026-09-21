@@ -4,7 +4,7 @@ import { getServerSession } from 'next-auth'
 import { NextResponse } from 'next/server'
 import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase'
-import { getCurrentUserContext } from '@/lib/team'
+import { getCurrentUserContext, contextErrorStatus } from '@/lib/team'
 
 export const dynamic = 'force-dynamic'
 
@@ -45,6 +45,6 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ success: true })
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 })
+    return NextResponse.json({ error: err.message }, { status: contextErrorStatus(err) })
   }
 }

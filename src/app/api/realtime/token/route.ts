@@ -14,8 +14,12 @@ function b64url(input: Buffer | string): string {
   return Buffer.from(input).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
 }
 
+// TTL สั้น (1 ชม.) เพราะ token นี้ใช้กับ Supabase ได้ทั้งก้อน ไม่ใช่แค่ Realtime
+// ถ้าหลุดออกไป (เช่น เครื่องลูกทีมโดนขโมย) จะหมดอายุเร็ว — หน้าเว็บขอ token ใหม่เองก่อนหมดอายุ
+const TTL_SEC = 3600
+
 // JWT (HS256) ที่ Supabase ยอมรับ: sub = user uuid → auth.uid() ใน RLS = user uuid
-function signSupabaseJwt(userId: string, secret: string, ttlSec = 8 * 3600): string {
+function signSupabaseJwt(userId: string, secret: string, ttlSec = TTL_SEC): string {
   const header = b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))
   const now = Math.floor(Date.now() / 1000)
   const payload = b64url(JSON.stringify({
@@ -33,6 +37,12 @@ export async function GET() {
     const ctx = await getCurrentUserContext(session)
     if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+    // ยังไม่มีสิทธิ์ในเพจไหนเลย (เช่น ถูกถอดออกจากทีมแล้ว) → ไม่มีแชทให้รับ event
+    // ไม่ต้องแจก token เข้าฐานข้อมูล — client จะใช้ polling แทนเอง
+    if (ctx.memberships.length === 0) {
+      return NextResponse.json({ token: null, configured: true }, { status: 200 })
+    }
+
     const secret = process.env.SUPABASE_JWT_SECRET
     if (!secret) {
       // ยังไม่ได้ตั้ง → ไม่ใช่ error ร้ายแรง client จะใช้ polling แทน
@@ -40,7 +50,8 @@ export async function GET() {
     }
 
     const token = signSupabaseJwt(ctx.userId, secret)
-    return NextResponse.json({ token, configured: true })
+    // expiresInSec ให้หน้าเว็บตั้งเวลาขอ token ใหม่ก่อนหมดอายุ (ไม่งั้น realtime เงียบหลัง 1 ชม.)
+    return NextResponse.json({ token, configured: true, expiresInSec: TTL_SEC })
   } catch (err: any) {
     return NextResponse.json({ error: err.message, token: null }, { status: 500 })
   }

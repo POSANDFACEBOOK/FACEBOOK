@@ -9,6 +9,9 @@ export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 export const maxDuration = 30
 
+// ดึงรูปจากเซิร์ฟเวอร์ LINE นานสุดเท่านี้ — LINE รอคำตอบ webhook ไม่นาน ถ้าปล่อยให้ค้าง ข้อความลูกค้าจะไม่ถูกบันทึกเลย
+const REHOST_TIMEOUT_MS = 8000
+
 export async function POST(req: Request) {
   const rawBody = await req.text()
   const signature = req.headers.get('x-line-signature')
@@ -73,6 +76,7 @@ async function processLineEvent(page: any, event: any) {
       `https://api-data.line.me/v2/bot/message/${lineMsgId}/content`,
       { Authorization: `Bearer ${page.page_access_token}` },
       `line/${page.id}`,
+      { timeoutMs: REHOST_TIMEOUT_MS },
     )
     if (hosted) { text = null; attachments = [{ type: 'image', url: hosted, name: 'image' }] }
     // ดึงไม่สำเร็จ → คง "[รูปภาพ]" เดิม
@@ -91,6 +95,7 @@ async function processLineEvent(page: any, event: any) {
     const profile = await getLineUserProfile(page.page_access_token, lineUserId)
     if (!profile) console.warn('[line webhook] profile fetch failed for', lineUserId)
     // upsert กัน race (webhook 2 อันพร้อมกัน) — onConflict (fb_page_id, fb_psid)
+    // ignoreDuplicates = ตัวที่ช้ากว่าจะไม่ทับแถวของตัวแรก (ไม่งั้นตัวเลข "ใหม่" ถอยกลับเป็น 1) แต่ต้องไม่ทิ้งข้อความ
     const { data: up, error } = await sb
       .from('conversations')
       .upsert(
@@ -102,22 +107,23 @@ async function processLineEvent(page: any, event: any) {
           last_message: text || '(ไฟล์แนบ)', last_message_at: ts,
           last_sender: 'customer', unread_count: 1,
         },
-        { onConflict: 'fb_page_id,fb_psid' },
+        { onConflict: 'fb_page_id,fb_psid', ignoreDuplicates: true },
       )
       .select('id, unread_count')
-      .single()
+      .maybeSingle()  // ชนกัน = ไม่คืนแถว (ห้ามใช้ .single() จะกลายเป็น error)
     if (up) { conv = up; isNewConv = true }
     else {
-      // เผื่อ upsert คืน null → re-select
+      if (error) console.error('[line webhook] conversation upsert failed:', error.message)
+      // webhook อีกตัวสร้างแชทนี้ไปแล้ว → ใช้แถวเดิม แล้วทำงานต่อแบบ "แชทเดิม" (ไม่งั้นข้อความนี้หายไปเลย)
       const { data: re } = await sb.from('conversations').select('id, unread_count')
-        .eq('fb_page_id', page.page_id).eq('fb_psid', lineUserId).single()
+        .eq('fb_page_id', page.page_id).eq('fb_psid', lineUserId).maybeSingle()
       conv = re
     }
   }
   if (!conv) return
 
   // บันทึกข้อความ (dedup ด้วย fb_message_id) — select เพื่อรู้ว่าเป็นข้อความใหม่จริงไหม
-  const { data: inserted } = await sb
+  const { data: inserted, error: msgErr } = await sb
     .from('inbox_messages')
     .upsert(
       {
@@ -134,17 +140,32 @@ async function processLineEvent(page: any, event: any) {
       { onConflict: 'fb_message_id', ignoreDuplicates: true },
     )
     .select('id')
-  const isNewMsg = !!(inserted && inserted.length > 0)
+  if (msgErr) console.error('[line webhook] message upsert failed:', msgErr.message)
+  // LINE ส่ง event เดิมซ้ำได้ (redelivery) → ข้อความที่มีอยู่แล้ว ห้ามนับซ้ำ
+  // (บันทึกพลาดเพราะ DB error → ถือว่าใหม่ ให้รายการแชทยังขยับเหมือนเดิม)
+  const isNewMsg = !!msgErr || !!(inserted && inserted.length > 0)
 
   // อัปเดต conv เฉพาะ conv เดิม + ข้อความใหม่จริง (กัน unread เด้งซ้ำตอน LINE replay webhook)
   if (!isNewConv && isNewMsg) {
-    await sb
-      .from('conversations')
-      .update({
-        last_message: text || '(ไฟล์แนบ)', last_message_at: ts,
-        last_sender: 'customer', unread_count: (conv.unread_count || 0) + 1,
-        send_block_code: null, send_block_at: null,  // ลูกค้าทักกลับ → ล้างป้าย
-      })
-      .eq('id', conv.id)
+    const preview = text || '(ไฟล์แนบ)'
+    // นับ unread ด้วย SQL (unread_count + 1 ในคำสั่งเดียว) — ลูกค้าส่งรัวๆ หลาย webhook พร้อมกันจะไม่ทับตัวเลขกัน
+    const { error: bumpErr } = await sb.rpc('bump_conversation_on_message', {
+      p_conv: conv.id,
+      p_at: ts,
+      p_preview: preview,
+      p_inbound: true,  // LINE webhook รับเฉพาะข้อความลูกค้า
+    })
+    if (bumpErr) {
+      // ยังไม่ได้รัน supabase/migration_webhook_concurrency.sql → ใช้วิธีเดิมไปก่อน (ข้อความไม่หาย แต่ตัวเลข "ใหม่" อาจนับพลาด)
+      console.warn('[line webhook] bump_conversation_on_message failed:', bumpErr.message)
+      await sb
+        .from('conversations')
+        .update({
+          last_message: preview, last_message_at: ts,
+          last_sender: 'customer', unread_count: (conv.unread_count || 0) + 1,
+          send_block_code: null, send_block_at: null,  // ลูกค้าทักกลับ → ล้างป้าย
+        })
+        .eq('id', conv.id)
+    }
   }
 }
