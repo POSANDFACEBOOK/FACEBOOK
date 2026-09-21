@@ -25,15 +25,9 @@ async function pageCounts(sb: any, ids: string[]) {
   const unreadByPage: Record<string, number> = {}
   const needsReplyByPage: Record<string, number> = {}
 
-  const { data, error } = await sb.rpc('inbox_page_counts', { p_page_ids: ids })
-  if (!error && Array.isArray(data)) {
-    for (const r of data as Array<{ page_id: string; unread: number; needs_reply: number }>) {
-      unreadByPage[r.page_id] = Number(r.unread) || 0
-      needsReplyByPage[r.page_id] = Number(r.needs_reply) || 0
-    }
-  } else {
-    // ยังไม่ได้รัน supabase/migration_inbox_counts.sql → นับด้วย count query รายเพจแทน
-    // (count ไม่โดนลิมิต 1000 แถว และผู้ใช้หนึ่งคนมีไม่กี่เพจ)
+  // นับด้วย count query รายเพจ — ตรงกับ partial index ของแต่ละตัวกรอง (ดู migration_inbox_list_index.sql)
+  // ไม่ใช้ GROUP BY ทั้งตาราง เพราะรายการแชทถูกยิงทุก 7 วินาทีจากทุกเครื่องที่เปิดอยู่
+  {
     const rows = await Promise.all(ids.map(async pid => {
       const [u, n] = await Promise.all([
         sb.from('conversations').select('id', { count: 'exact', head: true })

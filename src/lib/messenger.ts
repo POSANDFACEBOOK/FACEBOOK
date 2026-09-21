@@ -384,11 +384,18 @@ export async function getConversationsWithMessagesByIds(
       }
       return
     }
-    // ชุดนี้ล้ม → ดึงทีละแชท เก็บเฉพาะที่ได้
+    // ชุดนี้ล้ม → ดึงทีละแชท และถ้ายังถูกปฏิเสธ (แชทที่มีรูป/ลิงก์เยอะ Graph จะบอกว่า "ข้อมูลเยอะเกินไป")
+    // ให้ลดจำนวนข้อความลงเรื่อยๆ — ได้อย่างน้อย 1 ข้อความยังดีกว่าแชทนั้นไม่โผล่ในระบบเลย
     await mapLimited(chunk, 4, async id => {
-      if (deadline && Date.now() > deadline) return
-      const d = await getJson(`${FB_API}/${encodeURIComponent(id)}?${new URLSearchParams({ fields: convFields(msgLimit), access_token: pageToken })}`)
-      if (d && !d.error && d.id) all.push(d as FBConversationWithMessages)
+      const ladder = Array.from(new Set([msgLimit, 5, 1])).filter(n => n <= msgLimit)
+      let lastErr = ''
+      for (const n of ladder) {
+        if (deadline && Date.now() > deadline) return
+        const d = await getJson(`${FB_API}/${encodeURIComponent(id)}?${new URLSearchParams({ fields: convFields(n), access_token: pageToken })}`)
+        if (d && !d.error && d.id) { all.push(d as FBConversationWithMessages); return }
+        lastErr = d?.error?.message || 'ไม่มีคำตอบ'
+      }
+      console.warn(`[messenger] ดึงข้อความของแชท ${id} ไม่ได้: ${lastErr}`)
     })
   })
   return all

@@ -50,6 +50,9 @@ CREATE OR REPLACE FUNCTION bump_conversation_on_message(
 $$;
 
 -- เรียกได้เฉพาะฝั่ง server (service_role) — client ไม่ต้องใช้ฟังก์ชันนี้
-REVOKE EXECUTE ON FUNCTION bump_conversation_on_message(UUID, TIMESTAMPTZ, TEXT, BOOLEAN) FROM anon, authenticated;
+-- ต้องตัด PUBLIC ด้วย — สิทธิ์ EXECUTE ติดมากับ PUBLIC ตั้งแต่ตอน CREATE FUNCTION
+-- (ตัดเฉพาะ anon/authenticated ไม่พอ เพราะยัง execute ได้ผ่านสิทธิ์ของ PUBLIC)
+REVOKE EXECUTE ON FUNCTION bump_conversation_on_message(UUID, TIMESTAMPTZ, TEXT, BOOLEAN) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION bump_conversation_on_message(UUID, TIMESTAMPTZ, TEXT, BOOLEAN) TO service_role;
 
 -- ถ้ารันแล้วใน log ยังขึ้น "bump_conversation_on_message failed" → Supabase → Settings → API → Reload schema

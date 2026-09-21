@@ -99,10 +99,8 @@ CREATE INDEX IF NOT EXISTS idx_conv_needs_reply
   ON conversations (page_id, last_message_at DESC NULLS LAST)
   WHERE last_sender = 'customer' AND unread_count <= 0 AND is_archived = false;
 
--- "ใหม่" — idx_conv_unread เดิมไม่มี page_id/is_archived จึงยังต้องอ่านทั้งแถว
-CREATE INDEX IF NOT EXISTS idx_conv_unread_active
-  ON conversations (page_id, last_message_at DESC NULLS LAST)
-  WHERE unread_count > 0 AND is_archived = false;
+-- หมายเหตุ: index ของ "ใหม่" และของรายการแชทค่าเริ่มต้น ย้ายไปอยู่ใน migration_inbox_list_index.sql
+-- (เงื่อนไขต้องตรงกับตัวกรองจริงของ src/app/api/inbox/conversations/route.ts — ดูไฟล์นั้นไฟล์เดียว)
 
 -- ────────────────────────────────────────────
 -- 5) ตรวจผลหลังรัน (คัดลอกไปรันแยก — ต้องได้ false ทั้ง 4 ค่า)

@@ -123,11 +123,16 @@ function friendlyError(raw?: string): string {
 // ── ยิง fetch พร้อมเวลาจำกัด ──
 // มือถือสลับ wifi↔4G กลางคัน fetch จะค้างได้เป็นนาที → ปุ่มส่งหมุนค้าง ตอบลูกค้าคนอื่นไม่ได้
 // ใช้ AbortController (ไม่ใช่ AbortSignal.timeout) เพราะ iOS Safari รุ่นเก่ายังไม่มี timeout()
+// อ่านเนื้อหาให้จบภายในเวลาที่กำหนดด้วย — เดิมนับเวลาแค่ตอน "ต่อติด" พอ header มาถึงก็เลิกจับเวลา
+// มือถือที่สลับเสา/สัญญาณอ่อนจะค้างตอนโหลดเนื้อหาได้เป็นนาที ปุ่มส่งหมุนค้าง และตัวกันซิงก์ซ้อนค้างตาม
 async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
   const ac = new AbortController()
   const t = setTimeout(() => ac.abort(), ms)
   try {
-    return await fetch(url, { ...init, signal: ac.signal })
+    const res = await fetch(url, { ...init, signal: ac.signal })
+    if (res.status === 204 || res.status === 205 || res.status === 304) return res
+    const body = await res.text()
+    return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers })
   } finally {
     clearTimeout(t)
   }
@@ -1942,22 +1947,22 @@ export default function InboxPage() {
       return
     } catch (e: any) {
       const msg = isAbortError(e) ? 'อัปโหลดรูปใช้เวลานานเกินไป — ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่' : friendlyError(e?.message)
+      const failed = {
+        id: tempId, conversation_id: convId, direction: 'outbound', message_text: null,
+        attachments: [{ type: 'image', url: previewUrl }], sent_by: 'page_user',
+        delivery_status: 'failed', error_message: msg, local_only: true, status_note: '',
+        created_at: new Date().toISOString(),
+      }
+      // เก็บไฟล์ที่ย่อแล้วไว้ให้ "ส่งอีกครั้ง" อัปใหม่ได้เลย (blob: URL ส่งตรงไป server ไม่ได้)
+      // ห้าม revoke blob — ทั้งฟองที่ค้างไว้และฟองที่กลับมาดูทีหลังต้องยังเห็นรูป
+      pendingFilesRef.current.set(tempId, { file: toSend, url: previewUrl })
+      stashFailed(convId, failed)   // เก็บไว้เสมอ สลับแชทแล้วกลับมารูปต้องยังอยู่พร้อมปุ่มส่งซ้ำ
       if (isThis()) {
         setErrorBanner(msg)
-        // เก็บไฟล์ที่ย่อแล้วไว้ให้ "ส่งอีกครั้ง" อัปใหม่ได้เลย (blob: URL ส่งตรงไป server ไม่ได้)
-        pendingFilesRef.current.set(tempId, { file: toSend, url: previewUrl })
-        upsertMsg(tempId, {
-          id: tempId, conversation_id: convId, direction: 'outbound', message_text: null,
-          attachments: [{ type: 'image', url: previewUrl }], sent_by: 'page_user',
-          delivery_status: 'failed', error_message: msg, local_only: true, status_note: '',
-          created_at: new Date().toISOString(),
-        })
-        // ไม่ revoke ทันที — ต้องให้ preview ยังแสดงได้ตอนรอผู้ใช้กดส่งอีกครั้ง
+        upsertMsg(tempId, failed)
       } else {
-        // ออกจากแชทไปแล้ว ฟองถูกล้างทิ้งไปพร้อมจอ → คืน blob ไม่ให้ค้างในหน่วยความจำ + บอกว่าส่งไม่ถึง
-        try { URL.revokeObjectURL(previewUrl) } catch {}
         setToast({
-          msg: `ส่งรูปถึง ${convName} ไม่สำเร็จ — เปิดแชทแล้วเลือกรูปใหม่อีกครั้ง`,
+          msg: `ส่งรูปถึง ${convName} ไม่สำเร็จ — เปิดแชทแล้วกด "ส่งอีกครั้ง"`,
           action: { label: 'เปิดแชท', run: () => loadMessages(convSnap) },
           sticky: true,
         })
@@ -3450,7 +3455,8 @@ export default function InboxPage() {
           padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 14,
           boxShadow: '0 14px 40px rgba(15,23,42,0.35)', maxWidth: 'calc(100vw - 32px)',
         }}>
-          <span style={{ fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{toast.msg}</span>
+          {/* ห้ามตัดท้ายข้อความ — "ส่งรูปไม่สำเร็จ" ถูกตัดเหลือ "ส่งรูป..." จะอ่านเหมือนส่งสำเร็จ */}
+          <span style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.35, minWidth: 0 }}>{toast.msg}</span>
           {toast.undo && (
             <button
               onClick={() => { const u = toast.undo!; setToast(null); u() }}

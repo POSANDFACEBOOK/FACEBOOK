@@ -126,8 +126,11 @@ export async function POST(req: Request) {
     }
 
     const { data: pages, error: pagesErr } = await pageQuery
-    // ฐานข้อมูลสะดุด ≠ ไม่มีเพจ — บันทึกไว้ให้ดูย้อนหลังได้ว่าทำไมรอบนี้ไม่ได้ซิงก์
-    if (pagesErr) console.error('[sync] load pages failed:', pagesErr.message)
+    // ฐานข้อมูลสะดุด ≠ ไม่มีเพจ — ต้องตอบว่าล้มเหลว ไม่งั้นหน้าเว็บนึกว่าซิงก์สำเร็จแล้วลบแบนเนอร์เตือนทิ้ง
+    if (pagesErr) {
+      console.error('[sync] load pages failed:', pagesErr.message)
+      return NextResponse.json({ error: 'ฐานข้อมูลไม่ตอบชั่วคราว — จะลองใหม่อัตโนมัติ' }, { status: 503 })
+    }
     if (!pages || pages.length === 0) {
       return NextResponse.json({ synced: 0, message: 'No pages to sync' })
     }
@@ -324,10 +327,11 @@ async function syncOnePage(
     .update({ sync_claimed_at: new Date(startedAt).toISOString() })
     .eq('id', page.id)
     .or(`sync_claimed_at.is.null,sync_claimed_at.lt."${new Date(startedAt - SYNC_LOCK_MS).toISOString()}"`)
-    .select('id, last_synced_at, webhook_subscribed_at')
+    .select('id, last_synced_at, sync_backlog_at, webhook_subscribed_at')
 
   let hasClaim = false
-  let lastSyncedAt: string | null = null
+  let lastSyncedAt: string | null = null   // ใช้กันยิงถี่ (45 วิ) — ขยับไปข้างหน้าเสมอเมื่อรอบสำเร็จ
+  let backlogAt: string | null = null      // หลักหมุดรายชื่อแชท — ถอยหลังได้เมื่อรอบก่อนไล่ไม่หมด
   let subDue = true
   if (claimErr) {
     // ยังไม่ได้รัน supabase/migration_sync_claim.sql → ทำงานแบบเดิมไปก่อน
@@ -339,6 +343,7 @@ async function syncOnePage(
   } else {
     hasClaim = true
     lastSyncedAt = claimed[0].last_synced_at || null
+    backlogAt = claimed[0].sync_backlog_at || null
     const subAt = claimed[0].webhook_subscribed_at
     subDue = !subAt || startedAt - Date.parse(subAt) > WEBHOOK_RESUB_MS
     // เพิ่งซิงก์ไปเมื่อครู่จากอีกเครื่อง → ไม่ต้องดึงซ้ำ
@@ -424,7 +429,9 @@ async function syncOnePage(
       const need = convCustomers.filter((x, i) => {
         if (i < ALWAYS_FETCH_TOP) return true
         const known = existing.get(x.customer.id)
-        return !known?.lastAt || Date.parse(x.conv.updated_time) > Date.parse(known.lastAt)
+        // เผื่อ 1 วิ: เวลาของ Facebook ละเอียดระดับวินาที ส่วน last_message_at ของเราเป็นมิลลิวินาที
+        // (ลูกค้าทักเข้ามาตอนแอดมินกำลังกดส่ง → เทียบตรงๆ จะอ่านว่า "ไม่มีอะไรใหม่" แล้วข้ามแชทนั้นถาวร)
+        return !known?.lastAt || Date.parse(x.conv.updated_time) + 1000 > Date.parse(known.lastAt)
       })
       msgsById = new Map()
       if (need.length > 0) {
@@ -526,7 +533,8 @@ async function syncOnePage(
               customer_name: customer.name || profile?.name || 'ลูกค้า',
               customer_picture: hostedPic || profile?.profile_pic || null,
               last_message: lastMsg,
-              last_message_at: conv.updated_time,
+              // ช้ากว่าเวลาของ Facebook 1 วิ — ถ้ารอบนี้ถูกตัดก่อนบันทึกข้อความ รอบหน้าจะดึงแชทนี้ซ้ำให้เอง
+              last_message_at: new Date(Date.parse(conv.updated_time) - 1000).toISOString(),
               last_sender: lastSender,
               unread_count: onlySystem ? 0 : (conv.unread_count || 0),
               ...(lastSender === 'customer' ? { send_block_code: null, send_block_at: null } : {}),
@@ -742,8 +750,12 @@ async function syncOnePage(
   try {
     // ── ขั้นที่ 1: รายชื่อแชท (ยังไม่ดึงข้อความ) — คำขอเล็ก 1 ครั้งต่อเพจ ──
     // ไล่หน้าต่อจนถึงแชทที่เก่ากว่ารอบซิงก์ก่อนหน้า → แชทใหม่ที่ทะลุ 80 อันดับแรก (เช่นคืนที่ยิงแอด) ก็ไม่ตกหล่น
-    const untilIso = lastSyncedAt
-      ? new Date(Date.parse(lastSyncedAt) - 60 * 1000).toISOString()  // เผื่อเวลาคาบเกี่ยว 1 นาที
+    // รอบก่อนไล่ไม่หมด → เริ่มจากจุดที่ค้าง ไม่ใช่เวลาซิงก์ล่าสุด (ไม่งั้นแชทที่ค้างหลุดถาวร)
+    const pin = backlogAt && lastSyncedAt
+      ? (Date.parse(backlogAt) < Date.parse(lastSyncedAt) ? backlogAt : lastSyncedAt)
+      : (backlogAt || lastSyncedAt)
+    const untilIso = pin
+      ? new Date(Date.parse(pin) - 60 * 1000).toISOString()  // เผื่อเวลาคาบเกี่ยว 1 นาที
       : null
     const listPages = untilIso ? 5 : 2
     // หัวใจของรอบ (รายชื่อแชท + ดึง/บันทึกข้อความ) ต้องจบในงบเวลา
@@ -850,12 +862,18 @@ async function syncOnePage(
     //  ไม่งั้นแชทที่ดึงไม่ได้ถาวรแชทเดียวจะทำให้ทุกรอบไล่รายชื่อยาวสุดตลอดไป)
     const backlog: number | null = backlogFrom
     const stamp = backlog === null
-      ? startedAt
-      : Math.max(Math.min(startedAt, backlog - 1000), startedAt - SYNC_BACKLOG_MAX_MS)
-    if (backlog !== null) pageResult.backlog_from = new Date(stamp).toISOString()
-    await sb.from('connected_pages')
-      .update({ sync_claimed_at: null, ...(ok ? { last_synced_at: new Date(stamp).toISOString() } : {}) })
-      .eq('id', page.id)
+      ? null
+      : new Date(Math.max(backlog - 1000, startedAt - SYNC_BACKLOG_MAX_MS)).toISOString()
+    if (stamp) pageResult.backlog_from = stamp
+    // last_synced_at ขยับไปข้างหน้าเสมอ (ตัวกันยิงถี่ต้องทำงาน) · sync_backlog_at เก็บจุดที่ยังไล่ไม่ถึง
+    const patch: any = { sync_claimed_at: null, ...(ok ? { last_synced_at: new Date(startedAt).toISOString(), sync_backlog_at: stamp } : {}) }
+    const { error: relErr } = await sb.from('connected_pages').update(patch).eq('id', page.id)
+    if (relErr) {
+      // ยังไม่ได้รัน migration รุ่นใหม่ (ไม่มีคอลัมน์ sync_backlog_at) → ปลดล็อกแบบเดิมให้ได้ก่อน
+      await sb.from('connected_pages')
+        .update({ sync_claimed_at: null, ...(ok ? { last_synced_at: new Date(stamp ? Math.min(startedAt, Date.parse(stamp)) : startedAt).toISOString() } : {}) })
+        .eq('id', page.id)
+    }
   }
   return pageResult
 }

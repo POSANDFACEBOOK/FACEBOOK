@@ -148,6 +148,9 @@ export async function POST(req: Request) {
         /outside of allowed window|outside the allowed window|24[-\s]?hour/i.test(r?.error || '')
       )
 
+    // จับเวลา "ก่อน" คุยกับ Facebook แล้วปัดลงเป็นวินาที — เวลาของ Facebook ละเอียดแค่วินาที
+    // ถ้าเราบันทึกเวลาหลังส่งเสร็จ (ช้ากว่าหลายวินาที) ข้อความที่ลูกค้าทักเข้ามาระหว่างนั้นจะถูกซิงก์ข้ามถาวร
+    const sentAt = new Date(Math.floor(Date.now() / 1000) * 1000).toISOString()
     const first = await fbSend('RESPONSE')
     let result = first
 
@@ -166,7 +169,9 @@ export async function POST(req: Request) {
       console.warn('[inbox/send] facebook error', { code, raw, retryCode: usedHumanAgent ? result.errorCode : undefined })
       let userError: string
       let blockCode: number | null = null
-      if (code === 551 || result.errorCode === 551) {
+      if (first.timedOut || result.timedOut) {
+        userError = '⏳ Facebook ตอบช้าผิดปกติ — ไม่แน่ใจว่าข้อความถึงลูกค้าแล้วหรือยัง เปิดดูในแชทก่อนกดส่งซ้ำ (กันลูกค้าได้ข้อความ 2 ครั้ง)'
+      } else if (code === 551 || result.errorCode === 551) {
         // 551 = ลูกค้าไม่พร้อมรับข้อความ (ปิดรับ/บล็อกเพจ หรือเลิกใช้บัญชี) — ฝั่งลูกค้า บังคับไม่ได้
         userError = '⚠️ ลูกค้าปิดรับข้อความหรือบล็อกเพจอยู่ (Facebook #551) — ส่งไม่ได้ในขณะนี้ ต้องรอลูกค้าทักกลับมาก่อน'
         blockCode = 551
@@ -203,7 +208,12 @@ export async function POST(req: Request) {
           .update({ send_block_code: blockCode, send_block_at: new Date().toISOString() })
           .eq('id', conv.id)
       }
-      return NextResponse.json({ error: userError, blockCode: blockCode || undefined, message: failedRow }, { status: 500 })
+      return NextResponse.json({
+        error: userError,
+        blockCode: blockCode || undefined,
+        uncertain: first.timedOut || result.timedOut || undefined,   // หน้าเว็บจะได้ไม่ชวนให้กดส่งซ้ำทันที
+        message: failedRow,
+      }, { status: 500 })
     }
 
     // บันทึก message สำเร็จ — sent_by_user_id = agent's id (audit trail)
@@ -228,7 +238,7 @@ export async function POST(req: Request) {
       .from('conversations')
       .update({
         last_message: lastMsg,
-        last_message_at: new Date().toISOString(),
+        last_message_at: sentAt,
         last_sender: 'page',
         unread_count: 0,
         is_resolved: false,
