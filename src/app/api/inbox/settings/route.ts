@@ -4,7 +4,7 @@ import { getServerSession } from 'next-auth'
 import { NextResponse } from 'next/server'
 import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase'
-import { getCurrentUserContext, assertPageAccess, getOwnerUserIdOfPage } from '@/lib/team'
+import { getCurrentUserContext, assertPageAccess, getOwnerUserIdOfPage, contextErrorStatus } from '@/lib/team'
 
 export const dynamic = 'force-dynamic'
 
@@ -38,7 +38,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ settings: data || [] })
   } catch (err: any) {
     console.error('[inbox/settings] GET error:', err)
-    return NextResponse.json({ error: err.message }, { status: 500 })
+    return NextResponse.json({ error: err.message }, { status: contextErrorStatus(err) })
   }
 }
 
@@ -81,6 +81,6 @@ export async function PUT(req: Request) {
     if (error) throw error
     return NextResponse.json({ success: true, settings: data })
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 })
+    return NextResponse.json({ error: err.message }, { status: contextErrorStatus(err) })
   }
 }

@@ -45,16 +45,26 @@ export interface SendMessageResult {
   // Facebook ใช้ code เดียวกันกับหลายสาเหตุ (เช่น #10 = เกิน 24 ชม. หรือสิทธิ์แอปไม่พอ)
   // ต้องส่ง error_subcode ต่อให้ route ด้วย ไม่งั้นต้องเดาจากข้อความภาษาอังกฤษของ FB ซึ่งเปลี่ยนได้ตลอด
   errorSubcode?: number
+  // true = เราตัดสายเองเพราะรอนานเกิน ไม่ใช่ Facebook ปฏิเสธ → "ไม่รู้ว่าลูกค้าได้รับแล้วหรือยัง"
+  // ห้ามเอาไปแสดงว่า "ส่งไม่สำเร็จ กดส่งอีกครั้ง" เพราะ Facebook อาจส่งถึงลูกค้าไปแล้ว = ลูกค้าได้ข้อความซ้ำ
+  timedOut?: boolean
 }
 
-// ส่งข้อความได้สูงสุด 2 ครั้งต่อ 1 คำขอ (RESPONSE แล้วลองซ้ำด้วย HUMAN_AGENT)
-// รวมกันต้องไม่เกินงบเวลาของ route ที่ส่ง (ไม่ได้ตั้ง maxDuration = ใช้ค่า default ของ Vercel)
-// เผื่อเวลาให้บันทึกลงฐานข้อมูล + ตอบ client ด้วย
-const SEND_TIMEOUT_MS = 6000
+// งบเวลาต่อการยิง Graph 1 ครั้ง — route ที่เรียก (api/inbox/send, webhooks/messenger) ตั้ง maxDuration = 30
+// ลำดับที่ต้องรักษาไว้: ส่งรูป 18 วิ < client รอ 25 วิ (inbox/page.tsx) < maxDuration 30 วิ
+// เพื่อให้ข้อความบอกสาเหตุจาก server ถึงมือแอดมินทัน และยังเหลือเวลาบันทึกผลลงฐานข้อมูล
+// (ส่งซ้ำด้วย HUMAN_AGENT เกิดได้เฉพาะเมื่อ Facebook ตอบ code 10 จริง — หมดเวลาแล้วจะไม่ยิงซ้ำ)
+const SEND_TEXT_TIMEOUT_MS = 12000
+// FB ต้องไปโหลดรูปจาก Supabase Storage ระหว่างคอลนี้ รูป 1–4 MB กิน 6 วิได้ง่ายๆ
+const SEND_ATTACHMENT_TIMEOUT_MS = 18000
+
+// undici โยน DOMException ชื่อ TimeoutError เมื่อ AbortSignal.timeout ทำงาน
+const isSendTimeout = (e: any): boolean =>
+  e?.name === 'TimeoutError' || e?.code === 'UND_ERR_HEADERS_TIMEOUT' || e?.code === 'UND_ERR_BODY_TIMEOUT'
 
 // หมดเวลา/เน็ตล่ม = ไม่มี error code จาก Facebook — บอกสาเหตุให้ชัดใน log ของ route
 const sendNetworkError = (e: any): string =>
-  e?.name === 'TimeoutError' ? 'Facebook ตอบช้าเกินไป' : (e?.message || 'Network error')
+  isSendTimeout(e) ? 'Facebook ตอบช้าเกินไป (ไม่รู้ว่าส่งถึงลูกค้าแล้วหรือยัง)' : (e?.message || 'Network error')
 
 /** ส่งข้อความ text ไปหาลูกค้า — ต้องอยู่ใน 24-hour messaging window */
 export async function sendTextMessage(
@@ -75,7 +85,7 @@ export async function sendTextMessage(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),  // ค้างที่ FB ไม่ได้ — จะกิน function จนหมดเวลาก่อนบันทึกผล
+      signal: AbortSignal.timeout(SEND_TEXT_TIMEOUT_MS),  // ค้างที่ FB ไม่ได้ — จะกิน function จนหมดเวลาก่อนบันทึกผล
     })
     const data = await res.json()
     if (data.error) {
@@ -92,7 +102,8 @@ export async function sendTextMessage(
       recipient_id: data.recipient_id,
     }
   } catch (e: any) {
-    return { success: false, error: sendNetworkError(e) }
+    // หมดเวลา = ตัดสายฝั่งเราเท่านั้น Facebook อาจส่งถึงลูกค้าไปแล้ว → บอก route ว่า "ไม่แน่ใจ"
+    return { success: false, error: sendNetworkError(e), timedOut: isSendTimeout(e) }
   }
 }
 
@@ -121,7 +132,7 @@ export async function sendAttachment(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),  // FB ต้องโหลดรูปจาก URL ของเรา ช้าได้ แต่ห้ามค้างจนหมดเวลา function
+      signal: AbortSignal.timeout(SEND_ATTACHMENT_TIMEOUT_MS),  // FB ต้องโหลดรูปจาก URL ของเรา ช้าได้ แต่ห้ามค้างจนหมดเวลา function
     })
     const data = await res.json()
     if (data.error) {
@@ -134,7 +145,8 @@ export async function sendAttachment(
     }
     return { success: true, message_id: data.message_id }
   } catch (e: any) {
-    return { success: false, error: sendNetworkError(e) }
+    // เหมือน sendTextMessage — รูปยิ่งช้า ยิ่งมีโอกาสที่ FB ส่งถึงแล้วแต่เราตัดสายก่อน
+    return { success: false, error: sendNetworkError(e), timedOut: isSendTimeout(e) }
   }
 }
 

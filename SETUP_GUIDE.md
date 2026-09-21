@@ -35,7 +35,17 @@
    9. `migration_send_block.sql`
    10. `migration_realtime_inbox.sql`
    11. `migration_unique_channel.sql`
+   12. `migration_sync_claim.sql` — กันหลายเครื่องดึงข้อความชุดเดียวกันพร้อมกัน + ตามเก็บแชทใหม่ให้ครบ
+   13. `migration_webhook_concurrency.sql` — กันตอบอัตโนมัติซ้ำ + ตัวเลข "ใหม่" ไม่หายตอน webhook เข้าพร้อมกัน
+   14. `migration_inbox_counts.sql` — ตัวเลขบนการ์ดเพจถูกต้องแม้แชทเกิน 1,000
+   15. `migration_inbox_list_index.sql` — index ให้รายการแชท "ทั้งหมด/ใหม่" ไม่ต้องอ่านทั้งตารางทุก 7 วินาที
+   16. `migration_security_grants.sql` — **รันเป็นไฟล์สุดท้ายเสมอ** ปิดสิทธิ์ที่เบราว์เซอร์ใช้ยิงฐานข้อมูลตรงได้
+       (เดิมอ่าน page access token / ลบแชทได้) + แก้ policy วนซ้ำที่ทำให้ Realtime ไม่เคยส่งข้อความถึงเครื่องจริง
 3. **Project Settings → API** → คัดลอก URL, anon key, service_role key, JWT Secret
+
+> ข้อ 12–16 เป็นของรอบแก้บั๊กล่าสุด — ยังไม่รันระบบก็ใช้งานได้ (โค้ดถอยไปทางเดิมให้เอง)
+> แต่ข้อความจะยังไม่เด้งเรียลไทม์ และช่องโหว่สิทธิ์ฝั่งเบราว์เซอร์จะยังเปิดอยู่
+> ถ้าย้อนกลับไปรันไฟล์เก่าซ้ำภายหลัง ต้องกลับมารัน `migration_security_grants.sql` อีกครั้ง
 
 > ฐานข้อมูลเดิมที่เคยใช้ระบบยิงแอด: ตารางแอดเก่ายังอยู่แต่ไม่ถูกใช้แล้ว
 > ถ้าต้องการลบให้ดู `supabase/optional_drop_ads_tables.sql` (ลบแล้วกู้คืนไม่ได้)
@@ -76,4 +86,5 @@ push เข้า `main` → GitHub Actions deploy ขึ้น Vercel อัต
 - **ขึ้นว่า "บทบาทในเพจไม่พอให้ตอบแชท"** → ต้องเป็นผู้ดูแล/ผู้ตรวจสอบ หรือมีสิทธิ์ข้อความในเพจนั้น
 - **ข้อความ Facebook ไม่เข้า** → หน้า "ช่องทางแชท" กด **เชื่อมใหม่** ที่เพจนั้น, เช็ค Webhooks fields และ `FB_WEBHOOK_VERIFY_TOKEN`, ดู Vercel logs ของ `/api/webhooks/messenger`
 - **ข้อความ LINE ไม่เข้า** → หน้า "ช่องทางแชท" → ตรวจสอบการเชื่อมต่อทั้งหมด แล้วแก้ตามที่ระบบบอก
-- **แชทไม่เด้งทันที** → ตั้ง `SUPABASE_JWT_SECRET` และรัน `migration_realtime_inbox.sql`
+- **แชทไม่เด้งทันที** → ตั้ง `SUPABASE_JWT_SECRET` และรัน `migration_realtime_inbox.sql` + `migration_security_grants.sql`
+  (ไฟล์หลังแก้ policy ที่วนซ้ำ ซึ่งทำให้ Realtime เช็คสิทธิ์ไม่ผ่านและไม่เคยส่งข้อความถึงเครื่องเลย)

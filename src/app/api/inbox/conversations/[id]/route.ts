@@ -4,7 +4,7 @@ import { getServerSession } from 'next-auth'
 import { NextResponse } from 'next/server'
 import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase'
-import { getCurrentUserContext } from '@/lib/team'
+import { getCurrentUserContext, contextErrorStatus } from '@/lib/team'
 import { isFbSystemText, isHiddenInboxMessage } from '@/lib/fb-system-messages'
 
 export const dynamic = 'force-dynamic'
@@ -83,7 +83,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
     return NextResponse.json({ conversation, messages: outMessages })
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 })
+    return NextResponse.json({ error: err.message }, { status: contextErrorStatus(err) })
   }
 }
 
@@ -124,6 +124,6 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     if (error) throw error
     return NextResponse.json({ success: true })
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 })
+    return NextResponse.json({ error: err.message }, { status: contextErrorStatus(err) })
   }
 }

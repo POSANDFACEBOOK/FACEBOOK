@@ -135,11 +135,29 @@ async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Pro
 const isAbortError = (e: any) => e?.name === 'AbortError'
 const SEND_TIMEOUT_MS = 25_000
 const UPLOAD_TIMEOUT_MS = 60_000   // 4G ช้า + รูปหลาย MB ต้องใจกว้างกว่าการส่งข้อความ
+// /api/inbox/sync ตัดรอบตัวเองที่ 45 วิ (maxDuration = 60) → เผื่อเกินนิดเดียว ห้ามสั้นกว่านี้
+// ไม่จำกัดเวลา = เดินออกนอกพื้นที่ wifi แล้ว fetch ค้าง ตัวกันยิงซ้อนค้างตาม → ไม่มีข้อความลูกค้าเข้าระบบอีกเลย
+const SYNC_TIMEOUT_MS = 65_000
+// รอบซิงก์ที่ค้างนานกว่านี้ถือว่าตายแล้ว ให้รอบใหม่แย่งได้ (ฝั่ง server ก็ปล่อยสิทธิ์จองที่ 65 วิ)
+const SYNC_STUCK_MS = 90_000
+// ทุกเพจถูกข้าม = รอบนี้ไม่ได้ดึงอะไรเลย → อย่าให้กินคิว 60 วิเต็ม ไม่งั้นกดผิดจังหวะ 1 ครั้ง
+// ดันรอบจริงรอบถัดไปออกไปอีกนาที (ข้อความลูกค้าเข้าช้าโดยไม่มีใครรู้)
+const SYNC_SKIPPED_BACKOFF_MS = 30_000
 
 // ── ย่อรูปก่อนอัปโหลด ──
 // รูปจากกล้องมือถือมักใหญ่ 4-8 MB ส่งผ่าน Vercel ไม่ได้ (เพดาน body 4.5 MB) และกินเน็ตแอดมินฟรีๆ
 // ใช้ <img> + canvas (ไม่ใช่ createImageBitmap) เพราะ Safari รุ่นเก่าหมุนรูปตาม EXIF ให้เฉพาะทาง <img>
 const MAX_UPLOAD_BYTES = 4 * 1024 * 1024   // ต้องตรงกับ MAX_BYTES ใน api/inbox/upload
+
+// ข้อความตอนรูปเกินเพดาน — ต้องแยกกรณี GIF
+// GIF เป็นชนิดเดียวที่ไม่ถูกย่อ (ย่อแล้วภาพหยุดนิ่ง) จึงมาถึงด่านนี้ด้วยขนาดไฟล์จริง
+// และการ "แคปหน้าจอ" ที่แนะนำรูปทั่วไป ใช้กับ GIF ไม่ได้ผล เพราะภาพเคลื่อนไหวจะหายไป
+function oversizeImageMessage(type?: string): string {
+  return type === 'image/gif'
+    ? 'GIF นี้ใหญ่เกินไป (เกิน 4 MB) — ย่อ GIF ให้เล็กลงแล้วส่งใหม่ หรือแคปหน้าจอส่งเป็นรูปนิ่งแทน (ภาพจะไม่ขยับ)'
+    : 'รูปใหญ่เกินไป (เกิน 4 MB) — ลองถ่ายหน้าจอรูปนี้แล้วส่งภาพที่แคปมาแทน'
+}
+
 async function prepareImageForUpload(file: File): Promise<File> {
   // GIF = ภาพเคลื่อนไหว ย่อแล้วเหลือเฟรมเดียว / ไฟล์เล็กอยู่แล้วไม่ต้องแตะ
   if (file.type === 'image/gif' || file.size <= 600 * 1024) return file
@@ -478,9 +496,13 @@ export default function InboxPage() {
   const msgPaneRef = useRef<HTMLDivElement>(null)
   const nearBottomRef = useRef(true)         // แอดมินอยู่ท้ายสุดของแชทไหม (ตัดสินว่าจะเลื่อนตามให้ไหม)
   const lastMsgIdRef = useRef<string | null>(null)
+  // id ของ "แถวจริง" ตัวท้ายสุด (ไม่นับฟองที่กำลังส่ง/ส่งไม่สำเร็จ) — ฟองแดงค้างท้ายแชท
+  // ห้ามบังไม่ให้รู้ว่ามีข้อความใหม่เข้ามา
+  const lastRealMsgIdRef = useRef<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const lastFbSyncRef = useRef(Date.now())  // เวลาที่ sync FB ล่าสุด (ไม่รีเซ็ตตอนสลับแชท)
   const syncInFlightRef = useRef(false)     // กันยิง sync ซ้อนกัน (poll + กลับเข้าแอป + กดปุ่มเอง พร้อมกัน)
+  const syncStartedAtRef = useRef(0)        // รอบที่กำลังยิงเริ่มเมื่อไหร่ — ใช้ปลดล็อกรอบที่ค้าง
   const openReqRef = useRef<string>('')  // กัน race ตอนเปิดหลายแชทเร็วๆ
   const openSeqRef = useRef(0)           // ลำดับการ "เปิดแชท" — กันผลเก่าของแชทเดียวกันทับผลใหม่
   const detailSeqRef = useRef(0)         // ลำดับการโหลดข้อความเบื้องหลัง
@@ -570,12 +592,14 @@ export default function InboxPage() {
     else draftsRef.current.delete(id)
   }
 
-  // ข้อความที่ส่งไม่สำเร็จ "ตอนที่แอดมินออกจากแชทนั้นไปแล้ว" — server ไม่มีแถวนี้
-  // ไม่เก็บไว้ = ข้อความที่พิมพ์หายถาวร ลูกค้าไม่ได้รับ และไม่มีอะไรบอกแอดมินเลย
+  // ข้อความที่ส่งไม่สำเร็จและ server ไม่มีแถวนี้ — เก็บไว้เสมอ ไม่ว่าแอดมินยังอยู่ในแชทนั้นหรือไม่
+  // (เปิดแชทอื่นแล้วกลับมา loadMessages จะตั้ง messages ใหม่จาก outbox อย่างเดียว
+  //  ไม่เก็บไว้ = ข้อความที่พิมพ์หายถาวร ลูกค้าไม่ได้รับ และไม่มีอะไรบอกแอดมินเลย)
   const outboxRef = useRef<Map<string, any[]>>(new Map())
+  const OUTBOX_MAX_PER_CONV = 20   // กันบวมตอนเน็ตดับยาวๆ (ของเก่าสุดหลุดก่อน)
   const stashFailed = (convId: string, m: any) => {
     const cur = (outboxRef.current.get(convId) || []).filter(x => String(x.id) !== String(m.id))
-    outboxRef.current.set(convId, [...cur, m])
+    outboxRef.current.set(convId, [...cur, m].slice(-OUTBOX_MAX_PER_CONV))
   }
   const dropFromOutbox = (convId: string, id: any) => {
     const cur = outboxRef.current.get(convId)
@@ -616,17 +640,23 @@ export default function InboxPage() {
   const loadingSeqRef = useRef(0)         // request แบบโชว์สปินเนอร์ตัวล่าสุด
   const listCacheRef = useRef<Map<string, { seq: number; conversations: any[] }>>(new Map())
 
-  // แชทที่แอดมินเพิ่งกดเปิด (= อ่านแล้ว) → id → ลำดับ request ล่าสุดตอนที่กดเปิด
-  // ผลรายการที่ยิงออกไป "ก่อน" กดเปิด ยังถือว่าแชทนั้นยังไม่อ่าน ห้ามเอาจุดแดง/ตัวเลขเก่ากลับมา
+  // แชทที่แอดมินเพิ่งกดเปิด (= อ่านแล้ว) → id → เวลาที่กดเปิด
+  // ระหว่างที่ server ยังล้าง "ยังไม่อ่าน" ไม่เสร็จ ผลรายการที่ได้มาห้ามเอาจุดแดง/ตัวเลขเก่ากลับมา
+  // (เดิมเทียบด้วยลำดับ request — ผลรายการที่ "ยิงทีหลัง" ไม่ได้แปลว่า server ล้างเสร็จแล้ว
+  //  บนเน็ตช้าจุดแดงกับตัวเลขบนไอคอนแอปจึงเด้งกลับมาทั้งที่แอดมินกำลังอ่านแชทนั้นอยู่)
   const locallyReadRef = useRef<Map<string, number>>(new Map())
+  // กันจำค้างถาวรเมื่อ server ไม่เคยยืนยัน (เช่นโหลดข้อความไม่สำเร็จ) — เลยเวลานี้ให้เชื่อ server
+  const LOCAL_READ_TTL_MS = 30 * 1000
 
-  // ลบ "ยังไม่อ่าน" ของแชทที่อ่านไปแล้วบนจอ ออกจากผลที่ยิงก่อนหน้านั้น (รวมตัวเลขรวมด้วย)
-  function applyLocalReads(res: any, seq: number) {
+  // ลบ "ยังไม่อ่าน" ของแชทที่อ่านไปแล้วบนจอ ออกจากผลรายการที่ server ยังตอบค่าเก่ามา (รวมตัวเลขรวมด้วย)
+  function applyLocalReads(res: any) {
     const map = locallyReadRef.current
     if (map.size === 0) return
-    map.forEach((readSeq, id) => {
-      if (seq > readSeq) { map.delete(id); return }  // ผลนี้ยิงหลังกดเปิดแชท → server รู้แล้วว่าอ่านแล้ว
+    map.forEach((readAt, id) => {
       const conv = (res.conversations || []).find((c: any) => c.id === id)
+      // server ยืนยันแล้วว่าอ่านแล้ว → เลิกจำ (ข้อความใหม่ของแชทนี้หลังจากนี้ต้องขึ้นจุดแดงตามปกติ)
+      if (conv && (conv.unread_count || 0) === 0) { map.delete(id); return }
+      if (Date.now() - readAt > LOCAL_READ_TTL_MS) { map.delete(id); return }
       if (!conv || !((conv.unread_count || 0) > 0)) return
       conv.unread_count = 0
       if (conv.is_archived) return  // แชทที่จัดเก็บไม่ถูกนับในตัวเลขตั้งแต่แรก
@@ -643,7 +673,7 @@ export default function InboxPage() {
 
   // เอาผลรายการแชทจาก server ไปใช้ — คืน true ถ้าได้แสดงบนจอ
   function applyListResponse(res: any, key: string, seq: number): boolean {
-    applyLocalReads(res, seq)
+    applyLocalReads(res)
     listEverLoadedRef.current = true
     setListError(null)   // โหลดสำเร็จแล้ว → เอาแถบแดง "โหลดไม่สำเร็จ" ออกเอง ไม่ต้องให้แอดมินกดปิด
     const convs = res.conversations || []
@@ -808,6 +838,7 @@ export default function InboxPage() {
     detailAppliedRef.current = 0
     localRowsRef.current.clear()
     lastMsgIdRef.current = null
+    lastRealMsgIdRef.current = null
     nearBottomRef.current = true
     setNewMsgCount(0)
     setActiveConv(conv)
@@ -822,9 +853,10 @@ export default function InboxPage() {
     clearPendingFiles()   // ไฟล์รูปที่ค้างจากแชทก่อนหน้า ใช้กับแชทนี้ไม่ได้อยู่แล้ว
     setLoadingMessages(true)
     // optimistic: เคลียร์ทั้ง badge ของ row + ตัวเลขรวม (page tile / ชิป "ใหม่" / sidebar) ทันที
-    // + จำไว้ว่าอ่านแชทนี้แล้ว ณ ลำดับ request เท่าไหร่ — ผลรายการที่ยิงไปก่อนหน้านี้จะได้ไม่เอาจุดแดงกลับมา
+    // + จำไว้ว่าอ่านแชทนี้แล้วตอนกี่โมง — ผลรายการที่ยังตอบ "ยังไม่อ่าน" มา จะได้ไม่เอาจุดแดงกลับมา
+    //   (จำจนกว่า server จะยืนยันว่า 0 หรือครบ 30 วิ)
     if ((conv.unread_count || 0) > 0) {
-      locallyReadRef.current.set(convId, listSeqRef.current)
+      locallyReadRef.current.set(convId, Date.now())
       markConvReadLocally(conv)
     }
     const startedAt = Date.now()
@@ -842,10 +874,16 @@ export default function InboxPage() {
       if (res.conversation) {
         setActiveConv(res.conversation)
         // ข้อความใน outbox ที่ server บันทึกไว้แล้วจริงๆ (เช่นส่งติดแต่ตอบกลับไม่ทัน) → เอาออก ไม่ให้ขึ้นซ้ำ
+        // จับคู่ได้แถวละ 1 ใบเท่านั้น (splice ออกเมื่อจับแล้ว) เหมือน mergeServerMessages
+        // ไม่งั้น "ค่ะ" ที่ส่งไม่สำเร็จจะถูกลบทิ้ง เพราะบังเอิญเคยส่ง "ค่ะ" สำเร็จมาก่อนหน้านี้ — ข้อความหายโดยไม่มีใครรู้
         const pend = outboxRef.current.get(convId)
         if (pend?.length) {
-          const serverKeys = new Set((res.messages || []).filter((s: any) => s.direction === 'outbound').map(msgKey))
-          const left = pend.filter((p: any) => !serverKeys.has(msgKey(p)))
+          const pool = (res.messages || []).filter((s: any) => s.direction === 'outbound').map(msgKey)
+          const left = pend.filter((p: any) => {
+            const idx = pool.indexOf(msgKey(p))
+            if (idx >= 0) { pool.splice(idx, 1); return false }
+            return true
+          })
           if (left.length) outboxRef.current.set(convId, left)
           else outboxRef.current.delete(convId)
         }
@@ -909,10 +947,20 @@ export default function InboxPage() {
 
   // ── Background sync (silent — no spinner) ──
   // ยิงซ้อนกันไม่ได้ (syncInFlightRef) เพราะทั้ง poll, การกลับเข้าแอป และปุ่ม "ดึงข้อความใหม่" เรียกตัวเดียวกัน
-  async function backgroundSync(pageId?: string) {
-    if (syncInFlightRef.current) return
+  // แต่ต้องปลดล็อกเองได้ด้วย — รอบที่ fetch ค้าง (เน็ตมือถือหลุดกลางคัน) เคยล็อกทางเดียวที่ข้อความลูกค้าเข้าระบบไว้ถาวร
+  const syncBusy = () => syncInFlightRef.current && Date.now() - syncStartedAtRef.current < SYNC_STUCK_MS
+  // ผลของรอบซิงก์ — ran = มีเพจที่ดึงจริงอย่างน้อย 1 เพจ / skipped = ถูกข้ามทั้งหมด (เหตุผลจาก server)
+  type SyncRound = { ok: boolean; ran: boolean; skipped: 'recent' | 'in_progress' | null }
+  // force = แอดมินสั่งเอง (ปุ่มดึงข้อความใหม่ / กลับเข้าแอป) → ข้ามตัวกันยิงถี่ 45 วิ ของ server
+  // ห้ามใส่ force ให้รอบอัตโนมัติทุก 60 วิ ไม่งั้น Facebook จะจำกัดอัตราเอา
+  async function backgroundSync(pageId?: string, force?: boolean): Promise<SyncRound> {
+    if (syncBusy()) return { ok: false, ran: false, skipped: 'in_progress' }
     syncInFlightRef.current = true
+    syncStartedAtRef.current = Date.now()
     lastFbSyncRef.current = Date.now()
+    let ranSomething = false
+    let skippedAll: 'recent' | 'in_progress' | null = null
+    let ok = false
     // ดึงทั้งรอบไม่สำเร็จ (504 ของ Vercel / เน็ตหลุด) → บอกสั้นๆ ว่าระบบจะลองใหม่ให้เอง
     // ใช้ syncNotice ไม่ใช่ errorBanner เพราะ errorBanner ใช้บอกผลที่แอดมินสั่งเอง ("ส่งไม่สำเร็จ") ห้ามถูกทับ
     const noticeSyncDown = () => {
@@ -922,19 +970,28 @@ export default function InboxPage() {
       setSyncNotice(cur => (cur && cur.sig !== sig) ? cur : { sig, text: 'ดึงข้อความใหม่จาก Facebook ไม่สำเร็จ — จะลองใหม่อัตโนมัติ' })
     }
     try {
-      const res = await fetch('/api/inbox/sync', {
+      // มีเวลาจำกัดเสมอ — ไม่งั้น fetch ค้างตอนสลับ wifi↔4G จะล็อก syncInFlightRef ไว้ถาวร
+      const res = await fetchWithTimeout('/api/inbox/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(pageId ? { pageId } : {}),
-      })
+        body: JSON.stringify({ ...(pageId ? { pageId } : {}), ...(force ? { force: true } : {}) }),
+      }, SYNC_TIMEOUT_MS)
       // 502/504 ของ Vercel ตอบเป็น HTML — เดิม res.json() พังแล้วถูก catch กลืน แอดมินไม่รู้เลยว่าไม่ได้ดึงข้อความใหม่
       if (!res.ok) {
         console.error('[inbox/sync] HTTP', res.status, (await res.text().catch(() => '')).slice(0, 500))
         noticeSyncDown()
-        return
+        return { ok: false, ran: false, skipped: null }
       }
       const data = await res.json().catch(() => null)
-      if (!data) { noticeSyncDown(); return }
+      if (!data) { noticeSyncDown(); return { ok: false, ran: false, skipped: null } }
+      ok = true
+      // รอบนี้ได้ดึงจริงหรือถูกข้ามทั้งหมด (เพิ่งดึงไป / เครื่องอื่นกำลังดึงเพจนี้อยู่)
+      // ต้องรู้ให้ได้ ไม่งั้น "กดแล้วสปินเนอร์หยุด" จะแปลว่าได้ข้อความใหม่แล้วทั้งที่ยังไม่ได้ดึงเลย
+      const summary: any[] = data?.summary || []
+      ranSomething = summary.some((p: any) => !p?.skipped)
+      if (summary.length > 0 && !ranSomething) {
+        skippedAll = summary.some((p: any) => p?.skipped === 'in_progress') ? 'in_progress' : 'recent'
+      }
       // หลัง sync เสร็จ → trigger repair ถ้ามี empty messages ค้างอยู่
       // (ทำเงียบๆ ไม่รอผล ไม่ block UI — silent ไม่งั้นลิสต์จะขึ้น "กำลังโหลด..." ทุกรอบที่ซิงก์)
       fetch('/api/inbox/repair', {
@@ -968,29 +1025,42 @@ export default function InboxPage() {
       console.error('[inbox/sync] request failed', e)
       noticeSyncDown()
     } finally {
-      syncInFlightRef.current = false
-      lastFbSyncRef.current = Date.now()   // นับจากตอน "เสร็จ" — รอบที่ใช้เวลานานจะได้ไม่จ่อคิวต่อทันที
+      syncInFlightRef.current = false     // ปลดเสมอ แม้หมดเวลารอ — ไม่งั้นทางเดียวที่ข้อความลูกค้าเข้าระบบจะตายไปเลย
+      // ดึงจริง → นับจากตอน "เสร็จ" (รอบที่ใช้เวลานานจะได้ไม่จ่อคิวต่อทันที)
+      // ถูกข้ามทั้งหมด → รอบนี้ไม่ได้ทำอะไร อย่าให้ดันรอบจริงถัดไปออกไปเต็มนาที
+      if (ranSomething) lastFbSyncRef.current = Date.now()
+      else if (skippedAll) lastFbSyncRef.current = Date.now() - SYNC_SKIPPED_BACKOFF_MS
     }
+    return { ok, ran: ranSomething, skipped: skippedAll }
   }
 
   // ดึงข้อความใหม่จาก Facebook แล้วรีเฟรชจอ — ทางเดียวที่ทุกจุดเรียกใช้ (poll / กลับเข้าแอป / ปุ่มดึงเอง)
   // minGapMs = เพิ่งดึงไปไม่ถึงเท่านี้ ไม่ต้องดึงซ้ำ (ฝั่ง server มีตัวกันยิงถี่อีกชั้นอยู่แล้ว)
-  async function maybeSync(minGapMs: number) {
-    if (syncInFlightRef.current) return
-    if (Date.now() - lastFbSyncRef.current < minGapMs) return
-    await backgroundSync()
+  // force = แอดมินสั่งเอง → ส่งต่อให้ server ข้ามตัวกันยิงถี่ 45 วิ
+  async function maybeSync(minGapMs: number, force = false): Promise<SyncRound | null> {
+    if (syncBusy()) return null
+    if (Date.now() - lastFbSyncRef.current < minGapMs) return null
+    const round = await backgroundSync(undefined, force)
     loadConvRef.current({ silent: true })
     loadMessagesSilentRef.current?.()   // แชทที่เปิดอยู่เห็นข้อความใหม่ทันที ไม่ต้องรอ poll รอบหน้า
+    return round
   }
   const maybeSyncRef = useRef(maybeSync)
   maybeSyncRef.current = maybeSync
 
   // ปุ่ม "ดึงข้อความใหม่" — ระบบดึงให้เองทุกนาทีอยู่แล้ว แต่ตอนลูกค้าสั่งรัวๆ แอดมินอยากกดเองให้แน่ใจ
   // (หน้านี้ล็อกการเลื่อนไว้ ลากลงเพื่อรีเฟรชแบบแอปอื่นจึงใช้ไม่ได้)
+  // กดแล้วต้องมีอะไรตอบเสมอ — เดิมถ้ามีรอบค้างอยู่จะ return เงียบๆ ไม่มีสปินเนอร์ ไม่มีข้อความ เหมือนปุ่มเสีย
   async function manualSync() {
-    if (syncing || syncInFlightRef.current) return
+    if (syncing) return
+    if (syncBusy()) { setToast({ msg: 'กำลังดึงข้อความใหม่อยู่ — รอสักครู่' }); return }
     setSyncing(true)
-    try { await maybeSync(0) } finally { setSyncing(false) }
+    try {
+      const round = await maybeSync(0, true)   // แอดมินกดเอง = ต้องได้ของใหม่จริง ไม่ใช่โดนข้ามเงียบๆ
+      // server ข้ามรอบนี้ทั้งหมด → บอกตามจริง ไม่งั้นสปินเนอร์หยุดแล้วเข้าใจว่าดึงข้อความใหม่มาแล้ว
+      if (round?.skipped === 'recent') setToast({ msg: 'เพิ่งดึงข้อความใหม่ไปเมื่อครู่ — ข้อมูลล่าสุดแล้ว' })
+      else if (round?.skipped === 'in_progress') setToast({ msg: 'กำลังดึงข้อความใหม่อยู่ — รอสักครู่แล้วลองอีกครั้ง' })
+    } finally { setSyncing(false) }
   }
 
   // ── ตามขนาด "visual viewport" จริง (กันคีย์บอร์ด iOS ดัน layout เด้ง / แถบล่างลอย) ──
@@ -1079,7 +1149,8 @@ export default function InboxPage() {
       if (Date.now() - last > 60 * 1000) {
         localStorage.setItem('inbox_last_mount_sync', String(Date.now()))
         setSyncing(true)
-        backgroundSync()
+        // เปิดแอปเอง = แอดมินสั่ง → force (ยังถูกกันไว้ 1 ครั้ง/นาที ด้วย localStorage ข้างบน)
+        backgroundSync(undefined, true)
           // ใช้ ref → ได้ตัวล่าสุดที่รู้จัก filter/ค้นหาปัจจุบัน (เดิมใช้ closure ของ render แรก
           // ทำให้ทับลิสต์ที่ผู้ใช้กรองไว้) + silent กันสปินเนอร์เด้ง
           .then(() => loadConvRef.current({ silent: true }))
@@ -1274,8 +1345,10 @@ export default function InboxPage() {
         // ค่าที่ได้กลับมาคือค่าก่อนที่ API จะล้างให้ → >0 แปลว่ารอบนี้เพิ่งทำเป็น "อ่านแล้ว"
         // ลดตัวเลขบนจอตามทันที ไม่ต้องรอรายการโหลดรอบหน้า
         if (res.conversation && (res.conversation.unread_count || 0) > 0) {
-          locallyReadRef.current.set(convId, listSeqRef.current)   // ผลรายการที่ยิงก่อนหน้านี้ห้ามเอาจุดแดงกลับมา
-          markConvReadLocally(res.conversation)
+          // ตอนกดเปิดแชทลดตัวเลขไปแล้ว → ห้ามลดซ้ำ (ไม่งั้นตัวเลขบนไอคอนแอปหายไปมากกว่าความจริง)
+          const already = locallyReadRef.current.has(convId)
+          locallyReadRef.current.set(convId, Date.now())   // ผลรายการที่ยังตอบค่าเก่ามา ห้ามเอาจุดแดงกลับมา
+          if (!already) markConvReadLocally(res.conversation)
         }
       })
       .catch(() => {})
@@ -1481,7 +1554,9 @@ export default function InboxPage() {
     const onVisible = () => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
       rtRefreshRef.current()
-      maybeSyncRef.current(30 * 1000)
+      // force = ข้ามตัวกันยิงถี่ 45 วิ ของ server (ไม่งั้นกลับเข้าแอปในช่วง 30-45 วิ จะไม่ได้ดึงอะไรเลย)
+      // ยังมีตัวกัน 30 วิ ฝั่งนี้อยู่ — สลับแท็บไปมาจึงไม่ยิงถี่จน Facebook จำกัดอัตรา
+      maybeSyncRef.current(30 * 1000, true)
     }
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('focus', onVisible)
@@ -1492,21 +1567,48 @@ export default function InboxPage() {
   // - แอดมินอยู่ท้ายสุด (หรือเป็นข้อความที่ตัวเองเพิ่งส่ง) → เลื่อนตามให้เลย
   // - กำลังเลื่อนอ่านข้อความเก่าอยู่ → ไม่แย่งจอ แต่ขึ้นปุ่ม "มีข้อความใหม่ ↓" ให้กดลงไปดู
   // (เดิมฟองใหม่ไปต่อท้ายใต้ขอบจอเฉยๆ จอไม่ขยับ แอดมินนึกว่าลูกค้ายังไม่ตอบ)
+  // แถวที่ "เครื่องนี้" เพิ่งกดส่งเอง = ฟองชั่วคราว หรือแถวจริงที่เพิ่งบันทึกไปไม่กี่วินาที
+  // ห้ามดูแค่ direction === 'outbound' — ข้อความที่เพื่อนร่วมทีม/แอป Facebook ตอบก็เป็น outbound เหมือนกัน
+  // (ดึงเข้ามาทาง sync) ถ้าเลื่อนจอตามจะกระชากจอตอนแอดมินกำลังเลื่อนอ่านที่อยู่ส่งของของลูกค้า
+  const isJustSentHere = (m: any) => {
+    const id = String(m?.id ?? '')
+    if (id.startsWith('temp-')) return true
+    return Date.now() - (localRowsRef.current.get(id) ?? 0) < 15_000
+  }
   useLayoutEffect(() => {
+    const isTemp = (m: any) => typeof m?.id === 'string' && m.id.startsWith('temp-')
     const last = messages[messages.length - 1]
     const lastId = last ? String(last.id) : null
+    // ฟอง "กำลังส่ง"/"ส่งไม่สำเร็จ" ต่อท้ายเสมอ (mergeServerMessages) → ถ้าดูแค่ตัวท้ายสุด
+    // ฟองแดงที่ค้างไว้จะบังไม่ให้รู้ว่ามีข้อความลูกค้าเข้ามาใหม่เลย ต้องดู "แถวจริง" ตัวท้ายสุดด้วย
+    let lastRealIdx = -1
+    for (let i = messages.length - 1; i >= 0; i--) { if (!isTemp(messages[i])) { lastRealIdx = i; break } }
+    const lastReal = lastRealIdx >= 0 ? messages[lastRealIdx] : null
+    const realId = lastReal ? String(lastReal.id) : null
     const prevId = lastMsgIdRef.current
+    const prevRealId = lastRealMsgIdRef.current
     lastMsgIdRef.current = lastId
-    if (!lastId || lastId === prevId) return   // รอบ poll ที่ได้ข้อความชุดเดิม — ห้ามขยับจอ
+    lastRealMsgIdRef.current = realId
+    if (!lastId) return
+    const realChanged = realId !== prevRealId
+    if (lastId === prevId && !realChanged) return   // รอบ poll ที่ได้ข้อความชุดเดิม — ห้ามขยับจอ
     const el = msgPaneRef.current
     if (!el) return
-    if (prevId === null) { el.scrollTop = el.scrollHeight; return }   // เพิ่งเปิดแชท
-    if (nearBottomRef.current || last.direction === 'outbound') {
+    if (prevId === null && prevRealId === null) { el.scrollTop = el.scrollHeight; return }   // เพิ่งเปิดแชท
+    // มีแถวจริงใหม่ → ใช้แถวนั้นตัดสิน ไม่งั้นใช้ฟองท้ายสุด (เช่นฟองที่เพิ่งกดส่ง)
+    const anchor = realChanged && lastReal ? lastReal : last
+    if (nearBottomRef.current || isJustSentHere(anchor)) {
       el.scrollTop = el.scrollHeight
       nearBottomRef.current = true
       setNewMsgCount(0)
-    } else if (last.direction === 'inbound') {
-      setNewMsgCount(n => n + 1)
+    } else if (realChanged) {
+      // sync รอบเดียวมักได้หลายข้อความพร้อมกัน (ลูกค้าพิมพ์รัว) — นับจากแถวที่เพิ่งต่อท้ายจริงๆ
+      // ไม่ใช่ +1 ต่อรอบ ไม่งั้นปุ่มบอก "1 ข้อความ" ทั้งที่มี 5 ข้อความรออยู่
+      const prevRealIdx = prevRealId ? messages.findIndex(m => String(m.id) === prevRealId) : -1
+      // หาแถวเดิมไม่เจอ (ถูกลบจากอีกเครื่อง) → นับแค่ 1 เหมือนเดิม ดีกว่าไปนับทั้งแชท
+      const added = prevRealIdx >= 0 ? messages.slice(prevRealIdx + 1, lastRealIdx + 1) : [lastReal]
+      const n = added.filter(m => m && !isJustSentHere(m)).length
+      if (n > 0) setNewMsgCount(c => c + n)
     }
   }, [messages])
 
@@ -1515,8 +1617,20 @@ export default function InboxPage() {
 
   // อัปเดตฟองเดิม หรือใส่กลับเข้าไปถ้าไม่อยู่แล้ว
   // (ออกจากแชทแล้วกลับเข้ามาใหม่ระหว่างรอผล ฟองเดิมถูกล้างไปตอนเปิดแชท — ผล "ส่งไม่สำเร็จ" ต้องไม่หายตาม)
-  const upsertMsg = (id: string, next: any) => setMessages(prev =>
-    prev.some(m => m.id === id) ? prev.map(m => m.id === id ? next : m) : [...prev, next])
+  // จับได้ทั้ง id ของฟองชั่วคราว และ id จริงของแถวที่ server บันทึกไว้
+  // (poll อาจสลับฟองชั่วคราวเป็นแถวจริงไปก่อนผลส่งจะกลับมา — ต่อท้ายตรงๆ จะได้ 2 ฟอง + React key ซ้ำ)
+  const upsertMsg = (id: string, next: any) => setMessages(prev => {
+    const nid = String(next?.id ?? id)
+    const hit = (m: any) => String(m.id) === String(id) || String(m.id) === nid
+    if (!prev.some(hit)) return [...prev, next]
+    let done = false
+    return prev.flatMap((m: any) => {
+      if (!hit(m)) return [m]
+      if (done) return []          // มีทั้งฟองชั่วคราวและแถวจริงอยู่พร้อมกัน → เหลือใบเดียว
+      done = true
+      return [next]
+    })
+  })
 
   // ส่งไม่สำเร็จตอนแอดมินออกจากแชทนั้นไปแล้ว → ต้องมีอะไรบอก ไม่ใช่เงียบหาย
   function notifySendFailedElsewhere(convName: string, conv: any, isImage?: boolean) {
@@ -1562,16 +1676,16 @@ export default function InboxPage() {
       if (data.message?.id) localRowsRef.current.set(String(data.message.id), Date.now())
       if (!res.ok || !data.success) {
         const msg = friendlyError(data.error) || 'ส่งไม่สำเร็จ'
+        const failed = { ...optimistic, delivery_status: 'failed', error_message: msg, local_only: true }
+        // server ไม่ได้บันทึกแถวไว้ → เก็บเองในเครื่องเสมอ แม้แอดมินยังอยู่ในแชทนี้
+        // (ฟองแดงอยู่ใน state เท่านั้น สลับไปแชทอื่นแล้วกลับมา state ถูกตั้งใหม่ = ข้อความที่พิมพ์หายถาวร)
+        if (!data.message) stashFailed(convId, failed)
         if (isThis()) {
           setErrorBanner(msg)
           // ใช้แถวที่ server บันทึกไว้ (id จริง) แทนฟองชั่วคราว → กด "ลบ"/"ส่งอีกครั้ง" แล้วไม่เด้งกลับมา
-          upsertMsg(optimistic.id, data.message
-            ? { ...data.message, error_message: msg }
-            : { ...optimistic, delivery_status: 'failed', error_message: msg, local_only: true })
+          upsertMsg(optimistic.id, data.message ? { ...data.message, error_message: msg } : failed)
           if (data.blockCode) setActiveConv((c: any) => c && c.id === convId ? { ...c, send_block_code: data.blockCode } : c)
         } else {
-          // server ไม่ได้บันทึกแถวไว้ → เก็บเองในเครื่อง ไม่งั้นข้อความหายถาวร
-          if (!data.message) stashFailed(convId, { ...optimistic, delivery_status: 'failed', error_message: msg, local_only: true })
           notifySendFailedElsewhere(convName, convSnap)
         }
         loadConversations({ silent: true })
@@ -1592,11 +1706,12 @@ export default function InboxPage() {
       const uncertain = isAbortError(e)
       const msg = uncertain ? 'ส่งช้าผิดปกติ — ยังไม่แน่ใจว่าลูกค้าได้รับหรือยัง กำลังตรวจสอบให้' : friendlyError(e?.message)
       const failed = { ...optimistic, delivery_status: 'failed', error_message: msg, local_only: true, uncertain }
+      // ไม่มีคำตอบจาก server = ไม่รู้ว่ามีแถวไหม → เก็บไว้ก่อนเสมอ (ถ้าส่งติดจริง loadMessages จะตัดออกให้ตอนเปิดแชทใหม่)
+      stashFailed(convId, failed)
       if (isThis()) {
         setErrorBanner(msg)
         upsertMsg(optimistic.id, failed)
       } else {
-        stashFailed(convId, failed)
         notifySendFailedElsewhere(convName, convSnap)
       }
       loadConversations({ silent: true })
@@ -1648,7 +1763,11 @@ export default function InboxPage() {
   async function retryMessage(m: any) {
     if (!activeConv) return
     const convId = activeConv.id
-    if (sendingConvsRef.current.has(convId) || uploadingConvsRef.current.has(convId)) return
+    // มีอะไรของแชทนี้กำลังส่ง/อัปโหลดอยู่ → ยิงซ้อนไม่ได้ แต่ต้องบอก ไม่ใช่กดแล้วเงียบเหมือนปุ่มเสีย
+    if (sendingConvsRef.current.has(convId) || uploadingConvsRef.current.has(convId)) {
+      setErrorBanner('มีข้อความกำลังส่งอยู่ — รอสักครู่แล้วกด "ส่งอีกครั้ง" ใหม่')
+      return
+    }
     const id = String(m.id)
     const imgUrl = (m.attachments || []).find((a: any) => a?.type === 'image' && a.url)?.url
 
@@ -1689,11 +1808,8 @@ export default function InboxPage() {
     const conv = opts?.conv || activeConv
     const convId = opts?.convId || activeConv?.id
     if (!convId) return
-    if (sendingConvsRef.current.has(convId)) return
     const convName = conv?.customer_name || 'ลูกค้า'
     const isThis = () => openReqRef.current === convId
-    setBusy(sendingConvsRef, convId, true)
-    if (isThis()) setErrorBanner(null)
     const optimistic: any = {
       id: opts?.existingId || newTempId(),
       conversation_id: convId,
@@ -1704,6 +1820,21 @@ export default function InboxPage() {
       delivery_status: 'sending',
       created_at: new Date().toISOString(),
     }
+    // มีข้อความอื่นของแชทนี้กำลังส่งอยู่ → ยิงซ้อนไม่ได้ แต่ "ห้ามเงียบ"
+    // (เดิม return เปล่า รูปที่อัปโหลดเสร็จแล้วหายไปเฉยๆ ฟองค้าง "กำลังส่ง" ตลอดกาล ไม่มีปุ่มให้กด)
+    // imageUrl ตรงนี้เป็นลิงก์ถาวรที่อัปเสร็จแล้ว → กด "ส่งอีกครั้ง" ส่งได้เลย ไม่ต้องอัปใหม่
+    if (sendingConvsRef.current.has(convId)) {
+      const failed = {
+        ...optimistic, delivery_status: 'failed', status_note: '', local_only: true,
+        error_message: 'มีข้อความอื่นกำลังส่งอยู่ — กด "ส่งอีกครั้ง" เพื่อส่งรูปนี้',
+      }
+      stashFailed(convId, failed)   // เก็บไว้เสมอ สลับแชทแล้วกลับมารูปต้องยังอยู่พร้อมปุ่มส่งซ้ำ
+      if (isThis()) { setErrorBanner(failed.error_message); upsertMsg(optimistic.id, failed) }
+      else notifySendFailedElsewhere(convName, conv, true)
+      return
+    }
+    setBusy(sendingConvsRef, convId, true)
+    if (isThis()) setErrorBanner(null)
     // ฟองต้องขึ้นเฉพาะแชทที่เป็นเจ้าของรูปนี้ — ไม่งั้นรูปของลูกค้า A ไปค้าง "กำลังส่ง" ในแชท B
     if (isThis()) {
       setMessages(prev => prev.some(m => m.id === optimistic.id)
@@ -1719,15 +1850,15 @@ export default function InboxPage() {
       if (data.message?.id) localRowsRef.current.set(String(data.message.id), Date.now())
       if (!res.ok || !data.success) {
         const msg = friendlyError(data.error) || 'ส่งรูปไม่สำเร็จ'
+        const failed = { ...optimistic, delivery_status: 'failed', error_message: msg, local_only: true }
+        // server ไม่ได้บันทึกแถวไว้ → เก็บเองเสมอ แม้แอดมินยังอยู่ในแชทนี้ (สลับแชทแล้วกลับมา state ถูกตั้งใหม่)
+        if (!data.message) stashFailed(convId, failed)
         if (isThis()) {
           setErrorBanner(msg)
           // ใช้แถวที่ server บันทึกไว้ (id จริง) แทนฟองชั่วคราว → กด "ลบ"/"ส่งอีกครั้ง" แล้วไม่เด้งกลับมา
-          upsertMsg(optimistic.id, data.message
-            ? { ...data.message, error_message: msg }
-            : { ...optimistic, delivery_status: 'failed', error_message: msg, local_only: true })
+          upsertMsg(optimistic.id, data.message ? { ...data.message, error_message: msg } : failed)
           if (data.blockCode) setActiveConv((c: any) => c && c.id === convId ? { ...c, send_block_code: data.blockCode } : c)
         } else {
-          if (!data.message) stashFailed(convId, { ...optimistic, delivery_status: 'failed', error_message: msg, local_only: true })
           notifySendFailedElsewhere(convName, conv, true)
         }
         loadConversations({ silent: true })
@@ -1744,11 +1875,12 @@ export default function InboxPage() {
       const uncertain = isAbortError(e)
       const msg = uncertain ? 'ส่งช้าผิดปกติ — ยังไม่แน่ใจว่าลูกค้าได้รับหรือยัง กำลังตรวจสอบให้' : friendlyError(e?.message)
       const failed = { ...optimistic, delivery_status: 'failed', error_message: msg, local_only: true, uncertain }
+      // ไม่มีคำตอบจาก server = ไม่รู้ว่ามีแถวไหม → เก็บไว้ก่อนเสมอ (ถ้าส่งติดจริง loadMessages จะตัดออกให้ตอนเปิดแชทใหม่)
+      stashFailed(convId, failed)
       if (isThis()) {
         setErrorBanner(msg)
         upsertMsg(optimistic.id, failed)
       } else {
-        stashFailed(convId, failed)
         notifySendFailedElsewhere(convName, conv, true)
       }
       loadConversations({ silent: true })
@@ -1790,16 +1922,15 @@ export default function InboxPage() {
     try {
       // รูปจากกล้องมือถือมักเกินเพดานที่ Vercel รับได้ → ย่อก่อนเสมอ (เร็วกว่าด้วยบนเน็ต 4G)
       toSend = await prepareImageForUpload(file)
-      if (toSend.size > MAX_UPLOAD_BYTES) {
-        throw new Error('รูปใหญ่เกินไป (เกิน 4 MB) — ลองถ่ายหน้าจอรูปนี้แล้วส่งภาพที่แคปมาแทน')
-      }
+      // GIF ไม่ถูกย่อ (จะเสียภาพเคลื่อนไหว) → ถึงตรงนี้ด้วยขนาดจริง ต้องบอกทางแก้คนละแบบ
+      if (toSend.size > MAX_UPLOAD_BYTES) throw new Error(oversizeImageMessage(toSend.type))
       setNote('⏳ กำลังส่งรูป...')
       const fd = new FormData()
       fd.append('file', toSend)
       fd.append('conversationId', convId)
       const upRes = await fetchWithTimeout('/api/inbox/upload', { method: 'POST', body: fd }, UPLOAD_TIMEOUT_MS)
       // 413 = Vercel/route ตีกลับเพราะไฟล์ใหญ่ บางทีตอบเป็น text ไม่ใช่ JSON → บอกสาเหตุจริงให้แอดมิน
-      if (upRes.status === 413) throw new Error('รูปใหญ่เกินไป — ลองถ่ายหน้าจอรูปนี้แล้วส่งภาพที่แคปมาแทน')
+      if (upRes.status === 413) throw new Error(oversizeImageMessage(toSend.type))
       const upData = await upRes.json().catch(() => ({}))
       if (!upRes.ok || !upData.url) throw new Error(upData.error || 'อัปโหลดรูปไม่สำเร็จ')
 
@@ -1865,8 +1996,11 @@ export default function InboxPage() {
       }
     } catch (e: any) {
       if (isThis()) setErrorBanner(friendlyError(e?.message))
+    } finally {
+      // ต้องเป็น finally — มี return อยู่ใน try (ตอนแอดมินสลับแชทไปก่อนผลกลับมา)
+      // ถ้าปล่อยไว้ท้ายฟังก์ชัน ปุ่ม "AI ช่วยตอบ" จะค้างหมุนและกดไม่ได้ทุกแชทไปจนกว่าจะรีโหลดหน้า
+      setAiLoading(false)
     }
-    setAiLoading(false)
   }
 
   // ── Conversation actions ──
@@ -1959,6 +2093,7 @@ export default function InboxPage() {
     openSeqRef.current++
     openReqRef.current = ''
     lastMsgIdRef.current = null
+    lastRealMsgIdRef.current = null
     draftValueRef.current = ''
     setNewMsgCount(0)
     setActiveConv(null); setMessages([])

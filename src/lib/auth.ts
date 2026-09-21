@@ -6,6 +6,14 @@ import { supabaseAdmin } from './supabase'
 const FB_API = 'https://graph.facebook.com/v19.0'
 
 /**
+ * รหัสบอกว่า "ต่อฐานข้อมูลไม่ได้" — คนละเรื่องกับ "อีเมล/รหัสผ่านไม่ถูกต้อง"
+ * authorize ที่ throw Error จะถูก next-auth ส่งกลับเป็น res.error = ข้อความนี้ (v4: callback.ts → ?error=<message>)
+ * หน้า /login แปลงเป็นข้อความไทย "ระบบขัดข้อง ลองใหม่อีกครั้ง" ได้ (ยังไม่ทำ = ขึ้นข้อความรวมเหมือนเดิม ไม่เสียหาย)
+ * ห้ามใส่ข้อความไทยตรงๆ ตรงนี้ เพราะมันถูกยัดใน query string
+ */
+const SERVICE_UNAVAILABLE = 'SERVICE_UNAVAILABLE'
+
+/**
  * Credentials authorize: ใช้กับ agent ที่ owner ตั้ง email + password ให้
  *
  * Flow:
@@ -13,6 +21,7 @@ const FB_API = 'https://graph.facebook.com/v19.0'
  * 2. ถ้าไม่เจอ user แต่มี pending invitation (invitee_email_lower + initial_password_hash ตรง)
  *    → activate: create/update user, mark invitation accepted, add page_members → login
  * 3. ไม่ match → return null (login fail)
+ * 4. อ่านฐานข้อมูลไม่ได้ → throw SERVICE_UNAVAILABLE (ห้ามคืน null เพราะจะกลายเป็น "รหัสผ่านผิด")
  */
 async function authorizeCredentials(creds: any): Promise<{ id: string; name: string; email: string } | null> {
   if (!creds?.email || !creds?.password) return null
@@ -24,11 +33,16 @@ async function authorizeCredentials(creds: any): Promise<{ id: string; name: str
     const sb = supabaseAdmin()
 
     // 1) Existing user lookup
-    const { data: user } = await sb
+    const { data: user, error: userErr } = await sb
       .from('users')
       .select('id, name, email, facebook_id, password_hash')
       .eq('email_lower', email)
       .maybeSingle()
+    // ฐานข้อมูลสะดุด ≠ ไม่มีบัญชีนี้ — ถ้ากลืน error จะหลุดไปทาง invitation แล้วฟ้องว่า "รหัสผ่านไม่ถูกต้อง"
+    if (userErr) {
+      console.error('[authorizeCredentials] users lookup failed (DB):', userErr.message)
+      throw new Error(SERVICE_UNAVAILABLE)
+    }
 
     if (user?.password_hash) {
       const ok = await bcrypt.compare(password, user.password_hash)
@@ -47,7 +61,7 @@ async function authorizeCredentials(creds: any): Promise<{ id: string; name: str
     }
 
     // 2) Pending invitation lookup
-    const { data: inv } = await sb
+    const { data: inv, error: invErr } = await sb
       .from('team_invitations')
       .select('id, owner_user_id, role, page_ids, invitee_email, invitee_name, initial_password_hash, expires_at')
       .eq('invitee_email_lower', email)
@@ -56,6 +70,11 @@ async function authorizeCredentials(creds: any): Promise<{ id: string; name: str
       .is('revoked_at', null)
       .gt('expires_at', new Date().toISOString())
       .maybeSingle()
+    // อ่านคำเชิญไม่ได้ ≠ ไม่มีคำเชิญ — คำเชิญยังอยู่ครบ ห้ามบอกลูกทีมว่ารหัสผ่านผิด (เจ้าของร้านจะยกเลิกคำเชิญทิ้งเปล่าๆ)
+    if (invErr) {
+      console.error('[authorizeCredentials] invitation lookup failed (DB):', invErr.message)
+      throw new Error(SERVICE_UNAVAILABLE)
+    }
 
     if (!inv?.initial_password_hash) return null
 
@@ -68,12 +87,18 @@ async function authorizeCredentials(creds: any): Promise<{ id: string; name: str
     const requestedPageIds: string[] = inv.page_ids || []
     let allowedPageIds: string[] = []
     if (requestedPageIds.length > 0) {
-      const { data: ownerPages } = await sb
+      const { data: ownerPages, error: ownerErr } = await sb
         .from('page_members')
         .select('page_id')
         .eq('user_id', inv.owner_user_id)
         .eq('role', 'owner')
         .in('page_id', requestedPageIds)
+      // เช็คสิทธิ์ไม่สำเร็จ ≠ คนเชิญไม่ได้เป็นเจ้าของเพจแล้ว (route accept ก็ตอบ 503 แบบเดียวกัน)
+      // ถ้าปล่อยเป็น [] จะตกไปที่ length === 0 → ลูกทีมเห็นว่า "รหัสผ่านไม่ถูกต้อง" ทั้งที่คำเชิญยังใช้ได้
+      if (ownerErr) {
+        console.error('[authorizeCredentials] owner page check failed (DB):', ownerErr.message)
+        throw new Error(SERVICE_UNAVAILABLE)
+      }
       allowedPageIds = (ownerPages || []).map((r: any) => r.page_id)
     }
     if (allowedPageIds.length === 0) {
@@ -134,6 +159,8 @@ async function authorizeCredentials(creds: any): Promise<{ id: string; name: str
     return { id: userId, name: inv.invitee_name || email, email: inv.invitee_email || email }
   } catch (e: any) {
     console.error('[authorizeCredentials] threw:', e?.message)
+    // ระบบขัดข้องต้องส่งต่อให้หน้า login แยกแยะได้ ส่วน error อื่นยังปิดเงียบเป็น "login ไม่ผ่าน" เหมือนเดิม
+    if (e?.message === SERVICE_UNAVAILABLE) throw e
     return null
   }
 }

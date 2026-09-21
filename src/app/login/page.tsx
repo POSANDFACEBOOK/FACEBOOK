@@ -62,7 +62,11 @@ function LoginInner() {
         callbackUrl,
       })
       if (!res || res.error) {
-        setError('Email หรือรหัสผ่านไม่ถูกต้อง')
+        // ระบบอ่านฐานข้อมูลไม่ได้ชั่วคราว ≠ รหัสผ่านผิด — ถ้าบอกผิดแอดมินจะนั่งพิมพ์รหัสใหม่ทั้งที่รหัสถูกอยู่แล้ว
+        const down = String(res?.error || '').includes('SERVICE_UNAVAILABLE')
+        setError(down
+          ? 'ระบบขัดข้องชั่วคราว (ไม่ใช่รหัสผ่านผิด) — รอสัก 1-2 นาทีแล้วลองใหม่'
+          : 'Email หรือรหัสผ่านไม่ถูกต้อง')
         setBusy(false)
         return
       }

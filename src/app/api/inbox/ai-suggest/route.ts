@@ -5,7 +5,7 @@ import { getServerSession } from 'next-auth'
 import { NextResponse } from 'next/server'
 import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase'
-import { getCurrentUserContext } from '@/lib/team'
+import { getCurrentUserContext, contextErrorStatus } from '@/lib/team'
 import { listRecentPagePosts } from '@/lib/messenger'
 import { isHiddenInboxMessage } from '@/lib/fb-system-messages'
 import Anthropic from '@anthropic-ai/sdk'
@@ -197,6 +197,6 @@ ${instruction ? `# คำสั่งพิเศษจากแอดมิน:
           : 'AI ใช้งานไม่ได้ตอนนี้ — แจ้งเจ้าของระบบให้ตรวจสอบบัญชี AI',
       }, { status: 503 })
     }
-    return NextResponse.json({ error: 'AI ยังสร้างคำแนะนำไม่ได้ ลองใหม่อีกครั้ง' }, { status: 500 })
+    return NextResponse.json({ error: 'AI ยังสร้างคำแนะนำไม่ได้ ลองใหม่อีกครั้ง' }, { status: contextErrorStatus(err) })
   }
 }

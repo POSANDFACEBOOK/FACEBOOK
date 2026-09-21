@@ -11,7 +11,7 @@ import { getServerSession } from 'next-auth'
 import { NextResponse } from 'next/server'
 import { authOptions } from '@/lib/auth'
 import { supabaseAdmin, ensureFbUser } from '@/lib/supabase'
-import { getCurrentUserContext } from '@/lib/team'
+import { getCurrentUserContext, contextErrorStatus } from '@/lib/team'
 
 export const dynamic = 'force-dynamic'
 
@@ -19,6 +19,7 @@ export const dynamic = 'force-dynamic'
  * นับ "จำนวนแชท" ใหม่/ยังไม่ตอบ แยกตามเพจ — นับในฐานข้อมูล ไม่ใช่ดึงทุกแถวมานับใน JS
  * (PostgREST ตัดผลลัพธ์ที่ 1000 แถว → ร้านที่แชทเยอะ ตัวเลขรายเพจจะขาดและไม่ตรงกับยอดรวม)
  * ยอดรวมคิดจากผลเดียวกัน ตัวเลขบนชิปกับบนการ์ดเพจจะได้ตรงกันเสมอ
+ * การนับเป็นแบบ "ได้ก็ดี" — นับไม่สำเร็จห้ามทำให้รายการแชทพัง (ผู้เรียกดัก error แล้วส่งลิสต์ต่อ)
  */
 async function pageCounts(sb: any, ids: string[]) {
   const unreadByPage: Record<string, number> = {}
@@ -42,9 +43,13 @@ async function pageCounts(sb: any, ids: string[]) {
       ])
       return { pid, u, n }
     }))
-    const failed = rows.map(r => r.u.error || r.n.error).find(Boolean)
-    if (failed) throw failed
     for (const r of rows) {
+      // นับเพจนี้ไม่ได้ (query timeout / คอนเนกชันเต็ม) → ข้ามเพจนั้นไป ห้ามโยน error ออกไป
+      // ไม่งั้นตัวเลขบน badge ตัวเดียวทำให้รายการแชททั้งกล่องพัง ทั้งที่ดึงแชทมาได้แล้ว
+      if (r.u.error || r.n.error) {
+        console.error('[inbox/conversations] count error (page %s):', r.pid, r.u.error || r.n.error)
+        continue
+      }
       unreadByPage[r.pid] = r.u.count || 0
       needsReplyByPage[r.pid] = r.n.count || 0
     }
@@ -130,7 +135,12 @@ export async function GET(req: Request) {
     const [pagesResult, convResult, counts] = await Promise.all([
       pagesQuery,
       stalePage ? Promise.resolve({ data: [], error: null }) : convQuery,
-      pageCounts(sb, accessible),
+      // ตัวเลข badge เป็นของแถม — นับไม่สำเร็จก็ยังต้องส่งรายการแชทให้แอดมินตอบลูกค้าได้
+      // (ถ้าฐานข้อมูลล่ม/สิทธิ์หลุดจริง query รายการแชทข้างบนจะพังเองแล้วตอบ error อยู่ดี)
+      pageCounts(sb, accessible).catch(e => {
+        console.error('[inbox/conversations] count error (ไม่กระทบรายการแชท):', e)
+        return null
+      }),
     ])
 
     const { data: pages, error: pagesError } = pagesResult as { data: any[] | null; error: any }
@@ -142,16 +152,20 @@ export async function GET(req: Request) {
       throw error || pagesError
     }
 
+    // นับไม่สำเร็จ → ไม่ส่งคีย์ตัวเลขเลย (ห้ามส่ง 0) หน้าเว็บจะได้คงตัวเลขเดิมไว้
+    // ส่ง 0 แย่กว่าไม่ส่ง เพราะแอดมินจะนึกว่าไม่มีลูกค้ารอตอบทั้งที่มี
     return NextResponse.json({
       conversations: conversations || [],
       pages: pages || [],
-      totalUnread: counts.totalUnread,
-      totalNeedsReply: counts.totalNeedsReply,
-      unreadByPage: counts.unreadByPage,
-      needsReplyByPage: counts.needsReplyByPage,
+      ...(counts ? {
+        totalUnread: counts.totalUnread,
+        totalNeedsReply: counts.totalNeedsReply,
+        unreadByPage: counts.unreadByPage,
+        needsReplyByPage: counts.needsReplyByPage,
+      } : {}),
     })
   } catch (err: any) {
     // ไม่ส่ง conversations/pages ว่างกลับตอน error — หน้าเว็บจะได้เก็บของเดิมบนจอไว้
-    return NextResponse.json({ error: err.message }, { status: 500 })
+    return NextResponse.json({ error: err.message }, { status: contextErrorStatus(err) })
   }
 }

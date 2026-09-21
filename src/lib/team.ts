@@ -12,7 +12,7 @@
 // - credentials: session.userId → users.id (สำหรับ agent ที่ใช้ email+password)
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { supabaseAdmin, getUserIdFromFbToken } from './supabase'
+import { supabaseAdmin, getFbUserIdFromToken } from './supabase'
 import { LINE_ENABLED } from './features'
 
 export type Role = 'owner' | 'agent'
@@ -75,6 +75,8 @@ export async function getCurrentUserContext(session: any): Promise<UserContext |
   let authMethod: 'facebook' | 'credentials' = 'facebook'
   let fbUserId: string | null = null
 
+  const sb = supabaseAdmin()
+
   if (session.userId) {
     // Credentials path — userId เก็บใน JWT ตอน sign in
     userId = String(session.userId)
@@ -83,12 +85,25 @@ export async function getCurrentUserContext(session: any): Promise<UserContext |
     // Facebook OAuth path
     authMethod = 'facebook'
     fbUserId = (session.fbUserId as string | undefined) || null
-    userId = await getUserIdFromFbToken(session.accessToken as string, fbUserId)
+    const fbId = fbUserId || await getFbUserIdFromToken(session.accessToken as string)
+    if (!fbId) return null
+    // อ่าน users เองแทน getUserIdFromFbToken เพราะตัวนั้นกลืน error ของฐานข้อมูล
+    // ฐานข้อมูลสะดุดแค่วินาทีเดียว → ได้ null → route ตอบ 401 → แอปขึ้น "เซสชันหมดอายุ" ทั้งที่ยังล็อกอินอยู่
+    // maybeSingle: ไม่มีแถวจริงๆ = data null + ไม่มี error (คนล็อกอิน FB ครั้งแรก ให้ ensureFbUser สร้างให้ต่อ)
+    const { data: u, error: uErr } = await sb
+      .from('users')
+      .select('id')
+      .eq('facebook_id', fbId)
+      .maybeSingle()
+    if (uErr) {
+      console.error('[team] users lookup failed:', uErr.message)
+      throw new UserContextUnavailableError(uErr.message)
+    }
+    userId = u?.id || null
   }
 
   if (!userId) return null
 
-  const sb = supabaseAdmin()
   const { data, error } = await sb
     .from('page_members')
     .select('page_id, role, connected_pages!inner(user_id, channel)')
