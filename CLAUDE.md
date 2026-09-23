@@ -69,6 +69,14 @@ supabase/*.sql                          ลำดับการรันอย�
 7. **Vercel functions อยู่ region `sin1` (vercel.json)** ให้ใกล้ Supabase (ap-southeast-1 สิงคโปร์) — ถ้าเอาออกจะกลับไป iad1 (สหรัฐฯ) ทุก query ข้ามทวีป สลับเพจ/เปิดแชทช้าหลายวินาที
 8. bucket `chat-uploads` เป็น public แต่ **ห้ามมี policy SELECT** บน storage.objects (จะทำให้ใครก็ตามที่มี anon key ไล่ดูรายชื่อไฟล์/รูปลูกค้าทั้ง bucket ได้) — อ่าน/เขียน storage ผ่าน service role เท่านั้น
 9. รายการแชทในกล่องข้อความ: โหลดผ่าน `loadConversations`/`applyListResponse` เท่านั้น (มี seq + key กันผลเก่าทับเพจที่เลือก และแคชต่อ key) — ห้าม `setConversations(res.conversations)` ตรงๆ
+10. **ตาราง `public` ที่สร้างใหม่ ต้อง GRANT เอง** — ตั้งแต่ 30 ต.ค. 2026 Supabase เลิกให้สิทธิ์อัตโนมัติกับตารางใหม่
+    (ของเดิมไม่กระทบ) ถ้า migration สร้างตารางแล้วไม่ใส่ GRANT ฝั่ง server จะขึ้น "permission denied" ทันที
+    ใส่ไว้ในไฟล์ migration เดียวกับที่ CREATE TABLE เสมอ:
+    ```sql
+    GRANT SELECT, INSERT, UPDATE, DELETE ON public.<ตารางใหม่> TO service_role;  -- server ใช้ตัวนี้
+    GRANT SELECT ON public.<ตารางใหม่> TO authenticated;  -- เฉพาะตารางที่ต้องให้ Realtime ส่งถึงเบราว์เซอร์
+    ```
+    **ห้าม GRANT ให้ `anon`** และห้ามให้สิทธิ์เขียนกับ `authenticated` (ดู `migration_security_grants.sql` — เบราว์เซอร์อ่านอย่างเดียว)
 
 ## 🚀 Local / Deploy
 ```bash
